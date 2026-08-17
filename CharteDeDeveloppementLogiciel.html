@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Charte de Développement & Prompt Système IA</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --bg-color: #f8fafc;
+            --text-color: #1e293b;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --code-bg: #0f172a;
+            --code-text: #e2e8f0;
+        }
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            margin: 0;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+        header h1 {
+            color: var(--primary);
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+        header p {
+            color: #64748b;
+            font-size: 1.1rem;
+        }
+        section {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+        h2 {
+            color: var(--primary-dark);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 0.5rem;
+            margin-top: 0;
+        }
+        h3 {
+            color: #334155;
+            margin-top: 1.5rem;
+        }
+        ul {
+            padding-left: 1.5rem;
+        }
+        li {
+            margin-bottom: 0.75rem;
+        }
+        code {
+            background: #f1f5f9;
+            color: #d97706;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: monospace;
+        }
+        pre {
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+        .badge {
+            display: inline-block;
+            background: #dbeafe;
+            color: #1e40af;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+        .ai-rule {
+            border-left: 4px solid #8b5cf6;
+            background: #f5f3ff;
+            padding: 1rem 1.5rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .ai-rule h4 {
+            color: #6d28d9;
+            margin-top: 0;
+        }
+        .warning-box {
+            border-left: 4px solid #ef4444;
+            background: #fef2f2;
+            padding: 1rem 1.5rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .warning-box h4 {
+            color: #dc2626;
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <span class="badge">Standard Hybride Humain & IA</span>
+            <h1>Charte de Développement Logiciel</h1>
+            <p>Directives universelles, règles d'encodage et consignes d'exécution strictes pour les agents IA.</p>
+        </header>
+
+        <section id="introduction">
+            <h2>1. Introduction & Objectifs</h2>
+            <p>Cette charte définit les standards de qualité, de maintenabilité, de robustesse et de sécurité exigés pour tout code produit au sein du projet. Tout code soumis (par un humain ou une IA) doit respecter rigoureusement ces directives.</p>
+        </section>
+
+        <section id="principes">
+            <h2>2. Principes Fondamentaux de Conception</h2>
+            <ul>
+                <li><strong>SOLID :</strong> Respect strict des 5 principes de conception orientée objet.</li>
+                <li><strong>DRY (Don't Repeat Yourself) :</strong> Factorisation de la logique métier dans des composants réutilisables.</li>
+                <li><strong>KISS (Keep It Simple, Stupid) :</strong> Privilégier la solution la plus simple, lisible et directe, sans sur-ingénierie.</li>
+                <li><strong>YAGNI (You Aren't Gonna Need It) :</strong> Pas de fonctionnalités anticipées non requises.</li>
+            </ul>
+        </section>
+
+        <section id="clean-code">
+            <h2>3. Clean Code, Nommage et Gestion des Caractères</h2>
+            <ul>
+                <li><strong>Nommage explicite :</strong> Les noms de variables, fonctions et classes doivent révéler leur intention de manière univoque.</li>
+                <li><strong>Fonctions courtes :</strong> Une fonction ne fait qu'une seule chose et tient idéalement sur un écran (moins de 30 lignes).</li>
+                <li><strong>Constantes :</strong> Bannir les "magic numbers" et chaînes en dur.</li>
+            </ul>
+
+            <div class="warning-box">
+                <h4>Règle Critique : Sécurité des Caractères et Encodage</h4>
+                <p>Pour prévenir toute erreur d'encodage (UTF-8), de compilation ou de parsing :</p>
+                <ul>
+                    <li><strong>Pas d'accents dans le code source :</strong> Les identifiants (variables, fonctions, classes, noms de fichiers, tables, colonnes) doivent être rédigés en anglais technique sans accents ni caractères diacritiques (ex: utiliser <code>user_total</code> au lieu de <code>montant_total_utilisateurs</code> si l'on souhaite l'anglais, ou <code>total_clients</code> sans accent).</li>
+                    <li><strong>Bannissement des icônes et émojis :</strong> Interdiction formelle d'inclure des émojis ou des icônes Unicode superflues dans le code source, les commentaires techniques ou les logs, sauf s'ils font explicitement partie du texte UI destiné aux utilisateurs finaux.</li>
+                    <li><strong>Caractères spéciaux :</strong> Éviter les caractères de contrôle invisibles, les guillemets typographiques typographiques (<code>“ ”</code>, <code>‘ ’</code>) au profit des guillemets droits standard (<code>" "</code>, <code>' '</code>).</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="commentaires">
+            <h2>4. Documentation et Commentaires</h2>
+            <ul>
+                <li><strong>Le code parle de lui-même :</strong> Les commentaires expliquent le <em>pourquoi</em> (contexte, choix architecturaux), jamais le <em>ce que</em> fait le code.</li>
+                <li><strong>Langue des commentaires :</strong> Rédaction des commentaires de code en anglais technique pour garantir l'uniformité internationale.</li>
+                <li><strong>Documentation des API/Fonctions :</strong> Utilisation systématique des standards (JSDoc, Docstrings).</li>
+            </ul>
+            <pre><code>/**
+ * Calculates the total order amount with regional taxes applied.
+ * 
+ * @param {number} subtotal - The order subtotal excluding tax.
+ * @param {string} regionCode - The ISO region code (e.g., 'FR', 'QC').
+ * @returns {number} The total amount rounded to 2 decimal places.
+ * @throws {Error} If the region code is invalid or unknown.
+ */
+function calculateTotalWithTax(subtotal, regionCode) {
+    // Implementation logic...
+}</code></pre>
+        </section>
+
+        <section id="securite">
+            <h2>5. Sécurité et Gestion des Erreurs</h2>
+            <ul>
+                <li><strong>Validation des entrées :</strong> Validation et assainissement systématiques de toutes les données externes.</li>
+                <li><strong>Gestion des erreurs :</strong> Interception propre, logs contextuels et remontées d'erreurs sécurisées.</li>
+                <li><strong>Secrets :</strong> Usage exclusif de variables d'environnement (zéro secret hardcodé).</li>
+            </ul>
+        </section>
+
+        <section id="ai-system-prompt">
+            <h2>6. Instructions Système Dédiées aux Développeurs IA (System Prompt)</h2>
+            <p>Ce bloc est spécifiquement formaté pour être injecté dans les instructions de votre agent IA ou de votre fichier <code>.cursorrules</code>.</p>
+            
+            <div class="ai-rule">
+                <h4>Règle IA 1 : Interdiction des Placeholders et du Code Incomplet</h4>
+                <p>L'IA ne doit <strong>jamais</strong> utiliser de commentaires du type <code>// TODO: implement later</code>, <code>// ... existing code ...</code> masquant de la logique, ou de fonctions vides. Tout code généré doit être <strong>complet, fonctionnel et testable</strong> immédiatement.</p>
+            </div>
+
+            <div class="ai-rule">
+                <h4>Règle IA 2 : Intégrité Stricte du Jeu de Caractères</h4>
+                <p>L'IA doit s'interdire d'insérer des accents dans le code source (noms de variables, fonctions, clés JSON, attributs de base de données) et s'abstenir d'inclure des émojis ou caractères spéciaux non indispensables à la syntaxe ou aux textes utilisateurs.</p>
+            </div>
+
+            <div class="ai-rule">
+                <h4>Règle IA 3 : Auto-Validation (Self-Correction)</h4>
+                <p>Avant de délivrer sa réponse, l'IA doit s'auto-évaluer sur :</p>
+                <ul>
+                    <li>L'absence totale d'accents ou d'émojis parasites dans la syntaxe du code.</li>
+                    <li>L'absence de failles de sécurité courantes (OWASP Top 10).</li>
+                    <li>La présence de la documentation JSDoc / Docstring sur toutes les nouvelles fonctions publiques.</li>
+                </ul>
+            </div>
+
+            <h3>Exemple de format de configuration (.cursorrules)</h3>
+            <pre><code># Configuration Agent IA - Standard de Qualité & Encodage
+- Role: Senior Fullstack Developer Expert
+- Constraint 1: Write pure ASCII / standard UTF-8 without diacritics or accents inside code identifiers.
+- Constraint 2: Never use emojis or non-standard special characters in source code or technical comments.
+- Constraint 3: Provide complete, fully working code blocks without truncation or placeholders.</code></pre>
+        </section>
+    </div>
+</body>
+</html>

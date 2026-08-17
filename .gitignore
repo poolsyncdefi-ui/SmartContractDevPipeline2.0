@@ -1,0 +1,13 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Foundry / Solidity
+cache/
+out/
+broadcast/
+cache_forge/
+
+# Environment variables
+.env
