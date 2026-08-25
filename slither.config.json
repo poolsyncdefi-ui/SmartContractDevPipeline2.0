@@ -1,12 +1,6 @@
 {
-  "detectors_to_exclude": "naming-convention,assembly",
-  "filter_paths": "lib/,test/,node_modules/",
-  "solc_remaps": [
-    "@openzeppelin/=lib/openzeppelin-contracts/",
-    "forge-std/=lib/forge-std/"
-  ],
-  "exclude_low": false,
-  "exclude_medium": false,
-  "exclude_high": false,
+  "detectors_to_exclude": "naming-convention,events-access",
+  "filter_paths": "lib,test",
+  "solc_remaps": "openzeppelin-contracts/=lib/openzeppelin-contracts/",
   "json": "slither-report.json"
 }

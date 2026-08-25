@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guide Utilisateur – Smart Contract Dev Pipeline 2.0</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0d1117;
+            color: #e6edf3;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+            padding: 2rem;
+            line-height: 1.6;
+            max-width: 210mm;
+            margin: 0 auto;
+        }
+        @page { size: A4 portrait; margin: 1.5cm; }
+        h1 { font-size: 2.2rem; color: #f0f6fc; border-bottom: 2px solid #30363d; padding-bottom: 0.5rem; margin-bottom: 1.5rem; }
+        h2 { font-size: 1.7rem; color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 0.3rem; margin-top: 2rem; margin-bottom: 1rem; scroll-margin-top: 1rem; }
+        h3 { font-size: 1.3rem; color: #f0f6fc; margin-top: 1.5rem; margin-bottom: 0.8rem; }
+        h4 { font-size: 1.1rem; color: #79c0ff; margin-top: 1rem; }
+        .badge { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 12px; font-size: 0.7rem; font-weight: 600; background: #1c2333; color: #58a6ff; margin-right: 0.3rem; border: 1px solid #30363d; }
+        .badge-success { background: #1c2333; color: #3fb950; border-color: #3fb950; }
+        .badge-warning { background: #1c2333; color: #d29922; border-color: #d29922; }
+        .badge-danger { background: #1c2333; color: #f85149; border-color: #f85149; }
+        .badge-git { background: #1c2333; color: #f0883e; border-color: #f0883e; }
+        .badge-docker { background: #1c2333; color: #58a6ff; border-color: #58a6ff; }
+        .badge-foundry { background: #1c2333; color: #d29922; border-color: #d29922; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; margin: 1rem 0; }
+        pre { background: #0d1117; color: #e6edf3; padding: 1rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; line-height: 1.5; font-family: 'Fira Code', 'Consolas', monospace; border: 1px solid #30363d; }
+        code { font-family: 'Fira Code', 'Consolas', monospace; background: #1c2333; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9rem; color: #e6edf3; }
+        pre code { background: transparent; padding: 0; color: #e6edf3; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+        th, td { border: 1px solid #30363d; padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+        th { background: #1c2333; font-weight: 600; color: #58a6ff; }
+        td { color: #e6edf3; }
+        .callout { padding: 0.8rem 1rem; border-radius: 6px; margin: 0.8rem 0; border: 1px solid #30363d; }
+        .callout-info { background: rgba(56, 139, 253, 0.1); border-left: 4px solid #58a6ff; }
+        .callout-warning { background: rgba(210, 153, 34, 0.1); border-left: 4px solid #d29922; }
+        .callout-success { background: rgba(63, 185, 80, 0.1); border-left: 4px solid #3fb950; }
+        .callout-danger { background: rgba(248, 81, 73, 0.1); border-left: 4px solid #f85149; }
+        .step-list { counter-reset: step; list-style: none; padding-left: 0; }
+        .step-list li { counter-increment: step; padding: 0.5rem 0 0.5rem 2.5rem; position: relative; border-bottom: 1px solid #30363d; color: #e6edf3; }
+        .step-list li:last-child { border-bottom: none; }
+        .step-list li::before { content: counter(step); position: absolute; left: 0; top: 0.5rem; width: 1.8rem; height: 1.8rem; background: #1f6feb; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; font-weight: 600; }
+        .footer { margin-top: 2rem; border-top: 1px solid #30363d; padding-top: 1rem; font-size: 0.85rem; color: #8b949e; text-align: center; }
+        .example-box { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 0.8rem 1rem; margin: 0.5rem 0; }
+        .result-box { background: #0d1117; border: 1px solid #3fb950; border-radius: 6px; padding: 0.8rem 1rem; margin: 0.5rem 0; color: #3fb950; }
+        .error-box { background: #0d1117; border: 1px solid #f85149; border-radius: 6px; padding: 0.8rem 1rem; margin: 0.5rem 0; color: #f85149; }
+        ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; color: #e6edf3; }
+        li { margin: 0.2rem 0; color: #e6edf3; }
+        .toc { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem 1.5rem; margin: 1.5rem 0; }
+        .toc ul { list-style: none; padding-left: 0; }
+        .toc li { margin: 0.2rem 0; }
+        .toc a { color: #58a6ff; text-decoration: none; }
+        .toc a:hover { text-decoration: underline; }
+        .toc .l2 { padding-left: 1.5rem; }
+        .mermaid-container { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; margin: 1rem 0; text-align: center; overflow-x: auto; }
+        .mermaid-container svg { background: #0d1117; }
+        .cmd-table td:first-child { font-family: monospace; color: #58a6ff; }
+        .quick-ref-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin: 0.5rem 0; }
+        .quick-ref-item { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 0.5rem 0.7rem; font-size: 0.85rem; }
+        .quick-ref-item code { background: transparent; padding: 0; font-size: 0.8rem; }
+        @media print {
+            body { padding: 1.5cm; background: white; color: #1e293b; }
+            .card { background: #ffffff; border: 1px solid #ddd; break-inside: avoid; }
+            pre { background: #f1f5f9; color: #1e293b; border: 1px solid #ddd; }
+            pre code { background: transparent; color: #1e293b; }
+            code { background: #f1f5f9; color: #1e293b; }
+            table th, table td { border-color: #ddd; }
+            th { background: #f1f5f9; color: #1e293b; }
+            td { color: #1e293b; }
+            .toc { background: #f8fafc; border-color: #ddd; }
+            .toc a { color: #2563eb; }
+            .step-list li { border-bottom-color: #e2e8f0; color: #1e293b; }
+            .example-box { background: #f8fafc; border-color: #e2e8f0; }
+            .result-box { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+            .error-box { background: #fef2f2; border-color: #fca5a5; color: #991b1b; }
+            .callout-info { background: #eff6ff; border-left-color: #2563eb; }
+            .callout-warning { background: #fffbeb; border-left-color: #d97706; }
+            .callout-success { background: #ecfdf5; border-left-color: #059669; }
+            .callout-danger { background: #fef2f2; border-left-color: #dc2626; }
+            .badge { background: #f1f5f9; color: #2563eb; border-color: #e2e8f0; }
+            .badge-success { color: #059669; border-color: #059669; }
+            .badge-warning { color: #d97706; border-color: #d97706; }
+            .badge-danger { color: #dc2626; border-color: #dc2626; }
+            .badge-git { color: #c2410c; border-color: #c2410c; }
+            .badge-docker { color: #2563eb; border-color: #2563eb; }
+            .badge-foundry { color: #d97706; border-color: #d97706; }
+            .mermaid-container { background: #ffffff; border-color: #e2e8f0; }
+            .mermaid-container svg { background: #ffffff; }
+            .footer { border-top-color: #e2e8f0; color: #94a3b8; }
+            h1 { color: #0f172a; border-bottom-color: #2563eb; }
+            h2 { color: #1e293b; border-bottom-color: #e2e8f0; }
+            h3 { color: #1e293b; }
+            h4 { color: #475569; }
+            .quick-ref-item { background: #f8fafc; border-color: #e2e8f0; }
+            .no-print { display: none; }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            mermaid.initialize({ 
+                startOnLoad: true, 
+                theme: 'dark',
+                themeVariables: {
+                    background: '#0d1117',
+                    primaryColor: '#1f6feb',
+                    primaryTextColor: '#e6edf3',
+                    primaryBorderColor: '#30363d',
+                    lineColor: '#58a6ff',
+                    secondaryColor: '#161b22',
+                    tertiaryColor: '#0d1117'
+                }
+            });
+        });
+    </script>
+</head>
+<body>
+
+<h1>📘 Smart Contract Dev Pipeline 2.0<br><span style="font-size: 1.2rem; color: #8b949e;">Guide Utilisateur – Version 2.0</span></h1>
+
+<div style="color: #8b949e; margin-bottom: 1.5rem;">
+    <p><strong>Objectif :</strong> Ce guide vous permet de prendre en main le pipeline de développement de smart contracts, de la configuration initiale à l'exécution de tests et d'audits.</p>
+    <p><strong>Public :</strong> Développeurs Solidity, Tech Leads, auditeurs Web3.</p>
+    <p><strong>Prérequis :</strong> Connaissances de base en Python, Docker et Foundry.</p>
+</div>
+
+<!-- ===================== SOMMAIRE ===================== -->
+<div class="toc">
+    <h3 style="color: #f0f6fc;">📑 Table des matières</h3>
+    <ul>
+        <li><a href="#intro">1. Introduction et architecture</a></li>
+        <li><a href="#install">2. Installation et configuration</a></li>
+        <li><a href="#first-run">3. Premier lancement</a></li>
+        <li><a href="#dev-loop">4. Boucle de développement</a></li>
+        <li><a href="#security">5. Audits et sécurité</a></li>
+        <li><a href="#dashboard">6. Dashboard et HITL</a></li>
+        <li><a href="#troubleshooting">7. Dépannage</a></li>
+        <li><a href="#examples">8. Exemples complets</a></li>
+        <li><a href="#reference">9. Référence rapide</a></li>
+        <li><a href="#post-reboot">10. Processus après redémarrage</a></li>
+    </ul>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 1 : INTRODUCTION                              -->
+<!-- ===================================================== -->
+<h2 id="intro">1. Introduction et architecture</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">1.1. Qu'est-ce que le Smart Contract Dev Pipeline ?</h3>
+    <p style="color: #e6edf3;">Le pipeline est un outil d'<strong style="color: #58a6ff;">ingénierie assistée par IA</strong> pour le développement de smart contracts Solidity. Il intègre :</p>
+    <ul>
+        <li><strong style="color: #58a6ff;">Compilation</strong> via Foundry (Forge)</li>
+        <li><strong style="color: #58a6ff;">Tests unitaires</strong> (Foundry)</li>
+        <li><strong style="color: #58a6ff;">Analyse statique</strong> (Slither)</li>
+        <li><strong style="color: #58a6ff;">Vérification formelle</strong> (Halmos)</li>
+        <li><strong style="color: #58a6ff;">API REST</strong> pour l'orchestration</li>
+        <li><strong style="color: #58a6ff;">Interface Web</strong> (Dashboard) pour la validation humaine</li>
+    </ul>
+
+    <h3 style="color: #f0f6fc;">1.2. Architecture simplifiée</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+graph TB
+    subgraph UI[Couche Interface]
+        CLI[CLI Click]
+        DASH[Dashboard Web React]
+        API[FastAPI WebSocket]
+    end
+
+    subgraph ORCH[Orchestration]
+        AA[Architect Agent]
+        WE[Workflow Engine DAG]
+        CB[Circuit Breaker]
+    end
+
+    subgraph AGENTS[Agents IA]
+        DEV[Developer Agent]
+        AUD[Auditor Agent]
+        SK[Skill Registry]
+    end
+
+    subgraph TOOLS[Outils Deterministes]
+        FORGE[Forge / Foundry]
+        SLITHER[Slither]
+        HALMOS[Halmos]
+        ANVIL[Anvil RPC]
+    end
+
+    subgraph PERSIST[Persistance]
+        REDIS[(Redis)]
+        PG[(PostgreSQL)]
+        CHROMA[(ChromaDB)]
+    end
+
+    UI --> ORCH
+    ORCH --> AGENTS
+    AGENTS --> TOOLS
+    AGENTS --> PERSIST
+    ORCH --> PERSIST
+    TOOLS --> ANVIL
+</pre>
+    </div>
+
+    <h3 style="color: #f0f6fc;">1.3. Flux de développement</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Dev as Tech Lead
+    participant API as FastAPI
+    participant AG as Agent IA
+    participant FORGE as Foundry
+    participant SEC as Securite
+
+    Dev->>API: 1. Lance une tache
+    API->>AG: 2. Delegue a l'agent
+    AG->>AG: 3. Genere le code
+    AG->>FORGE: 4. Compilation & tests
+    FORGE-->>AG: 5. Resultat (OK/Erreur)
+    alt Erreur
+        AG->>AG: 6. Auto-correction (max 3)
+        AG->>FORGE: 7. Re-test
+    else Succes
+        AG->>SEC: 8. Audit securite
+        SEC-->>AG: 9. Rapport
+        AG->>API: 10. Code certifie
+        API->>Dev: 11. Validation HITL
+    end
+</pre>
+    </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 2 : INSTALLATION                              -->
+<!-- ===================================================== -->
+<h2 id="install">2. Installation et configuration</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">2.1. Prérequis système</h3>
+    <table>
+        <thead><tr><th>Outil</th><th>Version</th><th>Vérification</th></tr></thead>
+        <tbody>
+            <tr><td>Python</td><td>3.10+</td><td><code>python --version</code></td></tr>
+            <tr><td>Docker & Compose</td><td>2.20+</td><td><code>docker --version &amp;&amp; docker compose version</code></td></tr>
+            <tr><td>Foundry (forge)</td><td>1.7+</td><td><code>forge --version</code></td></tr>
+            <tr><td>Slither</td><td>0.11+</td><td><code>slither --version</code></td></tr>
+            <tr><td>Halmos</td><td>0.3+</td><td><code>halmos --version</code></td></tr>
+        </tbody>
+    </table>
+
+    <h3 style="color: #f0f6fc;">2.2. Installation rapide</h3>
+    <ol class="step-list">
+        <li><strong style="color: #58a6ff;">Cloner le projet</strong>
+            <pre><code>git clone https://github.com/votre-org/smart-contract-pipeline.git
+cd smart-contract-pipeline</code></pre>
+        </li>
+        <li><strong style="color: #58a6ff;">Créer l'environnement Python</strong>
+            <pre><code>python -m venv venv
+.\venv\Scripts\Activate.ps1   # Windows
+source venv/bin/activate      # Linux/Mac
+pip install -e .[dev]</code></pre>
+        </li>
+        <li><strong style="color: #58a6ff;">Configurer les variables d'environnement</strong>
+            <pre><code>cp .env.example .env
+# Editer .env avec vos cles (GITHUB_TOKEN, ETH_RPC_URL, etc.)</code></pre>
+        </li>
+        <li><strong style="color: #58a6ff;">Démarrer les services Docker</strong>
+            <pre><code>docker compose up -d</code></pre>
+            <div class="callout callout-success">
+                ✅ Résultat attendu : 3 conteneurs (redis, postgres, anvil) en cours d'exécution.
+                <pre style="margin-top: 0.5rem;">docker ps
+CONTAINER ID   IMAGE                               COMMAND                  PORTS
+abc123   redis:7-alpine       "docker-entrypoint.s..."   0.0.0.0:6379->6379/tcp
+def456   postgres:15-alpine   "docker-entrypoint.s..."   0.0.0.0:5432->5432/tcp
+ghi789   ghcr.io/foundry-rs/foundry:latest   "anvil --host 0.0.0...."   0.0.0.0:8545->8545/tcp</pre>
+            </div>
+        </li>
+        <li><strong style="color: #58a6ff;">Vérifier les installations</strong>
+            <pre><code>forge --version
+slither --version
+halmos --version</code></pre>
+            <div class="callout callout-success">
+                ✅ Résultat attendu : affichage des numéros de version sans erreur.
+            </div>
+        </li>
+    </ol>
+
+    <h3 style="color: #f0f6fc;">2.3. Diagramme des dépendances</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+graph LR
+    subgraph DEP[Installation]
+        A[Python 3.10+] --> B[venv + pip install -e .[dev]]
+        C[Docker Desktop] --> D[docker compose up -d]
+        E[Foundry] --> F[forge build / test]
+        G[Slither] --> H[slither . --json]
+        I[Halmos] --> J[halmos]
+    end
+
+    subgraph SERVICES[Services Docker]
+        D --> REDIS[Redis :6379]
+        D --> POSTGRES[PostgreSQL :5432]
+        D --> ANVIL[Anvil :8545]
+    end
+
+    subgraph VERIF[Verification]
+        F --> OK1[Compilation OK]
+        H --> OK2[Analyse OK]
+        J --> OK3[Halmos OK]
+        REDIS --> OK4[Redis PONG]
+        ANVIL --> OK5[RPC ChainId OK]
+    end
+</pre>
+    </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 3 : PREMIER LANCEMENT                         -->
+<!-- ===================================================== -->
+<h2 id="first-run">3. Premier lancement</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">3.1. Lancer l'API FastAPI</h3>
+    <pre><code>uvicorn src.api.web_dashboard:app --reload</code></pre>
+    <div class="callout callout-success">
+        ✅ Résultat attendu :
+        <pre style="margin-top: 0.5rem;">INFO:     Uvicorn running on http://127.0.0.1:8000
+INFO:     Application startup complete.</pre>
+    </div>
+
+    <h3 style="color: #f0f6fc;">3.2. Tester l'API</h3>
+    <pre><code>curl http://localhost:8000/</code></pre>
+    <div class="callout callout-success">
+        ✅ Réponse :
+        <pre style="margin-top: 0.5rem;">{"status":"online","pipeline":"Smart Contract Dev Pipeline 2.0","modules":{"halmos":"/run/halmos","slither":"/run/slither","status":"/status"}}</pre>
+    </div>
+
+    <h3 style="color: #f0f6fc;">3.3. Tester les services Docker</h3>
+    <pre><code># Redis
+docker exec pipeline_redis redis-cli ping
+# Reponse : PONG
+
+# PostgreSQL
+docker exec pipeline_postgres psql -U pipeline -d pipeline -c "SELECT 1;"
+# Reponse : ?column? 
+#                  1
+
+# Anvil
+curl -X POST http://localhost:8545 -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+# Reponse : {"jsonrpc":"2.0","id":1,"result":"0x4c72d"}</code></pre>
+
+    <h3 style="color: #f0f6fc;">3.4. Schéma de l'API</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+graph LR
+    subgraph API[API FastAPI :8000]
+        GET_ROOT[GET /] --> ROOT["{status, pipeline, modules}"]
+        GET_STATUS[GET /status] --> STATUS["{solc_version, foundry_version, pipeline_status}"]
+        POST_SLITHER[POST /run/slither] --> SLITHER["{success, message, output}"]
+        POST_HALMOS[POST /run/halmos] --> HALMOS["{success, message, output}"]
+    end
+
+    subgraph TESTS[Tests]
+        T1[curl /] --> R1[Reponse JSON]
+        T2[curl /status] --> R2[Infos version]
+        T3[curl -X POST /run/slither] --> R3[Rapport Slither]
+        T4[curl -X POST /run/halmos] --> R4[Verification Halmos]
+    end
+</pre>
+    </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 4 : BOUCLE DE DEVELOPPEMENT                   -->
+<!-- ===================================================== -->
+<h2 id="dev-loop">4. Boucle de développement</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">4.1. Structure d'un contrat</h3>
+    <p style="color: #e6edf3;">Placez vos contrats dans le dossier <code style="color: #58a6ff;">contracts/</code>. Exemple : <code style="color: #58a6ff;">contracts/Counter.sol</code></p>
+    <pre><code>// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract Counter {
+    uint256 public count;
+
+    function increment() public {
+        count += 1;
+    }
+
+    function decrement() public {
+        require(count > 0, "Counter: count underflow");
+        count -= 1;
+    }
+}</code></pre>
+
+    <h3 style="color: #f0f6fc;">4.2. Écrire des tests Foundry</h3>
+    <p style="color: #e6edf3;">Placez vos tests dans <code style="color: #58a6ff;">test/</code>. Exemple : <code style="color: #58a6ff;">test/Counter.t.sol</code></p>
+    <pre><code>// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "forge-std/Test.sol";
+import "../contracts/Counter.sol";
+
+contract CounterTest is Test {
+    Counter public counter;
+
+    function setUp() public {
+        counter = new Counter();
+    }
+
+    function test_Increment() public {
+        counter.increment();
+        assertEq(counter.count(), 1);
+    }
+
+    function test_Decrement() public {
+        counter.increment();
+        counter.decrement();
+        assertEq(counter.count(), 0);
+    }
+
+    function test_DecrementRevertsWhenZero() public {
+        vm.expectRevert("Counter: count underflow");
+        counter.decrement();
+    }
+}</code></pre>
+
+    <h3 style="color: #f0f6fc;">4.3. Exécuter les tests</h3>
+    <pre><code># Lancer tous les tests
+forge test
+
+# Lancer un test specifique
+forge test --match-test test_Increment
+
+# Avec traces detaillees
+forge test -vvvv</code></pre>
+    <div class="callout callout-success">
+        ✅ Résultat attendu :
+        <pre style="margin-top: 0.5rem;">Ran 3 tests for test/Counter.t.sol:CounterTest
+[PASS] test_Decrement() (gas: 20358)
+[PASS] test_DecrementRevertsWhenZero() (gas: 10452)
+[PASS] test_Increment() (gas: 29633)
+Suite result: ok. 3 passed; 0 failed; 0 skipped</pre>
+    </div>
+
+    <h3 style="color: #f0f6fc;">4.4. Flux de développement</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> EDITION : Ecrire le code
+    EDITION --> COMPILATION : forge build
+    COMPILATION --> TEST : forge test
+    TEST --> OK : Tous les tests passent
+    TEST --> DEBUG : Un test echoue
+    DEBUG --> EDITION : Corriger le code
+    OK --> AUDIT : Lancer l'audit
+    AUDIT --> SECURE : Slither + Halmos OK
+    AUDIT --> FIX : Vulnerabilite detectee
+    FIX --> EDITION : Corriger
+    SECURE --> DEPLOY : Pret pour le deploiement
+</pre>
+    </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 5 : AUDITS ET SECURITE                        -->
+<!-- ===================================================== -->
+<h2 id="security">5. Audits et sécurité</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">5.1. Analyse statique avec Slither</h3>
+    <pre><code># Lancer Slither via l'API
+curl -X POST http://localhost:8000/run/slither
+
+# Ou en ligne de commande
+slither . --config-file slither.config.json --json slither-report.json</code></pre>
+    <div class="callout callout-success">
+        ✅ Résultat attendu :
+        <pre style="margin-top: 0.5rem;">{"success":true,"message":"Analyse statique Slither executee avec succes.","output":"[SLITHER] Lancement de l'analyse statique..."}</pre>
+    </div>
+
+    <h3 style="color: #f0f6fc;">5.2. Vérification formelle avec Halmos</h3>
+    <p style="color: #e6edf3;">Créez un fichier de test symbolique <code style="color: #58a6ff;">test/CounterSym.t.sol</code> :</p>
+    <pre><code>// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.33;
+
+import {Test} from "forge-std/Test.sol";
+import {Counter} from "../contracts/Counter.sol";
+
+contract CounterSymTest is Test {
+    Counter public counter;
+
+    function setUp() public {
+        counter = new Counter();
+    }
+
+    function check_increment(uint256 x) public {
+        vm.assume(x < type(uint256).max);
+        uint256 current = counter.count();
+        counter.increment();
+        uint256 next = counter.count();
+        assert(next == current + 1);
+    }
+}</code></pre>
+
+    <pre><code># Lancer Halmos
+halmos
+
+# Via l'API
+curl -X POST http://localhost:8000/run/halmos</code></pre>
+    <div class="callout callout-success">
+        ✅ Résultat attendu :
+        <pre style="margin-top: 0.5rem;">Running 1 tests for test/CounterSym.t.sol:CounterSymTest
+[PASS] check_increment(uint256) (paths: 1, time: 0.01s, bounds: [])
+Symbolic test result: 1 passed; 0 failed; time: 0.01s</pre>
+    </div>
+
+    <h3 style="color: #f0f6fc;">5.3. Bouclier de sécurité multi-couches</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+flowchart LR
+    CODE[Code Solidity] --> L1[Niveau 1: Slither<br/>Analyse statique AST]
+    L1 -->|OK| L2[Niveau 2: Foundry<br/>Fuzzing invariants]
+    L1 -->|Erreur| FIX1[Auto-correction]
+    L2 -->|OK| L3[Niveau 3: Anvil<br/>Simulation d'attaques]
+    L2 -->|Erreur| FIX2[Auto-correction]
+    L3 -->|OK| L4[Niveau 4: Halmos<br/>Preuve formelle Z3]
+    L3 -->|Erreur| FIX3[Auto-correction]
+    L4 -->|OK| CERT[Code certifie]
+    L4 -->|Erreur| FIX4[Auto-correction]
+    FIX1 --> CODE
+    FIX2 --> CODE
+    FIX3 --> CODE
+    FIX4 --> CODE
+</pre>
+    </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 6 : DASHBOARD ET HITL                         -->
+<!-- ===================================================== -->
+<h2 id="dashboard">6. Dashboard et HITL</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">6.1. Accès au Dashboard</h3>
+    <p style="color: #e6edf3;">Une fois l'API en cours d'exécution, ouvrez votre navigateur à l'adresse :</p>
+    <pre><code>http://localhost:8000</code></pre>
+
+    <h3 style="color: #f0f6fc;">6.2. Fonctionnalités du Dashboard</h3>
+    <ul>
+        <li><strong style="color: #58a6ff;">Visualisation du DAG :</strong> Vue graphique de l'avancement des tâches</li>
+        <li><strong style="color: #58a6ff;">Studio de review :</strong> Comparaison side-by-side du code proposé</li>
+        <li><strong style="color: #58a6ff;">Rapports de sécurité :</strong> Métriques Slither et preuves Halmos</li>
+        <li><strong style="color: #58a6ff;">Interface HITL :</strong> Boutons Approuver / Rejeter avec commentaires</li>
+    </ul>
+
+    <h3 style="color: #f0f6fc;">6.3. Interaction HITL (Human-in-the-Loop)</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Dev as Tech Lead
+    participant API as FastAPI
+    participant WE as Workflow Engine
+    participant GIT as Git Manager
+
+    API->>Dev: 1. Notification: Code certifie pret
+    Dev->>API: 2. Clic "Approuver" ou "Rejeter"
+    alt Approuve
+        API->>GIT: 3. Commit et push
+        GIT-->>API: 4. PR creee
+        API->>Dev: 5. Lien PR GitHub
+    else Rejete
+        API->>WE: 6. Reinjection des consignes
+        WE->>WE: 7. Nouvelle iteration
+        WE->>API: 8. Nouveau code genere
+        API->>Dev: 9. Re-soumission
+    end
+</pre>
+    </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 7 : DEPANNAGE                                 -->
+<!-- ===================================================== -->
+<h2 id="troubleshooting">7. Dépannage</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">7.1. Problèmes courants</h3>
+    <table>
+        <thead><tr><th>Problème</th><th>Cause</th><th>Solution</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><code>open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.</code></td>
+                <td>Docker Desktop n'est pas en cours d'exécution</td>
+                <td>Lancer Docker Desktop et attendre l'icône verte</td>
+            </tr>
+            <tr>
+                <td><code>unable to find user foundry</code></td>
+                <td>Image Foundry distroless sans utilisateur</td>
+                <td>Utiliser <code>--user root</code> ou une version antérieure</td>
+            </tr>
+            <tr>
+                <td><code>UnicodeEncodeError: 'charmap' codec can't encode character</code></td>
+                <td>Émojis dans les scripts Python</td>
+                <td>Supprimer les émojis des scripts ou définir <code>$env:PYTHONIOENCODING = "utf-8"</code></td>
+            </tr>
+            <tr>
+                <td><code>AttributeError: 'list' object has no attribute 'split'</code></td>
+                <td>Format incorrect de <code>slither.config.json</code></td>
+                <td>Utiliser des chaînes pour <code>filter_paths</code> et <code>solc_remaps</code></td>
+            </tr>
+            <tr>
+                <td><code>No tests found in project!</code></td>
+                <td>Tests Foundry sans préfixe <code>test_</code></td>
+                <td>Renommer les fonctions de test en <code>test_*</code></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 style="color: #f0f6fc;">7.2. Commandes de diagnostic</h3>
+    <pre><code># Verifier Docker
+docker ps
+docker logs pipeline_anvil
+
+# Verifier les services
+docker exec pipeline_redis redis-cli ping
+docker exec pipeline_postgres psql -U pipeline -d pipeline -c "SELECT 1;"
+curl -X POST http://localhost:8545 -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+
+# Verifier l'API
+curl http://localhost:8000/status
+
+# Nettoyer Docker
+docker system prune -a -f --volumes</code></pre>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 8 : EXEMPLES COMPLETS                         -->
+<!-- ===================================================== -->
+<h2 id="examples">8. Exemples complets</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">8.1. Exemple : Contrat ERC20</h3>
+    <pre><code>// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+
+contract MyToken is ERC20 {
+    constructor(uint256 initialSupply) ERC20("MyToken", "MTK") {
+        _mint(msg.sender, initialSupply);
+    }
+}</code></pre>
+
+    <h3 style="color: #f0f6fc;">8.2. Exemple : Test ERC20 avec Foundry</h3>
+    <pre><code>// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "forge-std/Test.sol";
+import "../contracts/MyToken.sol";
+
+contract MyTokenTest is Test {
+    MyToken public token;
+
+    function setUp() public {
+        token = new MyToken(1000 * 10**18);
+    }
+
+    function test_InitialSupply() public {
+        assertEq(token.totalSupply(), 1000 * 10**18);
+        assertEq(token.balanceOf(address(this)), 1000 * 10**18);
+    }
+
+    function test_Transfer() public {
+        address recipient = address(0x123);
+        token.transfer(recipient, 100 * 10**18);
+        assertEq(token.balanceOf(recipient), 100 * 10**18);
+    }
+}</code></pre>
+
+    <h3 style="color: #f0f6fc;">8.3. Pipeline complet avec l'API</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Dev as Tech Lead
+    participant CLI as CLI
+    participant API as FastAPI
+    participant AG as Agents
+    participant FORGE as Foundry
+    participant SEC as Securite
+
+    Dev->>CLI: 1. python scripts/run_pipeline.py
+    CLI->>AG: 2. Compilation + tests
+    AG->>FORGE: 3. forge build
+    FORGE-->>AG: 4. Compilation OK
+    AG->>FORGE: 5. forge test
+    FORGE-->>AG: 6. Tests OK
+    AG->>SEC: 7. Slither + Halmos
+    SEC-->>AG: 8. Audits OK
+    AG->>API: 9. Code certifie
+    API->>Dev: 10. Notification Dashboard
+    Dev->>API: 11. Approbation
+    API->>API: 12. Git commit & push
+</pre>
+    </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 9 : REFERENCE RAPIDE                          -->
+<!-- ===================================================== -->
+<h2 id="reference">9. Référence rapide</h2>
+
+<div class="card">
+    <h3 style="color: #f0f6fc;">9.1. Commandes essentielles</h3>
+    <table>
+        <thead><tr><th>Commande</th><th>Description</th></tr></thead>
+        <tbody>
+            <tr><td><code>forge build</code></td><td>Compiler les contrats</td></tr>
+            <tr><td><code>forge test</code></td><td>Lancer les tests Foundry</td></tr>
+            <tr><td><code>forge test -vvvv</code></td><td>Tests avec traces</td></tr>
+            <tr><td><code>forge test --match-test test_Increment</code></td><td>Tester une fonction specifique</td></tr>
+            <tr><td><code>slither . --json slither-report.json</code></td><td>Analyse statique Slither</td></tr>
+            <tr><td><code>halmos</code></td><td>Verification formelle Halmos</td></tr>
+            <tr><td><code>uvicorn src.api.web_dashboard:app --reload</code></td><td>Lancer l'API</td></tr>
+            <tr><td><code>docker compose up -d</code></td><td>Demarrer les services Docker</td></tr>
+            <tr><td><code>docker compose down</code></td><td>Arreter les services Docker</td></tr>
+        </tbody>
+    </table>
+
+    <h3 style="color: #f0f6fc;">9.2. Commandes Git et GitHub</h3>
+    <table>
+        <thead><tr><th>Commande</th><th>Description</th></tr></thead>
+        <tbody>
+            <tr><td><code>git status</code></td><td>Voir l'état des fichiers modifiés</td></tr>
+            <tr><td><code>git add .</code></td><td>Ajouter tous les fichiers modifiés</td></tr>
+            <tr><td><code>git commit -m "message"</code></td><td>Commiter les changements</td></tr>
+            <tr><td><code>git push origin main</code></td><td>Pousser les commits vers GitHub</td></tr>
+            <tr><td><code>git pull origin main</code></td><td>Récupérer les derniers changements</td></tr>
+            <tr><td><code>git branch</code></td><td>Voir les branches locales</td></tr>
+            <tr><td><code>git checkout -b feature/nom</code></td><td>Créer une nouvelle branche</td></tr>
+            <tr><td><code>gh gist create fichier --public</code></td><td>Créer un Gist public</td></tr>
+            <tr><td><code>gh gist create fichier --private</code></td><td>Créer un Gist privé</td></tr>
+            <tr><td><code>gh gist list</code></td><td>Lister les Gists</td></tr>
+        </tbody>
+    </table>
+
+    <h3 style="color: #f0f6fc;">9.3. Commandes Docker</h3>
+    <table>
+        <thead><tr><th>Commande</th><th>Description</th></tr></thead>
+        <tbody>
+            <tr><td><code>docker ps</code></td><td>Voir les conteneurs en cours</td></tr>
+            <tr><td><code>docker ps -a</code></td><td>Voir tous les conteneurs (y compris arrêtés)</td></tr>
+            <tr><td><code>docker logs pipeline_anvil</code></td><td>Voir les logs d'un conteneur</td></tr>
+            <tr><td><code>docker compose up -d</code></td><td>Démarrer tous les services</td></tr>
+            <tr><td><code>docker compose down</code></td><td>Arrêter tous les services</td></tr>
+            <tr><td><code>docker compose restart</code></td><td>Redémarrer les services</td></tr>
+            <tr><td><code>docker system prune -a -f</code></td><td>Nettoyer les images inutilisées</td></tr>
+            <tr><td><code>docker run -d --name test-redis -p 6379:6379 redis:7-alpine</code></td><td>Lancer un conteneur Redis isolé</td></tr>
+        </tbody>
+    </table>
+
+    <h3 style="color: #f0f6fc;">9.4. Structure des fichiers</h3>
+    <div class="mermaid-container">
+        <pre class="mermaid">
+graph LR
+    subgraph ROOT[Racine du projet]
+        A[docker-compose.yml]
+        B[contracts/]
+        C[test/]
+        D[src/]
+        E[scripts/]
+        F[.env]
+    end
+
+    subgraph CONTRATS[contracts/]
+        B1[*.sol]
+    end
+
+    subgraph TESTS[test/]
+        C1[*.t.sol]
+        C2[*.sym.t.sol]
+    end
+
+    subgraph SRC[src/]
+        D1[api/web_dashboard.py]
+        D2[config/settings.py]
+        D3[agents/]
+        D4[security/]
+        D5[tools/]
+        D6[db/]
+    end
+
+    subgraph SCRIPTS[scripts/]
+        E1[run_pipeline.py]
+        E2[run_slither.py]
+        E3[run_halmos.py]
+        E4[deploy.py]
+    end
+</pre>
+    </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- SECTION 10 : PROCESSUS APRES REDEMARRAGE              -->
+<!-- ===================================================== -->
+<h2 id="post-reboot">10. Processus après redémarrage du poste</h2>
+
+<div class="card">
+
+    <h3 style="color: #f0f6fc;">10.1. Démarrage rapide (1 minute)</h3>
+
+    <div class="callout callout-info">
+        💡 Le script de démarrage <code>start_pipeline.ps1</code> existe déjà et est prêt à l'emploi.
+    </div>
+
+    <ol class="step-list">
+        <li><strong style="color: #58a6ff;">Lancer Docker Desktop</strong>
+            <pre><code># Lancer Docker Desktop depuis le menu Démarrer
+# Attendre que l'icône devienne verte (barre d'état système)</code></pre>
+        </li>
+        <li><strong style="color: #58a6ff;">Lancer le pipeline</strong>
+            <pre><code>cd D:\Web3Projects\20260817_SmartContractDevPipeline2.0
+.\start_pipeline.ps1</code></pre>
+            <div class="callout callout-success">
+                ✅ Ce script exécute automatiquement :
+                <ul>
+                    <li>La vérification de l'environnement (Python, Docker, Foundry, Slither, Halmos)</li>
+                    <li>L'activation de l'environnement virtuel (avec tests de validation intégrés)</li>
+                    <li>Le nettoyage et le redémarrage des services Docker (Redis, PostgreSQL)</li>
+                    <li>Le lancement d'Anvil dans un nouveau terminal</li>
+                    <li>La vérification de tous les services (API, Redis, PostgreSQL, Anvil)</li>
+                    <li>La validation du code Solidity (forge build, forge test, slither, halmos)</li>
+                    <li>Le lancement de l'API FastAPI</li>
+                </ul>
+            </div>
+        </li>
+    </ol>
+
+    <h3 style="color: #f0f6fc;">10.2. Activation manuelle (si vous voulez juste activer l'environnement)</h3>
+    <pre><code>.\venv\Scripts\Activate.ps1</code></pre>
+    <div class="callout callout-info">
+        💡 L'activation exécute <strong>automatiquement</strong> :
+        <ul>
+            <li>La vérification des outils (Python, Docker, Foundry, Slither, Halmos)</li>
+            <li>Le test des services (Redis, PostgreSQL, Anvil, API FastAPI)</li>
+            <li>La validation du code Solidity (forge build, forge test, slither, halmos)</li>
+        </ul>
+    </div>
+
+    <h3 style="color: #f0f6fc;">10.3. Services démarrés automatiquement</h3>
+    <table>
+        <thead><tr><th>Service</th><th>Port</th><th>Statut</th></tr></thead>
+        <tbody>
+            <tr><td>Redis</td><td>6379</td><td>✅ Démarré par <code>start_pipeline.ps1</code></td></tr>
+            <tr><td>PostgreSQL</td><td>5432</td><td>✅ Démarré par <code>start_pipeline.ps1</code></td></tr>
+            <tr><td>Anvil</td><td>8545</td><td>✅ Démarré dans un nouveau terminal</td></tr>
+            <tr><td>API FastAPI</td><td>8000</td><td>✅ Démarré en dernier</td></tr>
+        </tbody>
+    </table>
+
+    <h3 style="color: #f0f6fc;">10.4. Si vous rencontrez une erreur</h3>
+    <pre><code># Voir les logs d'Anvil
+docker logs pipeline_anvil
+
+# Redémarrer les services manuellement
+docker compose down
+docker compose up -d
+
+# Relancer l'API
+uvicorn src.api.web_dashboard:app --reload</code></pre>
+
+    <h3 style="color: #f0f6fc;">10.5. Arrêt du système</h3>
+    <pre><code># Arrêter l'API (CTRL+C)
+
+# Arrêter les services Docker
+docker compose down
+
+# Désactiver l'environnement virtuel
+deactivate</code></pre>
+
+    <div class="callout callout-info">
+        💡 Pour une réinitialisation complète : <code>docker compose down -v</code> (supprime aussi les volumes)
+    </div>
+
+    <h3 style="color: #f0f6fc;">10.6. Structure des fichiers (révision)</h3>
+    <table>
+        <thead><tr><th>Fichier</th><th>Rôle</th></tr></thead>
+        <tbody>
+            <tr><td><code>start_pipeline.ps1</code></td><td>✅ Script principal de démarrage (existe déjà)</td></tr>
+            <tr><td><code>venv\Scripts\Activate.ps1</code></td><td>✅ Active l'environnement et exécute les tests</td></tr>
+            <tr><td><code>docker-compose.yml</code></td><td>✅ Configuration des services Docker</td></tr>
+            <tr><td><code>src/api/web_dashboard.py</code></td><td>✅ API FastAPI</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ===================================================== -->
+<!-- FOOTER                                                -->
+<!-- ===================================================== -->
+<div class="footer">
+    <p>Smart Contract Dev Pipeline 2.0 &bull; Guide Utilisateur &bull; Version 2.0 &bull; 2026</p>
+    <p style="font-size: 0.8rem; color: #6e7681;">Document format A4 portrait – imprimable</p>
+</div>
+
+</body>
+</html>
