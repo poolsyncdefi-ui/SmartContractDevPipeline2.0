@@ -1,6 +1,6 @@
-﻿PROJECT: SmartContractDevPipeline2.0
-DATE: 2026-08-25 18:13:08
-FILES: 74
+PROJECT: SmartContractDevPipeline2.0
+DATE: 2026-08-28 21:52:53
+FILES: 82
 
 
 
@@ -82,6 +82,56 @@ forge install
   "json": "slither-report.json"
 }
 
+
+
+=== D:\Web3Projects\20260817_SmartContractDevPipeline2.0\test_imports.py ===
+
+# test_imports.py
+print("=== Test des imports du pipeline ===\n")
+
+try:
+    from src.agents.base.abstract_agent import AbstractAgent
+    print("✅ AbstractAgent importé")
+except Exception as e:
+    print(f"❌ AbstractAgent : {e}")
+
+try:
+    from src.agents.base.skill import BaseSkill
+    print("✅ BaseSkill importé")
+except Exception as e:
+    print(f"❌ BaseSkill : {e}")
+
+try:
+    from src.agents.base.best_practice import BaseBestPractice
+    print("✅ BaseBestPractice importé")
+except Exception as e:
+    print(f"❌ BaseBestPractice : {e}")
+
+try:
+    from src.agents.factory.skill_registry import SkillRegistry
+    print("✅ SkillRegistry importé")
+except Exception as e:
+    print(f"❌ SkillRegistry : {e}")
+
+try:
+    from src.agents.factory.agent_factory import AgentFactory
+    print("✅ AgentFactory importé")
+except Exception as e:
+    print(f"❌ AgentFactory : {e}")
+
+try:
+    from src.agents.templates.developer_agent import DeveloperAgent
+    print("✅ DeveloperAgent importé")
+except Exception as e:
+    print(f"❌ DeveloperAgent : {e}")
+
+try:
+    from src.agents.templates.architect_agent import ArchitectAgent
+    print("✅ ArchitectAgent importé")
+except Exception as e:
+    print(f"❌ ArchitectAgent : {e}")
+
+print("\n=== Test terminé ===")
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\.github\workflows\pipeline.yml ===
@@ -30119,6 +30169,254 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+=== D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\agents\base\abstract_agent.py ===
+
+# src/agents/base/abstract_agent.py
+from abc import ABC, abstractmethod
+from typing import Dict, Any, List, Optional
+from src.agents.base.skill import BaseSkill
+
+class AbstractAgent(ABC):
+    """Classe de base abstraite pour tous les agents du pipeline."""
+    
+    def __init__(self, agent_id: str, name: str, skills: Optional[List[BaseSkill]] = None):
+        self.agent_id = agent_id
+        self.name = name
+        self.skills = skills or []
+        self.history: List[Dict] = []
+    
+    @abstractmethod
+    async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute une tâche spécifique."""
+        pass
+    
+    def attach_skill(self, skill: BaseSkill) -> None:
+        """Ajoute une compétence à l'agent."""
+        self.skills.append(skill)
+    
+    async def log_execution(self, task_id: str, prompt: str, response: str, tool_output: str) -> None:
+        """Enregistre l'exécution d'une tâche."""
+        self.history.append({
+            "task_id": task_id,
+            "prompt": prompt,
+            "response": response,
+            "tool_output": tool_output,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+
+=== D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\agents\base\best_practice.py ===
+
+# src/agents/base/best_practice.py
+from abc import ABC, abstractmethod
+from typing import Dict, Any
+from src.core.models import BestPractice as BestPracticeConfig
+
+class BaseBestPractice(ABC):
+    """Classe de base pour les bonnes pratiques."""
+    
+    def __init__(self, config: BestPracticeConfig):
+        self.config = config
+    
+    @abstractmethod
+    async def validate(self, output: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Valide la sortie d'une compétence.
+        Retourne: {"passed": bool, "message": str, "details": dict}
+        """
+        pass
+
+
+=== D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\agents\base\skill.py ===
+
+# src/agents/base/skill.py
+from abc import ABC, abstractmethod
+from pydantic import BaseModel
+from typing import Dict, Any, Type, Optional
+from src.core.models import Skill as SkillConfig
+
+class BaseSkill(ABC):
+    """Classe de base pour toutes les compétences."""
+    
+    skill_id: str
+    name: str
+    description: str
+    input_schema: Type[BaseModel]
+    
+    def __init__(self, config: SkillConfig, llm_client=None, knowledge_base=None):
+        self.config = config
+        self.llm_client = llm_client
+        self.knowledge_base = knowledge_base
+    
+    @abstractmethod
+    async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute la compétence avec les paramètres donnés."""
+        pass
+    
+    @abstractmethod
+    def get_system_prompt_rules(self) -> str:
+        """Retourne les règles système pour le prompt."""
+        pass
+    
+    def validate_parameters(self, params: Dict[str, Any]) -> BaseModel:
+        """Valide les paramètres d'entrée."""
+        return self.input_schema(**params)
+    
+    def set_llm_client(self, client) -> None:
+        """Injecte le client LLM."""
+        self.llm_client = client
+    
+    def set_knowledge_base(self, kb) -> None:
+        """Injecte la base de connaissances."""
+        self.knowledge_base = kb
+
+
+=== D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\agents\factory\agent_factory.py ===
+
+# src/agents/factory/agent_factory.py
+from typing import List, Type, Dict, Any
+from src.agents.base.abstract_agent import AbstractAgent
+from src.agents.factory.skill_registry import SkillRegistry
+from src.agents.base.skill import BaseSkill
+from src.core.exceptions import SkillNotFoundError
+
+class AgentFactory:
+    """Fabrique d'instanciation d'agents."""
+    
+    def __init__(self, registry: SkillRegistry, llm_client=None, knowledge_base=None):
+        self.registry = registry
+        self.llm_client = llm_client
+        self.knowledge_base = knowledge_base
+        self._templates: Dict[str, Type[AbstractAgent]] = {}
+    
+    def register_agent_template(self, role_name: str, agent_class: Type[AbstractAgent]) -> None:
+        """Enregistre un template d'agent."""
+        self._templates[role_name] = agent_class
+    
+    def create_agent(self, agent_id: str, role_name: str, skill_ids: List[str]) -> AbstractAgent:
+        """Crée un agent avec les compétences spécifiées."""
+        agent_cls = self._templates.get(role_name)
+        if not agent_cls:
+            raise ValueError(f"Agent template '{role_name}' not found")
+        
+        skills = []
+        for skill_id in skill_ids:
+            skill_cls = self.registry.get(skill_id)
+            # On instancie la compétence avec ses dépendances
+            # Note: la configuration de la compétence doit être chargée depuis un catalogue
+            skill_instance = skill_cls(skill_id, self.llm_client, self.knowledge_base)
+            skills.append(skill_instance)
+        
+        return agent_cls(agent_id=agent_id, name=role_name, skills=skills)
+
+
+=== D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\agents\factory\skill_registry.py ===
+
+# src/agents/factory/skill_registry.py
+from typing import Dict, List, Type
+from src.agents.base.skill import BaseSkill
+from src.core.exceptions import SkillNotFoundError
+
+class SkillRegistry:
+    """Registre singleton des compétences disponibles."""
+    
+    _instance = None
+    _skills: Dict[str, Type[BaseSkill]] = {}
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def register(self, skill_id: str, skill_class: Type[BaseSkill]) -> None:
+        """Enregistre une compétence."""
+        self._skills[skill_id] = skill_class
+    
+    def get(self, skill_id: str) -> Type[BaseSkill]:
+        """Récupère une compétence par son ID."""
+        if skill_id not in self._skills:
+            raise SkillNotFoundError(skill_id=skill_id, message=f"Skill '{skill_id}' not found")
+        return self._skills[skill_id]
+    
+    def has_skill(self, skill_id: str) -> bool:
+        """Vérifie si une compétence existe."""
+        return skill_id in self._skills
+    
+    def list_skills(self) -> List[str]:
+        """Liste tous les IDs de compétences."""
+        return list(self._skills.keys())
+
+
+=== D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\agents\templates\architect_agent.py ===
+
+# src/agents/templates/architect_agent.py
+from typing import Dict, Any, List
+import yaml
+from src.agents.base.abstract_agent import AbstractAgent
+
+class ArchitectAgent(AbstractAgent):
+    """Agent spécialisé dans l'architecture et l'orchestration."""
+    
+    async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyse la spécification et génère le DAG."""
+        yaml_content = task_data.get("yaml_content", "")
+        spec = self.parse_yaml_spec(yaml_content)
+        dag = self.generate_dag_nodes(spec)
+        
+        return {
+            "status": "success",
+            "spec": spec,
+            "dag": dag
+        }
+    
+    def parse_yaml_spec(self, yaml_text: str) -> Dict[str, Any]:
+        """Parse la spécification YAML."""
+        return yaml.safe_load(yaml_text) or {}
+    
+    def generate_dag_nodes(self, parsed_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Génère les nœuds du DAG."""
+        return parsed_spec.get("tasks", [])
+
+
+=== D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\agents\templates\developer_agent.py ===
+
+# src/agents/templates/developer_agent.py
+from typing import Dict, Any
+from src.agents.base.abstract_agent import AbstractAgent
+
+class DeveloperAgent(AbstractAgent):
+    """Agent spécialisé dans le développement de smart contracts."""
+    
+    async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Génère du code Solidity et des tests."""
+        spec = task_data.get("spec", {})
+        
+        # Génération du code (à implémenter avec les compétences)
+        code = await self.generate_contract_code(spec)
+        tests = await self.generate_test_suite(code)
+        
+        return {
+            "status": "success",
+            "code": code,
+            "tests": tests
+        }
+    
+    async def generate_contract_code(self, spec: Dict[str, Any]) -> str:
+        """Génère le code du contrat."""
+        # À implémenter avec les compétences
+        return "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\n\ncontract GeneratedContract {\n    // TODO: Implement\n}"
+    
+    async def generate_test_suite(self, contract_code: str) -> str:
+        """Génère les tests pour le contrat."""
+        # À implémenter avec les compétences
+        return "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\n\nimport 'forge-std/Test.sol';\n\ncontract GeneratedTest is Test {\n    // TODO: Implement tests\n}"
+    
+    async def apply_auto_fix(self, code: str, compiler_errors: str) -> str:
+        """Applique une correction automatique."""
+        # À implémenter
+        return code
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\api\web_dashboard.py ===
