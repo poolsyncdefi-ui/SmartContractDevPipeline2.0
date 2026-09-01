@@ -1,0 +1,23 @@
+{
+  "detectors_to_exclude": [
+    "naming-convention",
+    "events-access"
+  ],
+  "filter_paths": [
+    "lib",
+    "test",
+    "node_modules"
+  ],
+  "solc_remaps": {
+    "openzeppelin-contracts": "lib/openzeppelin-contracts/"
+  },
+  "json": "slither-report.json",
+  "exclude_dependencies": true,
+  "print": [
+    "detectors",
+    "contract-summary"
+  ],
+  "solc_ast": false,
+  "solc_ast_json": false,
+  "solc_sources": false
+}

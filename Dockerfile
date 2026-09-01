@@ -1,40 +1,37 @@
 # ==============================================================================
 # Smart Contract Dev Pipeline 2.0 - Dockerfile
 # ==============================================================================
+# Fichier: Dockerfile
+# Description: Image Docker pour le pipeline.
+# ==============================================================================
 
 FROM python:3.11-slim
 
-# 1. Installation des dépendances système essentielles
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    build-essential \
-    libssl-dev \
-    libffi-dev \
-    python3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# 2. Définition du répertoire de travail
 WORKDIR /app
 
-# 3. Installation de Foundry (Forge, Cast, Anvil, Chisel)
-RUN curl -L https://foundry.paradigm.xyz | bash
-ENV PATH="/root/.foundry/bin:${PATH}"
-RUN foundryup
+# Installer les dépendances système
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# 4. Copie des dépendances Python et installation
-COPY requirements.txt* .
-RUN pip install --no-cache-dir --upgrade pip
-RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+# Installer Foundry
+RUN curl -L https://foundry.paradigm.xyz | bash && \
+    /root/.foundry/bin/foundryup
 
-# Installation explicite des outils principaux du pipeline si non présents dans requirements
-RUN pip install --no-cache-dir slither-analyzer halmos fastapi uvicorn web3
+# Copier les dépendances Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. Copie du code source du projet
+# Copier le code source
 COPY . .
 
-# 6. Exposition du port pour l'API Dashboard
+# Créer le workspace
+RUN mkdir -p /app/workspace /app/contracts
+
+# Exposer le port de l'API
 EXPOSE 8000
 
-# 7. Commande par défaut
+# Commande par défaut
 CMD ["uvicorn", "src.api.web_dashboard:app", "--host", "0.0.0.0", "--port", "8000"]

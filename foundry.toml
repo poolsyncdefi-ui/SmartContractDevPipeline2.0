@@ -1,4 +1,56 @@
+# # ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Foundry Configuration
+# ==============================================================================
+# Fichier: foundry.toml
+# Description: Configuration du projet Foundry pour Forge et Cast.
+# ==============================================================================
+
 [profile.default]
+src = "contracts"
+out = "out"
+libs = ["lib"]
+
+# Compilateur Solidity
+solc = "0.8.24"
+solc-remappings = [
+    "@openzeppelin/=lib/openzeppelin-contracts/"
+]
+
+# Optimisation
+optimizer = true
+optimizer-runs = 200
+
+# Éviter les warnings
+deny-warnings = false
+
+# Fuzzing
+[profile.default.fuzz]
+runs = 10000
+max-test-rejects = 65536
+seed = "0x1234567890"
+
+# Invariants
+[profile.default.invariant]
+runs = 10000
+depth = 1000
+fail-on-revert = true
+
+# Tests
+[profile.default.test]
+verbosity = 2
+ffi = true
+block-timestamp = 0
+block-number = 0
+
+# Gas
+[profile.default.gas]
+enabled = true
+report_contracts = ["src/**/*.sol"]
+
+# Coverage
+[profile.coverage]
+test_patterns = ["test/**/*.sol"]
+verbose = false[profile.default]
 src = "contracts"
 out = "out"
 libs = ["lib"]

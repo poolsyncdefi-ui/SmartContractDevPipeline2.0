@@ -1,5 +1,5 @@
 PROJECT: SmartContractDevPipeline2.0
-DATE: 2026-09-01 14:51:06
+DATE: 2026-09-01 16:14:58
 FILES: 115
 
 
@@ -31018,263 +31018,2103 @@ class RedisMessageBus(MessageBus):
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\config\settings.py ===
 
-# src/config/settings.py
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Configuration (Settings)
+# ==============================================================================
+# Fichier: src/config/settings.py
+# Description: Gestion centralisée de la configuration avec Pydantic-Settings.
+#              Charge automatiquement les variables depuis .env.
+# ==============================================================================
+
 from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic import Field, validator, SecretStr
+from typing import Optional, List, Dict, Any
+from pathlib import Path
+import os
+
+
+# ==============================================================================
+# CLASSE SETTINGS
+# ==============================================================================
 
 class Settings(BaseSettings):
-    """Configuration globale du pipeline chargée depuis .env."""
+    """
+    Configuration globale du pipeline.
+    Les variables sont chargées depuis .env avec validation automatique.
+    """
     
-    # GitHub
-    github_token: str
-    github_username: str = "octocat"
+    # ==========================================================================
+    # GITHUB
+    # ==========================================================================
+    github_token: SecretStr = Field(..., description="Token GitHub pour les opérations")
+    github_username: str = Field(default="octocat", description="Nom d'utilisateur GitHub")
+    github_repo: Optional[str] = Field(None, description="Repository GitHub par défaut")
     
-    # Blockchain
-    eth_rpc_url: str = "http://127.0.0.1:8545"
-    chain_id: int = 313133
+    # ==========================================================================
+    # BLOCKCHAIN
+    # ==========================================================================
+    eth_rpc_url: str = Field(default="http://127.0.0.1:8545", description="URL RPC Ethereum")
+    polygon_rpc_url: Optional[str] = Field(None, description="URL RPC Polygon")
+    arbitrum_rpc_url: Optional[str] = Field(None, description="URL RPC Arbitrum")
+    optimism_rpc_url: Optional[str] = Field(None, description="URL RPC Optimism")
+    base_rpc_url: Optional[str] = Field(None, description="URL RPC Base")
+    solana_rpc_url: Optional[str] = Field(None, description="URL RPC Solana")
+    chain_id: int = Field(default=313133, description="ID de la chaîne par défaut")
     
-    # Base de données
-    database_url: str = "postgresql+asyncpg://pipeline:pipeline@localhost:5432/pipeline"
+    # ==========================================================================
+    # BASE DE DONNÉES
+    # ==========================================================================
+    database_url: str = Field(
+        default="postgresql+asyncpg://pipeline:pipeline@localhost:5432/pipeline",
+        description="URL de connexion PostgreSQL"
+    )
+    database_echo: bool = Field(default=False, description="Activer les logs SQL")
+    database_pool_size: int = Field(default=5, ge=1, le=50, description="Taille du pool de connexions")
+    database_max_overflow: int = Field(default=10, ge=0, description="Nombre max de connexions overflow")
     
-    # Cache et messaging
-    redis_url: str = "redis://localhost:6379/0"
+    # ==========================================================================
+    # REDIS / CACHE
+    # ==========================================================================
+    redis_url: str = Field(default="redis://localhost:6379/0", description="URL Redis")
+    redis_password: Optional[SecretStr] = Field(None, description="Mot de passe Redis")
+    redis_max_connections: int = Field(default=10, ge=1, description="Nombre max de connexions Redis")
     
-    # LLM
-    ollama_url: str = "http://localhost:11434"
+    # ==========================================================================
+    # LLM / OLLAMA
+    # ==========================================================================
+    ollama_url: str = Field(default="http://localhost:11434", description="URL du serveur Ollama")
+    ollama_default_model: str = Field(default="deepseek-coder:6.7b-instruct", description="Modèle par défaut")
+    ollama_embedding_model: str = Field(default="nomic-embed-text", description="Modèle d'embedding")
+    llm_timeout: int = Field(default=60, gt=0, description="Timeout LLM en secondes")
+    llm_temperature: float = Field(default=0.1, ge=0.0, le=1.0, description="Température par défaut")
     
-    # Vector database
-    chroma_host: str = "localhost"
-    chroma_port: int = 8000
+    # ==========================================================================
+    # CHROMADB (VECTOR DATABASE)
+    # ==========================================================================
+    chroma_host: str = Field(default="localhost", description="Hôte ChromaDB")
+    chroma_port: int = Field(default=8000, ge=1, le=65535, description="Port ChromaDB")
+    chroma_collection: str = Field(default="web3_docs", description="Collection par défaut")
     
-    # Pipeline
-    max_auto_debug_retries: int = 3
-    verification_timeout: int = 300
-    halmos_max_depth: int = 10
+    # ==========================================================================
+    # PIPELINE
+    # ==========================================================================
+    max_auto_debug_retries: int = Field(default=3, ge=0, le=10, description="Nombre max de tentatives d'auto-correction")
+    verification_timeout: int = Field(default=300, gt=0, description="Timeout de vérification en secondes")
+    halmos_max_depth: int = Field(default=10, ge=1, le=50, description="Profondeur max pour Halmos")
+    workspace_path: Path = Field(default=Path("./workspace"), description="Répertoire de travail")
+    log_level: str = Field(default="INFO", description="Niveau de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     
-    # Workspace
-    workspace_path: str = "./workspace"
-    log_level: str = "INFO"
+    # ==========================================================================
+    # API
+    # ==========================================================================
+    api_host: str = Field(default="0.0.0.0", description="Hôte de l'API")
+    api_port: int = Field(default=8000, ge=1, le=65535, description="Port de l'API")
+    api_reload: bool = Field(default=False, description="Activer le rechargement automatique")
+    api_cors_origins: List[str] = Field(default=["*"], description="Origines CORS autorisées")
     
-    # Clés API externes
-    infura_api_key: Optional[str] = None
-    alchemy_api_key: Optional[str] = None
-    etherscan_api_key: Optional[str] = None
-    polygonscan_api_key: Optional[str] = None
+    # ==========================================================================
+    # CLÉS API EXTERNES
+    # ==========================================================================
+    infura_api_key: Optional[SecretStr] = Field(None, description="Clé API Infura")
+    alchemy_api_key: Optional[SecretStr] = Field(None, description="Clé API Alchemy")
+    etherscan_api_key: Optional[SecretStr] = Field(None, description="Clé API Etherscan")
+    polygonscan_api_key: Optional[SecretStr] = Field(None, description="Clé API Polygonscan")
+    coinmarketcap_api_key: Optional[SecretStr] = Field(None, description="Clé API CoinMarketCap")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # ==========================================================================
+    # TEST / DEBUG
+    # ==========================================================================
+    debug: bool = Field(default=False, description="Mode debug")
+    test_mode: bool = Field(default=False, description="Mode test")
+    mock_llm: bool = Field(default=False, description="Utiliser un LLM mock")
+    mock_blockchain: bool = Field(default=False, description="Utiliser une blockchain mock")
+    
+    # ==========================================================================
+    # VALIDATEURS
+    # ==========================================================================
+    
+    @validator('workspace_path', pre=True)
+    def validate_workspace(cls, v: Any) -> Path:
+        """Convertit le chemin en Path et crée le dossier si nécessaire."""
+        if isinstance(v, str):
+            v = Path(v)
+        v.mkdir(parents=True, exist_ok=True)
+        return v
+    
+    @validator('database_url')
+    def validate_database_url(cls, v: str) -> str:
+        """Vérifie que l'URL de base de données est valide."""
+        if not v.startswith(('postgresql', 'sqlite')):
+            raise ValueError(f"Invalid database URL: '{v}'")
+        return v
+    
+    @validator('redis_url')
+    def validate_redis_url(cls, v: str) -> str:
+        """Vérifie que l'URL Redis est valide."""
+        if not v.startswith(('redis://', 'rediss://')):
+            raise ValueError(f"Invalid Redis URL: '{v}'")
+        return v
+    
+    @validator('log_level')
+    def validate_log_level(cls, v: str) -> str:
+        """Vérifie que le niveau de log est valide."""
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if v.upper() not in valid_levels:
+            raise ValueError(f"Invalid log level: '{v}'. Must be one of {valid_levels}")
+        return v.upper()
+    
+    @validator('api_cors_origins', pre=True)
+    def parse_cors_origins(cls, v: Any) -> List[str]:
+        """Convertit une chaîne en liste pour CORS."""
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(',')]
+        return v
+    
+    # ==========================================================================
+    # MÉTHODES UTILITAIRES
+    # ==========================================================================
+    
+    def get_database_connection_args(self) -> Dict[str, Any]:
+        """Retourne les arguments de connexion à la base de données."""
+        return {
+            "pool_size": self.database_pool_size,
+            "max_overflow": self.database_max_overflow,
+            "echo": self.database_echo,
+        }
+    
+    def get_redis_connection_args(self) -> Dict[str, Any]:
+        """Retourne les arguments de connexion à Redis."""
+        args = {
+            "decode_responses": True,
+            "max_connections": self.redis_max_connections,
+        }
+        if self.redis_password:
+            args["password"] = self.redis_password.get_secret_value()
+        return args
+    
+    def get_ollama_connection_args(self) -> Dict[str, Any]:
+        """Retourne les arguments de connexion à Ollama."""
+        return {
+            "base_url": self.ollama_url,
+            "default_model": self.ollama_default_model,
+            "embedding_model": self.ollama_embedding_model,
+            "timeout": self.llm_timeout,
+            "temperature": self.llm_temperature,
+        }
+    
+    def get_workspace_path(self, subpath: Optional[str] = None) -> Path:
+        """
+        Retourne le chemin du workspace, éventuellement avec un sous-chemin.
+        
+        Args:
+            subpath: Sous-chemin optionnel
+            
+        Returns:
+            Path absolu du workspace
+        """
+        if subpath:
+            return self.workspace_path / subpath
+        return self.workspace_path
+    
+    def is_production(self) -> bool:
+        """Vérifie si l'environnement est en production."""
+        return not self.debug and not self.test_mode
+    
+    def is_development(self) -> bool:
+        """Vérifie si l'environnement est en développement."""
+        return self.debug and not self.test_mode
+    
+    def get_chain_rpc_url(self, chain: str) -> Optional[str]:
+        """
+        Retourne l'URL RPC pour une chaîne donnée.
+        
+        Args:
+            chain: Nom de la chaîne (ethereum, polygon, arbitrum, optimism, base, solana)
+            
+        Returns:
+            URL RPC ou None si non configurée
+        """
+        mapping = {
+            "ethereum": self.eth_rpc_url,
+            "polygon": self.polygon_rpc_url,
+            "arbitrum": self.arbitrum_rpc_url,
+            "optimism": self.optimism_rpc_url,
+            "base": self.base_rpc_url,
+            "solana": self.solana_rpc_url,
+        }
+        return mapping.get(chain.lower())
+    
+    def get_github_auth(self) -> Dict[str, str]:
+        """Retourne les informations d'authentification GitHub."""
+        return {
+            "token": self.github_token.get_secret_value(),
+            "username": self.github_username,
+        }
+    
+    def get_api_url(self) -> str:
+        """Retourne l'URL complète de l'API."""
+        return f"http://{self.api_host}:{self.api_port}"
+    
+    def to_dict(self, show_secrets: bool = False) -> Dict[str, Any]:
+        """
+        Convertit la configuration en dictionnaire.
+        
+        Args:
+            show_secrets: Si True, affiche les secrets (à utiliser uniquement en debug)
+            
+        Returns:
+            Dict[str, Any]: Configuration sous forme de dictionnaire
+        """
+        result = {}
+        for key, value in self.__dict__.items():
+            if isinstance(value, SecretStr):
+                result[key] = value.get_secret_value() if show_secrets else "***HIDDEN***"
+            elif isinstance(value, Path):
+                result[key] = str(value)
+            else:
+                result[key] = value
+        return result
 
-# Instance unique
+
+# ==============================================================================
+# INSTANCE UNIQUE
+# ==============================================================================
+
+# Création de l'instance unique de configuration
 settings = Settings()
+
+
+# ==============================================================================
+# FONCTION DE CHARGEMENT PERSONNALISÉ
+# ==============================================================================
+
+def load_settings_from_env(env_file: Optional[Path] = None) -> Settings:
+    """
+    Charge les paramètres depuis un fichier .env personnalisé.
+    
+    Args:
+        env_file: Chemin vers le fichier .env (optionnel)
+        
+    Returns:
+        Settings: Instance de configuration
+    """
+    if env_file and env_file.exists():
+        # Utiliser un fichier .env personnalisé
+        os.environ["ENV_FILE"] = str(env_file)
+    
+    # Recharger les paramètres
+    return Settings()
+
+
+def reload_settings() -> None:
+    """
+    Recharge les paramètres depuis .env.
+    Utile après une modification du fichier .env.
+    """
+    global settings
+    settings = Settings()
+
+
+# ==============================================================================
+# TEST UNITAIRE (si exécuté directement)
+# ==============================================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Smart Contract Dev Pipeline 2.0 - Configuration")
+    print("=" * 60)
+    
+    print(f"\n🔧 Configuration actuelle:")
+    print(f"  🐍 Database: {settings.database_url}")
+    print(f"  🔴 Redis: {settings.redis_url}")
+    print(f"  🤖 Ollama: {settings.ollama_url}")
+    print(f"  📊 ChromaDB: {settings.chroma_host}:{settings.chroma_port}")
+    print(f"  🌐 API: {settings.get_api_url()}")
+    print(f"  📁 Workspace: {settings.workspace_path}")
+    print(f"  📊 Log Level: {settings.log_level}")
+    
+    print(f"\n📝 Vérifications:")
+    print(f"  ✅ Mode production: {settings.is_production()}")
+    print(f"  ✅ Mode développement: {settings.is_development()}")
+    
+    print(f"\n📋 RPC URLs:")
+    print(f"  Ethereum: {settings.eth_rpc_url}")
+    if settings.polygon_rpc_url:
+        print(f"  Polygon: {settings.polygon_rpc_url}")
+    if settings.arbitrum_rpc_url:
+        print(f"  Arbitrum: {settings.arbitrum_rpc_url}")
+    
+    print(f"\n🔑 Secrets (masqués):")
+    config_dict = settings.to_dict(show_secrets=False)
+    for key, value in config_dict.items():
+        if "token" in key.lower() or "key" in key.lower() or "secret" in key.lower():
+            print(f"  {key}: {value}")
+    
+    print("\n✅ Configuration chargée avec succès.")
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\core\exceptions.py ===
 
-# src/core/exceptions.py
-from typing import Optional, Any
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Core Exceptions
+# ==============================================================================
+# Fichier: src/core/exceptions.py
+# Description: Hiérarchie complète des exceptions personnalisées du pipeline.
+#              Chaque exception stocke le contexte nécessaire au débogage.
+# ==============================================================================
+
+from typing import Optional, Any, Dict, List
+from datetime import datetime
+
+
+# ==============================================================================
+# EXCEPTION DE BASE
+# ==============================================================================
 
 class PipelineError(Exception):
-    """Classe de base pour toutes les exceptions du pipeline."""
-    pass
+    """
+    Classe de base pour toutes les exceptions du pipeline.
+    Toutes les exceptions personnalisées doivent en hériter.
+    """
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        """
+        Args:
+            message: Message d'erreur explicite
+            details: Dictionnaire de détails supplémentaires (optionnel)
+        """
+        super().__init__(message)
+        self.message = message
+        self.details = details or {}
+        self.timestamp = datetime.utcnow().isoformat()
+
+    def __str__(self) -> str:
+        """Retourne une représentation lisible de l'erreur."""
+        base = f"[{self.timestamp}] {self.message}"
+        if self.details:
+            base += f"\n  Détails: {self.details}"
+        return base
+
+
+# ==============================================================================
+# ERREURS DE CONFIGURATION
+# ==============================================================================
 
 class ConfigurationError(PipelineError):
-    """Erreur de configuration (fichier manquant, variable d'env absente, YAML invalide)."""
-    pass
+    """
+    Erreur de configuration.
+    Levée lorsque :
+    - Un fichier de configuration est manquant
+    - Une variable d'environnement obligatoire est absente
+    - Un fichier YAML est mal formé ou invalide
+    """
+    def __init__(self, message: str, config_file: Optional[str] = None, missing_env: Optional[str] = None):
+        details = {}
+        if config_file:
+            details["config_file"] = config_file
+        if missing_env:
+            details["missing_env"] = missing_env
+        super().__init__(message, details)
+
+
+# ==============================================================================
+# ERREURS DE COMPÉTENCES (SKILLS)
+# ==============================================================================
 
 class SkillError(PipelineError):
-    """Erreur lors de l'exécution d'une compétence."""
-    def __init__(self, skill_id: str, message: str, cause: Optional[Exception] = None):
+    """
+    Erreur lors de l'exécution d'une compétence.
+    """
+    def __init__(self, skill_id: str, message: str, cause: Optional[Exception] = None, **kwargs):
+        """
+        Args:
+            skill_id: Identifiant de la compétence
+            message: Message d'erreur
+            cause: Exception originale (optionnel)
+            **kwargs: Détails supplémentaires
+        """
+        details = {"skill_id": skill_id}
+        if cause:
+            details["cause"] = str(cause)
+            details["cause_type"] = type(cause).__name__
+        details.update(kwargs)
+        super().__init__(message, details)
         self.skill_id = skill_id
         self.cause = cause
-        super().__init__(message)
+
 
 class SkillNotFoundError(SkillError):
-    """Compétence non trouvée dans le registre."""
-    pass
+    """
+    Compétence non trouvée dans le registre.
+    """
+    def __init__(self, skill_id: str, message: Optional[str] = None):
+        if message is None:
+            message = f"Skill '{skill_id}' not found in registry"
+        super().__init__(skill_id, message)
+
+
+class SkillValidationError(SkillError):
+    """
+    Erreur de validation des paramètres d'une compétence.
+    """
+    def __init__(self, skill_id: str, validation_errors: List[Dict[str, Any]], message: Optional[str] = None):
+        if message is None:
+            message = f"Validation failed for skill '{skill_id}'"
+        super().__init__(skill_id, message, validation_errors=validation_errors)
+
+
+class SkillExecutionTimeoutError(SkillError):
+    """
+    Timeout lors de l'exécution d'une compétence.
+    """
+    def __init__(self, skill_id: str, timeout_seconds: int, message: Optional[str] = None):
+        if message is None:
+            message = f"Skill '{skill_id}' timed out after {timeout_seconds}s"
+        super().__init__(skill_id, message, timeout_seconds=timeout_seconds)
+
+
+# ==============================================================================
+# ERREURS D'AGENTS
+# ==============================================================================
 
 class AgentError(PipelineError):
-    """Erreur liée à un agent."""
-    pass
+    """
+    Erreur liée à un agent.
+    """
+    def __init__(self, agent_id: str, message: str, cause: Optional[Exception] = None, **kwargs):
+        details = {"agent_id": agent_id}
+        if cause:
+            details["cause"] = str(cause)
+            details["cause_type"] = type(cause).__name__
+        details.update(kwargs)
+        super().__init__(message, details)
+        self.agent_id = agent_id
+        self.cause = cause
+
 
 class AgentNotFoundError(AgentError):
-    """Agent non trouvé."""
-    pass
+    """
+    Agent non trouvé.
+    """
+    def __init__(self, agent_id: str, message: Optional[str] = None):
+        if message is None:
+            message = f"Agent '{agent_id}' not found"
+        super().__init__(agent_id, message)
 
-class TaskExecutionError(PipelineError):
-    """Erreur lors de l'exécution d'une tâche."""
-    def __init__(self, task_id: str, message: str, cause: Optional[Exception] = None):
+
+class AgentInitializationError(AgentError):
+    """
+    Erreur lors de l'initialisation d'un agent.
+    """
+    def __init__(self, agent_id: str, message: str, cause: Optional[Exception] = None):
+        super().__init__(agent_id, f"Failed to initialize agent: {message}", cause=cause)
+
+
+# ==============================================================================
+# ERREURS DE TÂCHES
+# ==============================================================================
+
+class TaskError(PipelineError):
+    """
+    Erreur liée à l'exécution d'une tâche.
+    """
+    def __init__(self, task_id: str, message: str, cause: Optional[Exception] = None, **kwargs):
+        details = {"task_id": task_id}
+        if cause:
+            details["cause"] = str(cause)
+            details["cause_type"] = type(cause).__name__
+        details.update(kwargs)
+        super().__init__(message, details)
         self.task_id = task_id
         self.cause = cause
-        super().__init__(message)
+
+
+class TaskExecutionError(TaskError):
+    """
+    Erreur lors de l'exécution d'une tâche.
+    """
+    def __init__(self, task_id: str, message: str, cause: Optional[Exception] = None):
+        super().__init__(task_id, message, cause)
+
+
+class TaskDependencyError(TaskError):
+    """
+    Erreur de dépendance entre tâches (DAG).
+    """
+    def __init__(self, task_id: str, missing_dependencies: List[str], message: Optional[str] = None):
+        if message is None:
+            message = f"Task '{task_id}' missing dependencies: {missing_dependencies}"
+        super().__init__(task_id, message, missing_dependencies=missing_dependencies)
+
+
+class TaskCircularDependencyError(TaskError):
+    """
+    Cycle détecté dans le DAG des tâches.
+    """
+    def __init__(self, task_ids: List[str], message: Optional[str] = None):
+        if message is None:
+            message = f"Circular dependency detected: {' -> '.join(task_ids)}"
+        super().__init__(task_ids[0] if task_ids else "unknown", message, cycle=task_ids)
+
+
+# ==============================================================================
+# ERREURS DE VALIDATION
+# ==============================================================================
 
 class ValidationError(PipelineError):
-    """Erreur de validation (bonne pratique non respectée)."""
-    def __init__(self, rule_id: str, message: str, details: Optional[dict] = None):
+    """
+    Erreur de validation (bonne pratique non respectée).
+    """
+    def __init__(self, rule_id: str, message: str, details: Optional[Dict[str, Any]] = None):
+        full_details = {"rule_id": rule_id}
+        if details:
+            full_details.update(details)
+        super().__init__(message, full_details)
         self.rule_id = rule_id
-        self.details = details
-        super().__init__(message)
+
+
+class MultipleValidationError(PipelineError):
+    """
+    Erreurs de validation multiples.
+    """
+    def __init__(self, errors: List[ValidationError], message: Optional[str] = None):
+        if message is None:
+            message = f"Validation failed with {len(errors)} errors"
+        details = {"errors": [{"rule_id": e.rule_id, "message": e.message} for e in errors]}
+        super().__init__(message, details)
+        self.errors = errors
+
+
+# ==============================================================================
+# ERREURS DE COMMUNICATION
+# ==============================================================================
 
 class CommunicationError(PipelineError):
-    """Erreur de communication (bus, réseau)."""
-    pass
+    """
+    Erreur de communication (bus, réseau, Redis, etc.).
+    """
+    def __init__(self, message: str, channel: Optional[str] = None, cause: Optional[Exception] = None):
+        details = {}
+        if channel:
+            details["channel"] = channel
+        if cause:
+            details["cause"] = str(cause)
+            details["cause_type"] = type(cause).__name__
+        super().__init__(message, details)
+
+
+class MessageBusError(CommunicationError):
+    """
+    Erreur spécifique au bus de messages.
+    """
+    def __init__(self, message: str, topic: Optional[str] = None, operation: Optional[str] = None):
+        details = {}
+        if topic:
+            details["topic"] = topic
+        if operation:
+            details["operation"] = operation
+        super().__init__(message, **details)
+
+
+# ==============================================================================
+# ERREURS DE BASE DE CONNAISSANCES
+# ==============================================================================
 
 class KnowledgeBaseError(PipelineError):
-    """Erreur d'accès à la base de connaissances (ChromaDB)."""
-    pass
+    """
+    Erreur d'accès à la base de connaissances (ChromaDB).
+    """
+    def __init__(self, message: str, collection: Optional[str] = None, operation: Optional[str] = None):
+        details = {}
+        if collection:
+            details["collection"] = collection
+        if operation:
+            details["operation"] = operation
+        super().__init__(message, details)
+
+
+class EmbeddingError(KnowledgeBaseError):
+    """
+    Erreur de génération d'embedding.
+    """
+    def __init__(self, message: str, text_preview: Optional[str] = None):
+        details = {}
+        if text_preview:
+            details["text_preview"] = text_preview[:100] + "..." if len(text_preview) > 100 else text_preview
+        super().__init__(f"Embedding generation failed: {message}", **details)
+
+
+# ==============================================================================
+# ERREURS GIT / GITHUB
+# ==============================================================================
 
 class GitSyncError(PipelineError):
-    """Erreur lors des opérations Git/GitHub."""
-    pass
+    """
+    Erreur lors des opérations Git/GitHub.
+    """
+    def __init__(self, message: str, repo: Optional[str] = None, operation: Optional[str] = None):
+        details = {}
+        if repo:
+            details["repo"] = repo
+        if operation:
+            details["operation"] = operation
+        super().__init__(message, details)
+
+
+class GitAuthenticationError(GitSyncError):
+    """
+    Erreur d'authentification Git/GitHub.
+    """
+    def __init__(self, message: str = "GitHub authentication failed"):
+        super().__init__(message, operation="authentication")
+
+
+class GistPublishError(GitSyncError):
+    """
+    Erreur de publication de Gist.
+    """
+    def __init__(self, filename: str, message: str, status_code: Optional[int] = None):
+        details = {"filename": filename}
+        if status_code:
+            details["status_code"] = status_code
+        super().__init__(f"Failed to publish gist '{filename}': {message}", **details)
+
+
+# ==============================================================================
+# ERREURS LLM
+# ==============================================================================
 
 class LLMError(PipelineError):
-    """Erreur d'appel au LLM (Ollama/OpenAI)."""
-    pass
+    """
+    Erreur d'appel au LLM (Ollama/OpenAI).
+    """
+    def __init__(self, message: str, provider: Optional[str] = None, model: Optional[str] = None):
+        details = {}
+        if provider:
+            details["provider"] = provider
+        if model:
+            details["model"] = model
+        super().__init__(message, details)
+
+
+class LLMConnectionError(LLMError):
+    """
+    Erreur de connexion au serveur LLM.
+    """
+    def __init__(self, url: str, message: Optional[str] = None):
+        if message is None:
+            message = f"Failed to connect to LLM server at {url}"
+        super().__init__(message, provider="ollama", details={"url": url})
+
+
+class LLMResponseError(LLMError):
+    """
+    Erreur de réponse du LLM (format invalide, timeout, etc.).
+    """
+    def __init__(self, message: str, response_preview: Optional[str] = None):
+        details = {}
+        if response_preview:
+            details["response_preview"] = response_preview[:200] + "..." if len(response_preview) > 200 else response_preview
+        super().__init__(message, **details)
+
+
+# ==============================================================================
+# ERREURS DE SÉCURITÉ
+# ==============================================================================
+
+class SecurityError(PipelineError):
+    """
+    Erreur liée à la sécurité (audit, analyse, etc.).
+    """
+    def __init__(self, message: str, tool: Optional[str] = None, contract: Optional[str] = None):
+        details = {}
+        if tool:
+            details["tool"] = tool
+        if contract:
+            details["contract"] = contract
+        super().__init__(message, details)
+
+
+class SecurityAuditError(SecurityError):
+    """
+    Erreur lors de l'audit de sécurité.
+    """
+    def __init__(self, tool: str, message: str, output: Optional[str] = None):
+        details = {"output": output[:500] + "..." if output and len(output) > 500 else output}
+        super().__init__(f"{tool} audit failed: {message}", tool=tool, **details)
+
+
+# ==============================================================================
+# ERREURS D'ORCHESTRATION
+# ==============================================================================
+
+class OrchestrationError(PipelineError):
+    """
+    Erreur lors de l'orchestration du workflow.
+    """
+    def __init__(self, message: str, workflow_id: Optional[str] = None, step: Optional[int] = None):
+        details = {}
+        if workflow_id:
+            details["workflow_id"] = workflow_id
+        if step is not None:
+            details["step"] = step
+        super().__init__(message, details)
+
+
+class CircuitBreakerError(OrchestrationError):
+    """
+    Erreur du circuit breaker (trop de tentatives).
+    """
+    def __init__(self, task_id: str, retry_count: int, max_retries: int, last_error: str):
+        details = {
+            "retry_count": retry_count,
+            "max_retries": max_retries,
+            "last_error": last_error[:200] + "..." if len(last_error) > 200 else last_error
+        }
+        super().__init__(
+            f"Circuit breaker open for task '{task_id}' after {retry_count} retries",
+            workflow_id=task_id,
+            **details
+        )
+
+
+# ==============================================================================
+# ERREURS DE STOCKAGE
+# ==============================================================================
+
+class StorageError(PipelineError):
+    """
+    Erreur de stockage (base de données, fichiers, etc.).
+    """
+    def __init__(self, message: str, table: Optional[str] = None, operation: Optional[str] = None):
+        details = {}
+        if table:
+            details["table"] = table
+        if operation:
+            details["operation"] = operation
+        super().__init__(message, details)
+
+
+class DatabaseConnectionError(StorageError):
+    """
+    Erreur de connexion à la base de données.
+    """
+    def __init__(self, url: str, message: Optional[str] = None):
+        if message is None:
+            message = f"Failed to connect to database at {url}"
+        super().__init__(message, operation="connection")
+
+
+# ==============================================================================
+# FONCTION UTILITAIRE
+# ==============================================================================
+
+def format_exception(e: Exception) -> Dict[str, Any]:
+    """
+    Formate une exception en dictionnaire pour les logs et l'API.
+    
+    Args:
+        e: L'exception à formater
+        
+    Returns:
+        Dictionnaire contenant le type, le message et les détails
+    """
+    result = {
+        "type": type(e).__name__,
+        "message": str(e),
+    }
+    if isinstance(e, PipelineError):
+        result["timestamp"] = e.timestamp
+        result["details"] = e.details
+    if isinstance(e, (SkillError, AgentError, TaskError)):
+        if hasattr(e, "cause") and e.cause:
+            result["cause"] = str(e.cause)
+    return result
+
+
+# ==============================================================================
+# TEST UNITAIRE (si exécuté directement)
+# ==============================================================================
+
+if __name__ == "__main__":
+    # Exemple de test rapide
+    try:
+        raise SkillNotFoundError("test_skill")
+    except SkillNotFoundError as e:
+        print(f"Exception attrapée: {e}")
+        print(f"Formaté: {format_exception(e)}")
+    
+    try:
+        raise CircuitBreakerError("task_123", 3, 3, "Too many failures")
+    except CircuitBreakerError as e:
+        print(f"Exception attrapée: {e}")
+        print(f"Formaté: {format_exception(e)}")
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\core\models.py ===
 
-# src/core/models.py
-from pydantic import BaseModel, Field, validator
-from typing import List, Dict, Optional, Any
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Core Models (Pydantic)
+# ==============================================================================
+# Fichier: src/core/models.py
+# Description: Modèles de données Pydantic pour l'ensemble du pipeline.
+#              Validation automatique, sérialisation JSON.
+# ==============================================================================
+
+from pydantic import BaseModel, Field, validator, root_validator
+from typing import List, Dict, Optional, Any, Union
 from datetime import datetime
+from enum import Enum
+import re
+
+
+# ==============================================================================
+# ENUMS
+# ==============================================================================
+
+class Chain(str, Enum):
+    """Blockchains supportées."""
+    ETHEREUM = "ethereum"
+    POLYGON = "polygon"
+    ARBITRUM = "arbitrum"
+    OPTIMISM = "optimism"
+    BASE = "base"
+    SOLANA = "solana"
+
+class Severity(str, Enum):
+    """Niveau de sévérité des vulnérabilités."""
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+class TaskStatus(str, Enum):
+    """Statut d'une tâche."""
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    REJECTED = "rejected"
+    CIRCUIT_BROKEN = "circuit_broken"
+
+class SprintStatus(str, Enum):
+    """Statut d'un sprint."""
+    PLANNED = "planned"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class ProxyPattern(str, Enum):
+    """Pattern de proxy pour les upgrades."""
+    UUPS = "UUPS"
+    TRANSPARENT = "Transparent"
+    DIAMOND = "Diamond"
+
+
+# ==============================================================================
+# MODÈLE SKILL (COMPÉTENCE)
+# ==============================================================================
 
 class Skill(BaseModel):
-    """Compétence exécutable par un agent."""
-    id: str = Field(..., min_length=1, description="Identifiant unique de la compétence")
-    name: str = Field(..., min_length=1)
-    description: str
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    examples: List[str] = Field(default_factory=list)
-    prerequisites: List[str] = Field(default_factory=list)
-    execution_timeout: int = Field(default=300, gt=0)
-    required_tools: List[str] = Field(default_factory=list)
-    parameters_schema: Optional[Dict[str, Any]] = None  # JSON Schema
-    output_schema: Optional[Dict[str, Any]] = None      # JSON Schema
+    """
+    Compétence exécutable par un agent.
+    Une compétence est un module autonome contenant :
+    - Des règles de prompt
+    - Un schéma de validation
+    - Des métadonnées d'exécution
+    """
+    id: str = Field(..., min_length=1, max_length=100, description="Identifiant unique")
+    name: str = Field(..., min_length=1, max_length=100, description="Nom de la compétence")
+    description: str = Field(..., description="Description détaillée")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Niveau de confiance (0-1)")
+    examples: List[str] = Field(default_factory=list, description="Exemples d'utilisation")
+    prerequisites: List[str] = Field(default_factory=list, description="Compétences requises")
+    execution_timeout: int = Field(default=300, gt=0, description="Timeout en secondes")
+    required_tools: List[str] = Field(default_factory=list, description="Outils nécessaires")
+    parameters_schema: Optional[Dict[str, Any]] = Field(None, description="JSON Schema des paramètres")
+    output_schema: Optional[Dict[str, Any]] = Field(None, description="JSON Schema de la sortie")
+    is_dynamic: bool = Field(default=False, description="Générée dynamiquement")
 
-    @validator('confidence')
-    def validate_confidence(cls, v):
-        if not 0.0 <= v <= 1.0:
-            raise ValueError('confidence must be between 0 and 1')
+    @validator('id')
+    def validate_id(cls, v: str) -> str:
+        """Vérifie que l'ID ne contient que des caractères valides."""
+        if not re.match(r'^[a-zA-Z0-9_\-]+$', v):
+            raise ValueError(f"Invalid skill ID: '{v}'. Use only letters, numbers, underscores and hyphens")
         return v
 
+    @validator('description')
+    def validate_description(cls, v: str) -> str:
+        """Vérifie que la description n'est pas vide."""
+        if not v or len(v.strip()) < 10:
+            raise ValueError("Description must be at least 10 characters long")
+        return v.strip()
+
+    def model_dump(self, **kwargs) -> Dict[str, Any]:
+        """Surcharge pour exclure les champs vides optionnels."""
+        data = super().model_dump(**kwargs)
+        # Supprimer les champs optionnels vides
+        if data.get('parameters_schema') is None:
+            del data['parameters_schema']
+        if data.get('output_schema') is None:
+            del data['output_schema']
+        if not data.get('examples'):
+            del data['examples']
+        if not data.get('prerequisites'):
+            del data['prerequisites']
+        return data
+
+
+# ==============================================================================
+# MODÈLE BEST PRACTICE (BONNE PRATIQUE)
+# ==============================================================================
+
 class BestPractice(BaseModel):
-    """Bonne pratique de validation."""
-    id: str = Field(..., min_length=1)
-    domain: str = Field(..., description="solidity, react, security, devops, general")
-    rule: str
-    rationale: str
-    severity: str = Field(..., pattern="^(critical|high|medium|low)$")
-    applicable_to: List[str] = Field(default_factory=list)  # IDs de compétences, vide = toutes
-    references: List[str] = Field(default_factory=list)
-    validation_fn: Optional[str] = None  # nom de la méthode de validation
+    """
+    Bonne pratique de validation.
+    Une règle qui peut être appliquée pour vérifier la qualité du code.
+    """
+    id: str = Field(..., min_length=1, max_length=100)
+    domain: str = Field(..., description="Domaine d'application (solidity, react, security, devops, general)")
+    rule: str = Field(..., description="Règle de validation")
+    rationale: str = Field(..., description="Justification de la règle")
+    severity: Severity = Field(..., description="Niveau de sévérité")
+    applicable_to: List[str] = Field(default_factory=list, description="IDs des compétences concernées (vide = toutes)")
+    references: List[str] = Field(default_factory=list, description="Références externes")
+    validation_fn: Optional[str] = Field(None, description="Nom de la fonction de validation dans le code")
+    enabled: bool = Field(default=True, description="Active ou désactive la pratique")
+    custom_params: Dict[str, Any] = Field(default_factory=dict, description="Paramètres personnalisés")
+
+    @validator('id')
+    def validate_id(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9_\-]+$', v):
+            raise ValueError(f"Invalid practice ID: '{v}'")
+        return v
+
+    @validator('domain')
+    def validate_domain(cls, v: str) -> str:
+        valid_domains = {"solidity", "react", "security", "devops", "general"}
+        if v not in valid_domains:
+            raise ValueError(f"Invalid domain: '{v}'. Must be one of {valid_domains}")
+        return v
+
+
+# ==============================================================================
+# MODÈLE TASK (TÂCHE)
+# ==============================================================================
 
 class Task(BaseModel):
-    """Tâche à exécuter par un agent."""
-    id: str = Field(..., min_length=1)
-    name: str = Field(..., min_length=1)
-    agent_id: str          # ID de l'agent cible
-    action: str            # nom de la compétence à exécuter
-    parameters: Dict[str, Any] = Field(default_factory=dict)
-    depends_on: List[str] = Field(default_factory=list)  # IDs des tâches précédentes
-    requires_human_validation: bool = True
-    retry_count: int = Field(3, ge=0)
-    timeout_seconds: int = Field(600, gt=0)
+    """
+    Tâche à exécuter par un agent.
+    Une tâche est une unité de travail dans le DAG.
+    """
+    id: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=100)
+    agent_id: str = Field(..., description="ID de l'agent cible")
+    action: str = Field(..., description="Nom de la compétence à exécuter")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Paramètres de la tâche")
+    depends_on: List[str] = Field(default_factory=list, description="IDs des tâches précédentes")
+    requires_human_validation: bool = Field(True, description="Nécessite une validation humaine")
+    retry_count: int = Field(3, ge=0, le=10, description="Nombre de tentatives")
+    timeout_seconds: int = Field(600, gt=0, le=3600, description="Timeout en secondes")
+    priority: int = Field(0, ge=0, le=10, description="Priorité (0=bas, 10=élevé)")
+
+    @root_validator
+    def validate_dependencies(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """Vérifie qu'une tâche ne dépend pas d'elle-même."""
+        task_id = values.get('id')
+        depends_on = values.get('depends_on', [])
+        if task_id and task_id in depends_on:
+            raise ValueError(f"Task '{task_id}' cannot depend on itself")
+        return values
+
+    def get_dependency_depth(self) -> int:
+        """Retourne la profondeur des dépendances (utile pour le DAG)."""
+        return len(self.depends_on)
+
+
+# ==============================================================================
+# MODÈLE TASK RESULT (RÉSULTAT DE TÂCHE)
+# ==============================================================================
 
 class TaskResult(BaseModel):
-    """Résultat de l'exécution d'une tâche."""
-    task_id: str
-    sprint_id: Optional[str] = None
-    agent_id: Optional[str] = None
-    status: str = Field(..., pattern="^(pending|running|success|failed|rejected)$")
-    output: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    validation_results: Optional[List[Dict]] = None
-    duration_seconds: float = 0.0
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    """
+    Résultat de l'exécution d'une tâche.
+    Stocke toutes les informations de l'exécution.
+    """
+    task_id: str = Field(..., description="ID de la tâche")
+    sprint_id: Optional[str] = Field(None, description="ID du sprint associé")
+    agent_id: Optional[str] = Field(None, description="ID de l'agent exécutant")
+    status: TaskStatus = Field(..., description="Statut final")
+    output: Optional[Dict[str, Any]] = Field(None, description="Résultat de l'exécution")
+    error: Optional[str] = Field(None, description="Message d'erreur si échec")
+    validation_results: Optional[List[Dict[str, Any]]] = Field(None, description="Résultats de validation")
+    duration_seconds: float = Field(0.0, ge=0.0, description="Durée en secondes")
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Horodatage")
+    logs: List[str] = Field(default_factory=list, description="Logs d'exécution")
+    gist_url: Optional[str] = Field(None, description="URL du Gist si publié")
+
+    @validator('duration_seconds')
+    def validate_duration(cls, v: float) -> float:
+        """Arrondit la durée à 3 décimales."""
+        return round(v, 3)
+
+    def is_success(self) -> bool:
+        """Vérifie si la tâche a réussi."""
+        return self.status == TaskStatus.SUCCESS
+
+    def is_failed(self) -> bool:
+        """Vérifie si la tâche a échoué."""
+        return self.status in {TaskStatus.FAILED, TaskStatus.REJECTED, TaskStatus.CIRCUIT_BROKEN}
+
+
+# ==============================================================================
+# MODÈLE SPRINT
+# ==============================================================================
 
 class Sprint(BaseModel):
-    """Sprint de développement."""
-    id: str = Field(..., min_length=1)
-    name: str = Field(..., min_length=1)
-    project_id: str
-    tasks: List[Task] = Field(default_factory=list)
-    status: str = Field("planned", pattern="^(planned|running|completed|failed)$")
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
+    """
+    Sprint de développement.
+    Un sprint est un ensemble de tâches à exécuter.
+    """
+    id: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=100)
+    project_id: str = Field(..., description="ID du projet")
+    tasks: List[Task] = Field(default_factory=list, description="Tâches du sprint")
+    status: SprintStatus = Field(default=SprintStatus.PLANNED, description="Statut du sprint")
+    start_date: Optional[datetime] = Field(None, description="Date de début")
+    end_date: Optional[datetime] = Field(None, description="Date de fin")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées supplémentaires")
+
+    @validator('tasks')
+    def validate_tasks(cls, v: List[Task]) -> List[Task]:
+        """Vérifie que les IDs des tâches sont uniques."""
+        task_ids = [t.id for t in v]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("Duplicate task IDs found")
+        return v
+
+    def get_task_by_id(self, task_id: str) -> Optional[Task]:
+        """Récupère une tâche par son ID."""
+        for task in self.tasks:
+            if task.id == task_id:
+                return task
+        return None
+
+    def get_tasks_by_status(self, status: TaskStatus) -> List[Task]:
+        """Récupère les tâches par statut."""
+        return [t for t in self.tasks if t.status == status]  # type: ignore
+
+
+# ==============================================================================
+# MODÈLE PROJECT CONFIG (CONFIGURATION PROJET)
+# ==============================================================================
+
+class QualityGates(BaseModel):
+    """Seuils de qualité pour le projet."""
+    test_coverage: int = Field(80, ge=0, le=100, description="Couverture de tests (%")
+    gas_increase_limit: int = Field(10, ge=0, description="Limite d'augmentation du gaz (%)")
+    max_cyclomatic_complexity: int = Field(10, ge=1, description="Complexité cyclomatique max")
+    slither_severity: Severity = Field(Severity.HIGH, description="Sévérité Slither max")
+    formal_verification: bool = Field(False, description="Activer la vérification formelle")
+
+class DeploymentConfig(BaseModel):
+    """Configuration de déploiement."""
+    safe_address: Optional[str] = Field(None, description="Adresse Safe multi-sig")
+    admin_address: Optional[str] = Field(None, description="Adresse admin")
+    rpc_endpoints: Dict[str, str] = Field(default_factory=dict, description="Endpoints RPC par chaîne")
+
+class UpgradesConfig(BaseModel):
+    """Configuration des upgrades."""
+    proxy_pattern: ProxyPattern = Field(ProxyPattern.UUPS, description="Pattern de proxy")
+    storage_slots: List[str] = Field(default_factory=list, description="Slots de stockage réservés")
+
+class MonitoringConfig(BaseModel):
+    """Configuration du monitoring."""
+    prometheus_endpoint: Optional[str] = Field(None, description="Endpoint Prometheus")
+    grafana_dashboard: Optional[str] = Field(None, description="Dashboard Grafana")
+
+class TeamRequirement(BaseModel):
+    """Exigence d'équipe."""
+    skill: str = Field(..., description="ID de la compétence")
+    count: int = Field(1, ge=1, description="Nombre d'agents")
+    priority: int = Field(2, ge=1, le=3, description="Priorité (1=critique, 2=normal, 3=bonus)")
 
 class ProjectConfig(BaseModel):
-    """Configuration du projet."""
-    name: str
-    description: str = ""
-    chain: str = "ethereum"
-    frontend: bool = False
-    tests: Dict[str, Any] = Field(default_factory=dict)
-    security: Dict[str, Any] = Field(default_factory=dict)
-    deployment: Dict[str, Any] = Field(default_factory=dict)
-    upgrades: Dict[str, Any] = Field(default_factory=dict)
-    monitoring: Dict[str, Any] = Field(default_factory=dict)
-    team_requirements: List[Dict] = Field(default_factory=list)  # {skill, count, priority}
+    """
+    Configuration complète du projet.
+    Chargeable depuis project_config.yaml.
+    """
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(default="", description="Description du projet")
+    chain: Chain = Field(Chain.ETHEREUM, description="Blockchain cible")
+    frontend: bool = Field(False, description="Avec frontend")
+    version: str = Field(default="1.0.0", description="Version du projet")
+    
+    # Équipe
+    team_requirements: List[TeamRequirement] = Field(default_factory=list)
+    
+    # Qualité
+    quality_gates: QualityGates = Field(default_factory=QualityGates)
+    
+    # Déploiement
+    deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
+    
+    # Upgrades
+    upgrades: UpgradesConfig = Field(default_factory=UpgradesConfig)
+    
+    # Monitoring
+    monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
+    
+    # Métadonnées
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    @validator('version')
+    def validate_version(cls, v: str) -> str:
+        """Vérifie que la version suit le format semver."""
+        if not re.match(r'^\d+\.\d+\.\d+$', v):
+            raise ValueError(f"Invalid version format: '{v}'. Use semver (X.Y.Z)")
+        return v
+
+
+# ==============================================================================
+# MODÈLE ARTIFACT (ARTEFACT)
+# ==============================================================================
+
+class ArtifactType(str, Enum):
+    """Types d'artefacts."""
+    SOLIDITY = "solidity"
+    TEST = "test"
+    DOCUMENTATION = "doc"
+    CONFIGURATION = "config"
+    SCRIPT = "script"
+    OTHER = "other"
+
+class Artifact(BaseModel):
+    """
+    Artefact produit par le pipeline.
+    Peut être du code, de la documentation, des fichiers de configuration, etc.
+    """
+    id: str = Field(..., min_length=1, max_length=100)
+    type: ArtifactType = Field(..., description="Type d'artefact")
+    content: str = Field(..., description="Contenu textuel")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées")
+    vector: Optional[List[float]] = Field(None, description="Embedding vectoriel")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    tags: List[str] = Field(default_factory=list, description="Tags pour la recherche")
+    source_task_id: Optional[str] = Field(None, description="ID de la tâche source")
+
+    @validator('content')
+    def validate_content(cls, v: str) -> str:
+        """Vérifie que le contenu n'est pas vide."""
+        if not v or len(v.strip()) < 1:
+            raise ValueError("Artifact content cannot be empty")
+        return v
+
+    def to_text(self) -> str:
+        """Retourne le contenu sous forme de texte."""
+        return self.content
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convertit l'artefact en dictionnaire."""
+        return {
+            "id": self.id,
+            "type": self.type.value,
+            "metadata": self.metadata,
+            "content_preview": self.content[:200] + "..." if len(self.content) > 200 else self.content,
+            "tags": self.tags,
+            "created_at": self.created_at.isoformat()
+        }
+
+
+# ==============================================================================
+# MODÈLE FEEDBACK (RETOUR HUMAIN)
+# ==============================================================================
+
+class Feedback(BaseModel):
+    """
+    Retour humain pour le RLHF.
+    """
+    task_id: str = Field(..., description="ID de la tâche concernée")
+    user_id: str = Field(..., description="ID de l'utilisateur")
+    approved: bool = Field(..., description="Approbation ou rejet")
+    comments: str = Field(default="", description="Commentaires textuels")
+    suggested_changes: Optional[str] = Field(None, description="Changements suggérés")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @validator('comments')
+    def validate_comments(cls, v: str) -> str:
+        """Nettoie les commentaires."""
+        return v.strip() if v else ""
+
+
+# ==============================================================================
+# MODÈLE PIPELINE STATUS (STATUT DU PIPELINE)
+# ==============================================================================
+
+class PipelineStatus(BaseModel):
+    """
+    Statut global du pipeline.
+    """
+    status: str = Field(..., description="Statut général")
+    version: str = Field(..., description="Version du pipeline")
+    uptime_seconds: float = Field(..., description="Temps de fonctionnement")
+    active_sprints: int = Field(0, description="Nombre de sprints actifs")
+    total_tasks: int = Field(0, description="Nombre total de tâches")
+    completed_tasks: int = Field(0, description="Tâches terminées")
+    failed_tasks: int = Field(0, description="Tâches échouées")
+    last_update: datetime = Field(default_factory=datetime.utcnow)
+    components: Dict[str, bool] = Field(default_factory=dict, description="État des composants")
+
+    def is_healthy(self) -> bool:
+        """Vérifie si le pipeline est en bonne santé."""
+        return self.status == "healthy" and all(self.components.values())
+
+    def get_completion_rate(self) -> float:
+        """Retourne le taux de complétion."""
+        if self.total_tasks == 0:
+            return 0.0
+        return round((self.completed_tasks / self.total_tasks) * 100, 2)
+
+
+# ==============================================================================
+# MODÈLE DEPLOYMENT (DÉPLOIEMENT)
+# ==============================================================================
+
+class Deployment(BaseModel):
+    """
+    Informations de déploiement d'un contrat.
+    """
+    contract_name: str = Field(..., description="Nom du contrat")
+    contract_address: str = Field(..., description="Adresse déployée")
+    chain_id: int = Field(..., description="ID de la chaîne")
+    tx_hash: str = Field(..., description="Hash de la transaction")
+    block_number: int = Field(..., description="Numéro du bloc")
+    deployed_at: datetime = Field(default_factory=datetime.utcnow)
+    verified: bool = Field(False, description="Vérifié sur Etherscan")
+    abi: Optional[List[Dict]] = Field(None, description="ABI du contrat")
+    bytecode: Optional[str] = Field(None, description="Bytecode déployé")
+
+    @validator('contract_address')
+    def validate_address(cls, v: str) -> str:
+        """Vérifie le format de l'adresse."""
+        if not re.match(r'^0x[a-fA-F0-9]{40}$', v):
+            raise ValueError(f"Invalid contract address: '{v}'")
+        return v
+
+
+# ==============================================================================
+# TEST UNITAIRE (si exécuté directement)
+# ==============================================================================
+
+if __name__ == "__main__":
+    # Création d'un skill de test
+    skill = Skill(
+        id="erc20_generator",
+        name="ERC20 Generator",
+        description="Generates an ERC20 token contract with minting and burning capabilities",
+        confidence=0.95,
+        examples=["Generate a standard ERC20 token", "Create a token with cap"],
+        required_tools=["solidity", "forge"],
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "symbol": {"type": "string"},
+                "initial_supply": {"type": "integer", "minimum": 0}
+            },
+            "required": ["name", "symbol"]
+        }
+    )
+    print(f"✅ Skill créé: {skill.name}")
+    print(f"   ID: {skill.id}")
+    print(f"   Confidence: {skill.confidence}")
+    
+    # Création d'une tâche
+    task = Task(
+        id="task_001",
+        name="Generate ERC20",
+        agent_id="developer_agent",
+        action="erc20_generator",
+        parameters={"name": "MyToken", "symbol": "MTK", "initial_supply": 1000000},
+        depends_on=[]
+    )
+    print(f"✅ Tâche créée: {task.name}")
+    print(f"   Agent: {task.agent_id}")
+    print(f"   Action: {task.action}")
+    
+    # Création d'un sprint
+    sprint = Sprint(
+        id="sprint_001",
+        name="Sprint 1",
+        project_id="proj_001",
+        tasks=[task]
+    )
+    print(f"✅ Sprint créé: {sprint.name}")
+    print(f"   Tâches: {len(sprint.tasks)}")
+    
+    print("\n✅ Tous les modèles fonctionnent correctement.")
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\db\database.py ===
 
-# src/db/database.py
-from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Base de Données
+# ==============================================================================
+# Fichier: src/db/database.py
+# Description: Gestionnaire de base de données PostgreSQL asynchrone avec SQLAlchemy.
+#              Fournit les connexions, sessions et utilitaires.
+# ==============================================================================
+
+from typing import AsyncGenerator, Optional, Dict, Any
+from contextlib import asynccontextmanager
+from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    AsyncSession,
+    async_sessionmaker,
+    AsyncEngine
+)
 from sqlalchemy.orm import declarative_base
+from sqlalchemy import event, inspect
 from src.config.settings import settings
+from src.core.exceptions import DatabaseConnectionError, StorageError
+import logging
+import time
 
-# Moteur de base de données
-engine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    pool_pre_ping=True,
-)
+# ==============================================================================
+# LOGGING
+# ==============================================================================
 
-# Fabrique de sessions
-AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+logger = logging.getLogger(__name__)
 
-# Base pour les modèles ORM
+
+# ==============================================================================
+# BASE DE MODÈLES
+# ==============================================================================
+
 Base = declarative_base()
 
+
+# ==============================================================================
+# MOTEUR DE BASE DE DONNÉES
+# ==============================================================================
+
+def create_engine() -> AsyncEngine:
+    """
+    Crée le moteur de base de données asynchrone.
+    
+    Returns:
+        AsyncEngine: Moteur SQLAlchemy configuré
+    
+    Raises:
+        DatabaseConnectionError: Si la connexion échoue
+    """
+    try:
+        engine = create_async_engine(
+            settings.database_url,
+            echo=settings.database_echo,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            pool_timeout=30,
+        )
+        logger.info(f"✅ Moteur de base de données créé: {settings.database_url}")
+        return engine
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la création du moteur de base de données: {e}")
+        raise DatabaseConnectionError(
+            url=settings.database_url,
+            message=f"Failed to create database engine: {e}"
+        )
+
+
+# ==============================================================================
+# FABRIQUE DE SESSIONS
+# ==============================================================================
+
+def create_session_factory(engine: AsyncEngine) -> async_sessionmaker:
+    """
+    Crée la fabrique de sessions asynchrones.
+    
+    Args:
+        engine: Moteur de base de données
+        
+    Returns:
+        async_sessionmaker: Fabrique de sessions
+    """
+    return async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+
+
+# ==============================================================================
+# INSTANCES GLOBALES
+# ==============================================================================
+
+# Création du moteur
+engine = create_engine()
+
+# Création de la fabrique de sessions
+AsyncSessionLocal = create_session_factory(engine)
+
+
+# ==============================================================================
+# FONCTIONS DE SESSION
+# ==============================================================================
+
 async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
-    """Fournit une session de base de données asynchrone."""
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
+    """
+    Fournit une session de base de données asynchrone pour les endpoints FastAPI.
+    
+    Yields:
+        AsyncSession: Session de base de données
+    
+    Raises:
+        StorageError: Si la session ne peut pas être créée
+    """
+    session = None
+    try:
+        session = AsyncSessionLocal()
+        logger.debug("📊 Session de base de données créée")
+        yield session
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la création de la session: {e}")
+        if session:
+            await session.rollback()
+        raise StorageError(
+            message=f"Failed to create database session: {e}",
+            operation="get_session"
+        )
+    finally:
+        if session:
             await session.close()
+            logger.debug("📊 Session de base de données fermée")
+
+
+@asynccontextmanager
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Context manager pour une session de base de données asynchrone.
+    Utile pour les opérations hors API.
+    
+    Yields:
+        AsyncSession: Session de base de données
+    """
+    session = None
+    try:
+        session = AsyncSessionLocal()
+        logger.debug("📊 Session de base de données créée (context manager)")
+        yield session
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la session context manager: {e}")
+        if session:
+            await session.rollback()
+        raise StorageError(
+            message=f"Database session error: {e}",
+            operation="context_session"
+        )
+    finally:
+        if session:
+            await session.close()
+            logger.debug("📊 Session de base de données fermée (context manager)")
+
+
+async def get_session() -> AsyncSession:
+    """
+    Obtient une session de base de données asynchrone.
+    À utiliser avec précaution, préférer get_async_db() pour les endpoints.
+    
+    Returns:
+        AsyncSession: Session de base de données
+    """
+    try:
+        return AsyncSessionLocal()
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de l'obtention de la session: {e}")
+        raise StorageError(
+            message=f"Failed to get database session: {e}",
+            operation="get_session_direct"
+        )
+
+
+# ==============================================================================
+# FONCTIONS DE CONNEXION
+# ==============================================================================
 
 async def close_db_connection() -> None:
-    """Ferme la connexion à la base de données."""
-    await engine.dispose()
+    """
+    Ferme la connexion à la base de données.
+    À appeler lors de l'arrêt de l'application.
+    """
+    try:
+        await engine.dispose()
+        logger.info("✅ Connexion à la base de données fermée")
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la fermeture de la connexion: {e}")
+        raise StorageError(
+            message=f"Failed to close database connection: {e}",
+            operation="close_connection"
+        )
+
+
+async def check_db_connection() -> bool:
+    """
+    Vérifie si la connexion à la base de données est fonctionnelle.
+    
+    Returns:
+        bool: True si la connexion est fonctionnelle, False sinon
+    """
+    try:
+        async with get_async_session() as session:
+            # Exécute une requête simple pour vérifier la connexion
+            result = await session.execute("SELECT 1")
+            await session.commit()
+            logger.debug("✅ Vérification de la connexion à la base de données réussie")
+            return True
+    except Exception as e:
+        logger.error(f"❌ Échec de la vérification de la connexion: {e}")
+        return False
+
+
+async def get_db_version() -> Optional[str]:
+    """
+    Obtient la version de PostgreSQL.
+    
+    Returns:
+        Optional[str]: Version de PostgreSQL ou None en cas d'erreur
+    """
+    try:
+        async with get_async_session() as session:
+            result = await session.execute("SELECT version()")
+            version = result.scalar()
+            logger.debug(f"📊 Version PostgreSQL: {version}")
+            return version
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la récupération de la version: {e}")
+        return None
+
+
+# ==============================================================================
+# FONCTIONS DE TRANSACTION
+# ==============================================================================
+
+async def execute_in_transaction(func, *args, **kwargs) -> Any:
+    """
+    Exécute une fonction dans une transaction de base de données.
+    
+    Args:
+        func: Fonction asynchrone à exécuter
+        *args: Arguments de la fonction
+        **kwargs: Arguments nommés de la fonction
+        
+    Returns:
+        Any: Résultat de la fonction
+    """
+    async with get_async_session() as session:
+        try:
+            result = await func(session, *args, **kwargs)
+            await session.commit()
+            logger.debug("✅ Transaction validée avec succès")
+            return result
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"❌ Erreur dans la transaction, rollback effectué: {e}")
+            raise StorageError(
+                message=f"Transaction failed: {e}",
+                operation="transaction"
+            )
+
+
+async def execute_raw_sql(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """
+    Exécute du SQL brut et retourne les résultats.
+    
+    Args:
+        sql: Requête SQL
+        params: Paramètres de la requête
+        
+    Returns:
+        List[Dict[str, Any]]: Résultats sous forme de dictionnaires
+    """
+    async with get_async_session() as session:
+        try:
+            result = await session.execute(sql, params or {})
+            # Convertir les résultats en dictionnaires
+            rows = result.fetchall()
+            if rows:
+                columns = result.keys()
+                return [dict(zip(columns, row)) for row in rows]
+            return []
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'exécution du SQL brut: {e}")
+            raise StorageError(
+                message=f"Raw SQL execution failed: {e}",
+                operation="raw_sql"
+            )
+
+
+# ==============================================================================
+# ÉVÉNEMENTS DE BASE DE DONNÉES
+# ==============================================================================
+
+@event.listens_for(engine.sync_engine, "before_execute")
+def before_execute(conn, clause, multiparams, params):
+    """
+    Écouteur d'événement avant l'exécution d'une requête.
+    Utile pour le logging.
+    """
+    if settings.database_echo:
+        logger.debug(f"🔍 Requête SQL: {clause}")
+        if params:
+            logger.debug(f"📋 Paramètres: {params}")
+
+
+@event.listens_for(engine.sync_engine, "after_execute")
+def after_execute(conn, clause, multiparams, params, result):
+    """
+    Écouteur d'événement après l'exécution d'une requête.
+    Utile pour les statistiques.
+    """
+    if settings.database_echo and result:
+        logger.debug(f"📊 Résultats: {result.rowcount} ligne(s) retournée(s)")
+
+
+# ==============================================================================
+# FONCTIONS D'INITIALISATION
+# ==============================================================================
+
+async def init_database(create_tables: bool = True) -> None:
+    """
+    Initialise la base de données.
+    
+    Args:
+        create_tables: Si True, crée les tables automatiquement
+    """
+    try:
+        # Vérifier la connexion
+        if not await check_db_connection():
+            raise DatabaseConnectionError(
+                url=settings.database_url,
+                message="Could not connect to database"
+            )
+        
+        logger.info("✅ Connexion à la base de données établie")
+        
+        # Créer les tables si demandé
+        if create_tables:
+            from src.db.migrations import init_models
+            await init_models()
+            logger.info("✅ Tables créées avec succès")
+        
+        # Récupérer la version
+        version = await get_db_version()
+        if version:
+            logger.info(f"📊 PostgreSQL version: {version}")
+            
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de l'initialisation de la base de données: {e}")
+        raise
+
+
+# ==============================================================================
+# TEST UNITAIRE (si exécuté directement)
+# ==============================================================================
+
+if __name__ == "__main__":
+    import asyncio
+    
+    async def test_database():
+        print("=" * 60)
+        print("Smart Contract Dev Pipeline 2.0 - Test Base de Données")
+        print("=" * 60)
+        
+        # Test de connexion
+        print("\n🔍 Test de connexion...")
+        is_connected = await check_db_connection()
+        if is_connected:
+            print("✅ Connexion réussie")
+        else:
+            print("❌ Échec de la connexion")
+            return
+        
+        # Test de version
+        print("\n📊 Test de version...")
+        version = await get_db_version()
+        if version:
+            print(f"✅ PostgreSQL version: {version}")
+        
+        # Test de session
+        print("\n📋 Test de session...")
+        try:
+            async with get_async_session() as session:
+                # Exécuter une requête simple
+                result = await session.execute("SELECT current_database()")
+                db_name = result.scalar()
+                print(f"✅ Base de données: {db_name}")
+                
+                result = await session.execute("SELECT current_user")
+                user = result.scalar()
+                print(f"✅ Utilisateur: {user}")
+        except Exception as e:
+            print(f"❌ Erreur: {e}")
+        
+        print("\n✅ Tests terminés.")
+    
+    # Exécuter les tests
+    asyncio.run(test_database())
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\db\migrations.py ===
 
-# src/db/migrations.py
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Migrations
+# ==============================================================================
+# Fichier: src/db/migrations.py
+# Description: Gestion des migrations de la base de données.
+#              Initialisation, mise à jour et suppression du schéma.
+# ==============================================================================
+
 from src.db.database import engine, Base
-import src.models.project
-import src.models.task
-import src.models.execution_log
-import src.models.skill_record
+from src.core.exceptions import StorageError
+from src.config.settings import settings
+from sqlalchemy import inspect, text
+import logging
+from typing import List, Optional, Dict, Any
+
+# ==============================================================================
+# LOGGING
+# ==============================================================================
+
+logger = logging.getLogger(__name__)
+
+
+# ==============================================================================
+# MIGRATIONS PRINCIPALES
+# ==============================================================================
 
 async def init_models() -> None:
-    """Crée les tables en base de données."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """
+    Crée toutes les tables en base de données.
+    À utiliser pour l'installation initiale.
+    
+    Raises:
+        StorageError: Si la création des tables échoue
+    """
+    try:
+        logger.info("📊 Création des tables de la base de données...")
+        async with engine.begin() as conn:
+            # Créer toutes les tables
+            await conn.run_sync(Base.metadata.create_all)
+        
+        # Vérifier que les tables ont été créées
+        async with engine.begin() as conn:
+            def sync_inspect(connection):
+                inspector = inspect(connection)
+                tables = inspector.get_table_names()
+                logger.info(f"✅ Tables créées: {tables}")
+                return tables
+        
+        tables = await conn.run_sync(sync_inspect)
+        logger.info(f"✅ {len(tables)} tables créées avec succès")
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la création des tables: {e}")
+        raise StorageError(
+            message=f"Failed to create database tables: {e}",
+            operation="init_models"
+        )
+
 
 async def drop_models() -> None:
-    """Supprime les tables (réinitialisation)."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    """
+    Supprime toutes les tables (réinitialisation complète).
+    À utiliser avec précaution (perte de données).
+    
+    Raises:
+        StorageError: Si la suppression des tables échoue
+    """
+    try:
+        logger.warning("⚠️ Suppression de toutes les tables de la base de données...")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        
+        logger.info("✅ Tables supprimées avec succès")
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la suppression des tables: {e}")
+        raise StorageError(
+            message=f"Failed to drop database tables: {e}",
+            operation="drop_models"
+        )
+
+
+async def reset_models() -> None:
+    """
+    Réinitialise complètement la base de données (drop + create).
+    Utile pour les tests ou les réinitialisations.
+    """
+    logger.warning("⚠️ Réinitialisation complète de la base de données...")
+    await drop_models()
+    await init_models()
+    logger.info("✅ Base de données réinitialisée avec succès")
+
+
+# ==============================================================================
+# VÉRIFICATIONS DE SCHÉMA
+# ==============================================================================
+
+async def get_existing_tables() -> List[str]:
+    """
+    Récupère la liste des tables existantes.
+    
+    Returns:
+        List[str]: Noms des tables existantes
+    """
+    try:
+        async with engine.begin() as conn:
+            def sync_inspect(connection):
+                inspector = inspect(connection)
+                return inspector.get_table_names()
+            
+            tables = await conn.run_sync(sync_inspect)
+            return tables
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la récupération des tables: {e}")
+        return []
+
+
+async def table_exists(table_name: str) -> bool:
+    """
+    Vérifie si une table existe.
+    
+    Args:
+        table_name: Nom de la table
+        
+    Returns:
+        bool: True si la table existe
+    """
+    tables = await get_existing_tables()
+    return table_name in tables
+
+
+async def get_table_info(table_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Récupère les informations d'une table (colonnes, clés, etc.).
+    
+    Args:
+        table_name: Nom de la table
+        
+    Returns:
+        Optional[Dict[str, Any]]: Informations de la table
+    """
+    try:
+        async with engine.begin() as conn:
+            def sync_inspect(connection):
+                inspector = inspect(connection)
+                columns = inspector.get_columns(table_name)
+                foreign_keys = inspector.get_foreign_keys(table_name)
+                indexes = inspector.get_indexes(table_name)
+                primary_key = inspector.get_pk_constraint(table_name)
+                
+                return {
+                    "columns": columns,
+                    "foreign_keys": foreign_keys,
+                    "indexes": indexes,
+                    "primary_key": primary_key
+                }
+            
+            return await conn.run_sync(sync_inspect)
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la récupération des infos de la table {table_name}: {e}")
+        return None
+
+
+# ==============================================================================
+# UTILITAIRES DE MIGRATION
+# ==============================================================================
+
+async def execute_migration(sql: str, params: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Exécute une requête SQL de migration.
+    
+    Args:
+        sql: Requête SQL
+        params: Paramètres de la requête
+    """
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(sql), params or {})
+        logger.info(f"✅ Migration exécutée: {sql[:100]}...")
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de l'exécution de la migration: {e}")
+        raise StorageError(
+            message=f"Migration execution failed: {e}",
+            operation="execute_migration"
+        )
+
+
+async def add_column(table_name: str, column_name: str, column_type: str) -> None:
+    """
+    Ajoute une colonne à une table.
+    
+    Args:
+        table_name: Nom de la table
+        column_name: Nom de la colonne
+        column_type: Type SQL de la colonne
+    """
+    sql = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+    await execute_migration(sql)
+
+
+async def drop_column(table_name: str, column_name: str) -> None:
+    """
+    Supprime une colonne d'une table.
+    
+    Args:
+        table_name: Nom de la table
+        column_name: Nom de la colonne
+    """
+    sql = f"ALTER TABLE {table_name} DROP COLUMN {column_name}"
+    await execute_migration(sql)
+
+
+# ==============================================================================
+# MIGRATIONS SPÉCIFIQUES
+# ==============================================================================
+
+async def migration_v1_to_v2() -> None:
+    """
+    Migration de la version 1 à la version 2 du schéma.
+    Ajoute les colonnes 'updated_at' et 'metadata' aux tables principales.
+    """
+    logger.info("📊 Migration v1 -> v2...")
+    
+    # Ajouter la colonne updated_at à la table projects
+    if not await table_exists("projects"):
+        logger.warning("⚠️ Table 'projects' non trouvée, migration ignorée")
+        return
+    
+    try:
+        await add_column("projects", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        await add_column("sprints", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        await add_column("projects", "metadata", "JSONB DEFAULT '{}'::jsonb")
+        
+        logger.info("✅ Migration v1 -> v2 terminée")
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la migration v1 -> v2: {e}")
+        raise
+
+
+async def migration_v2_to_v3() -> None:
+    """
+    Migration de la version 2 à la version 3 du schéma.
+    Ajoute la table 'artifacts' si elle n'existe pas.
+    """
+    logger.info("📊 Migration v2 -> v3...")
+    
+    if not await table_exists("artifacts"):
+        try:
+            # Créer la table artifacts
+            await execute_migration("""
+                CREATE TABLE IF NOT EXISTS artifacts (
+                    id VARCHAR PRIMARY KEY,
+                    type VARCHAR NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    vector TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSONB DEFAULT '[]'::jsonb,
+                    source_task_id VARCHAR
+                )
+            """)
+            logger.info("✅ Table 'artifacts' créée")
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la création de la table 'artifacts': {e}")
+            raise
+    else:
+        logger.info("✅ Table 'artifacts' déjà existante")
+    
+    logger.info("✅ Migration v2 -> v3 terminée")
+
+
+# ==============================================================================
+# EXÉCUTION DES MIGRATIONS
+# ==============================================================================
+
+async def run_migrations(version: Optional[str] = None) -> None:
+    """
+    Exécute toutes les migrations nécessaires.
+    
+    Args:
+        version: Version cible (si None, exécute toutes les migrations)
+    """
+    logger.info(f"📊 Exécution des migrations (version cible: {version or 'latest'})...")
+    
+    # Vérifier l'état actuel
+    existing_tables = await get_existing_tables()
+    
+    if not existing_tables:
+        logger.info("📊 Aucune table existante, initialisation...")
+        await init_models()
+        return
+    
+    # Exécuter les migrations séquentielles
+    # v1 -> v2
+    if "projects" in existing_tables:
+        # Vérifier si la colonne updated_at existe
+        table_info = await get_table_info("projects")
+        if table_info:
+            columns = [col["name"] for col in table_info["columns"]]
+            if "updated_at" not in columns:
+                await migration_v1_to_v2()
+    
+    # v2 -> v3
+    if "artifacts" not in existing_tables:
+        await migration_v2_to_v3()
+    
+    logger.info("✅ Migrations terminées")
+
+
+# ==============================================================================
+# TEST UNITAIRE (si exécuté directement)
+# ==============================================================================
+
+if __name__ == "__main__":
+    import asyncio
+    
+    async def test_migrations():
+        print("=" * 60)
+        print("Smart Contract Dev Pipeline 2.0 - Test Migrations")
+        print("=" * 60)
+        
+        # Vérifier les tables existantes
+        print("\n📊 Vérification des tables existantes...")
+        tables = await get_existing_tables()
+        print(f"✅ Tables trouvées: {tables if tables else 'Aucune'}")
+        
+        # Vérifier les informations de la table
+        if "projects" in tables:
+            print("\n📋 Informations de la table 'projects'...")
+            info = await get_table_info("projects")
+            if info:
+                print(f"✅ Colonnes: {[col['name'] for col in info['columns']]}")
+                print(f"✅ Clés primaires: {info['primary_key']['constrained_columns']}")
+        
+        # Exécuter les migrations
+        print("\n📊 Exécution des migrations...")
+        await run_migrations()
+        print("✅ Migrations terminées")
+        
+        print("\n✅ Tests terminés.")
+    
+    # Exécuter les tests
+    asyncio.run(test_migrations())
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\git\git_sync_manager.py ===
@@ -31435,41 +33275,487 @@ class ExecutionLogModel(Base):
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\models\project.py ===
 
-# src/models/project.py
-from sqlalchemy import Column, String, DateTime, Enum, Text
-from sqlalchemy.orm import relationship
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Modèle Projet
+# ==============================================================================
+# Fichier: src/models/project.py
+# Description: Modèle SQLAlchemy pour la table projects.
+#              Représente un projet de smart contract avec son état et sa configuration.
+# ==============================================================================
+
+from sqlalchemy import Column, String, DateTime, Enum, Text, JSON, Integer
+from sqlalchemy.orm import relationship, validates
 from src.db.database import Base
 import datetime
 import enum
+import uuid
+import json
+from typing import Optional, Dict, Any, List
+
+
+# ==============================================================================
+# ENUMS
+# ==============================================================================
 
 class ProjectStatus(str, enum.Enum):
+    """Statuts possibles d'un projet."""
     CREATED = "CREATED"
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    PAUSED = "PAUSED"
+    ARCHIVED = "ARCHIVED"
+
+
+class ProjectChain(str, enum.Enum):
+    """Chaînes blockchain supportées."""
+    ETHEREUM = "ethereum"
+    POLYGON = "polygon"
+    ARBITRUM = "arbitrum"
+    OPTIMISM = "optimism"
+    BASE = "base"
+    SOLANA = "solana"
+    BSC = "bsc"
+    AVALANCHE = "avalanche"
+
+
+# ==============================================================================
+# MODÈLE PROJECT
+# ==============================================================================
 
 class ProjectModel(Base):
+    """
+    Modèle ORM pour la table projects.
+    Représente un projet de smart contract.
+    """
     __tablename__ = "projects"
     
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    status = Column(Enum(ProjectStatus), default=ProjectStatus.CREATED)
-    spec_yaml = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    # ==========================================================================
+    # COLONNES
+    # ==========================================================================
     
-    # Relation avec les tâches
-    tasks = relationship("TaskModel", back_populates="project", cascade="all, delete-orphan")
+    id = Column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        doc="Identifiant unique du projet (UUID)"
+    )
     
-    def to_dict(self) -> dict:
+    name = Column(
+        String(100),
+        nullable=False,
+        doc="Nom du projet"
+    )
+    
+    description = Column(
+        Text,
+        default="",
+        doc="Description détaillée du projet"
+    )
+    
+    status = Column(
+        Enum(ProjectStatus),
+        default=ProjectStatus.CREATED,
+        doc="Statut actuel du projet"
+    )
+    
+    chain = Column(
+        Enum(ProjectChain),
+        default=ProjectChain.ETHEREUM,
+        doc="Blockchain cible"
+    )
+    
+    # Configuration complète du projet (stockée en JSON)
+    config = Column(
+        JSON,
+        default={},
+        doc="Configuration complète du projet (ProjectConfig)"
+    )
+    
+    # Spécification YAML du projet
+    spec_yaml = Column(
+        Text,
+        nullable=False,
+        doc="Spécification YAML du projet"
+    )
+    
+    # Version du projet
+    version = Column(
+        String(20),
+        default="1.0.0",
+        doc="Version du projet (semver)"
+    )
+    
+    # Métadonnées additionnelles
+    metadata = Column(
+        JSON,
+        default={},
+        doc="Métadonnées additionnelles (tags, labels, etc.)"
+    )
+    
+    # Compteurs
+    task_count = Column(
+        Integer,
+        default=0,
+        doc="Nombre total de tâches"
+    )
+    
+    completed_task_count = Column(
+        Integer,
+        default=0,
+        doc="Nombre de tâches terminées"
+    )
+    
+    # Dates
+    created_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        doc="Date de création"
+    )
+    
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        doc="Date de dernière mise à jour"
+    )
+    
+    started_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Date de début du projet"
+    )
+    
+    completed_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Date de fin du projet"
+    )
+    
+    # ==========================================================================
+    # RELATIONS
+    # ==========================================================================
+    
+    tasks = relationship(
+        "TaskModel",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="select",
+        doc="Tâches du projet"
+    )
+    
+    artifacts = relationship(
+        "Artifact",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="select",
+        doc="Artefacts du projet"
+    )
+    
+    # ==========================================================================
+    # VALIDATEURS
+    # ==========================================================================
+    
+    @validates('name')
+    def validate_name(self, key: str, value: str) -> str:
+        """Valide le nom du projet."""
+        if not value or len(value.strip()) < 1:
+            raise ValueError("Project name cannot be empty")
+        if len(value) > 100:
+            raise ValueError("Project name cannot exceed 100 characters")
+        return value.strip()
+    
+    @validates('version')
+    def validate_version(self, key: str, value: str) -> str:
+        """Valide le format de la version (semver)."""
+        import re
+        if not re.match(r'^\d+\.\d+\.\d+$', value):
+            raise ValueError(f"Invalid version format: '{value}'. Use semver (X.Y.Z)")
+        return value
+    
+    @validates('spec_yaml')
+    def validate_spec_yaml(self, key: str, value: str) -> str:
+        """Valide que la spécification YAML n'est pas vide."""
+        if not value or len(value.strip()) < 1:
+            raise ValueError("Project specification cannot be empty")
+        return value
+    
+    # ==========================================================================
+    # MÉTHODES PUBLIQUES
+    # ==========================================================================
+    
+    def to_dict(self, include_config: bool = False) -> Dict[str, Any]:
+        """
+        Convertit le modèle en dictionnaire.
+        
+        Args:
+            include_config: Si True, inclut la configuration complète
+            
+        Returns:
+            Dict[str, Any]: Dictionnaire du projet
+        """
+        result = {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "status": self.status.value if self.status else None,
+            "chain": self.chain.value if self.chain else None,
+            "version": self.version,
+            "task_count": self.task_count,
+            "completed_task_count": self.completed_task_count,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+        }
+        
+        if include_config:
+            result["config"] = self.config
+            result["metadata"] = self.metadata
+        
+        return result
+    
+    def to_summary(self) -> Dict[str, Any]:
+        """
+        Retourne un résumé du projet.
+        
+        Returns:
+            Dict[str, Any]: Résumé du projet
+        """
         return {
             "id": self.id,
             "name": self.name,
-            "status": self.status.value,
-            "created_at": self.created_at.isoformat()
+            "status": self.status.value if self.status else None,
+            "chain": self.chain.value if self.chain else None,
+            "task_count": self.task_count,
+            "completed_task_count": self.completed_task_count,
+            "completion_rate": self.get_completion_rate(),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
     
     def update_status(self, new_status: ProjectStatus) -> None:
+        """
+        Met à jour le statut du projet.
+        
+        Args:
+            new_status: Nouveau statut
+        """
+        old_status = self.status
         self.status = new_status
+        self.updated_at = datetime.datetime.utcnow()
+        
+        # Mise à jour des dates spécifiques
+        if new_status == ProjectStatus.IN_PROGRESS and not self.started_at:
+            self.started_at = datetime.datetime.utcnow()
+        elif new_status == ProjectStatus.COMPLETED:
+            self.completed_at = datetime.datetime.utcnow()
+    
+    def increment_task_count(self) -> None:
+        """Incrémente le compteur de tâches."""
+        self.task_count += 1
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def increment_completed_tasks(self) -> None:
+        """Incrémente le compteur de tâches terminées."""
+        self.completed_task_count += 1
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def get_completion_rate(self) -> float:
+        """
+        Calcule le taux de complétion du projet.
+        
+        Returns:
+            float: Taux de complétion en pourcentage (0-100)
+        """
+        if self.task_count == 0:
+            return 0.0
+        return round((self.completed_task_count / self.task_count) * 100, 2)
+    
+    def is_active(self) -> bool:
+        """Vérifie si le projet est actif."""
+        return self.status in [ProjectStatus.CREATED, ProjectStatus.IN_PROGRESS]
+    
+    def is_completed(self) -> bool:
+        """Vérifie si le projet est terminé."""
+        return self.status == ProjectStatus.COMPLETED
+    
+    def get_config_value(self, key: str, default: Any = None) -> Any:
+        """
+        Récupère une valeur de la configuration.
+        
+        Args:
+            key: Clé de la configuration (peut être dotée, ex: "deployment.safe_address")
+            default: Valeur par défaut
+            
+        Returns:
+            Any: Valeur de la configuration
+        """
+        if not self.config:
+            return default
+        
+        keys = key.split(".")
+        value = self.config
+        for k in keys:
+            if isinstance(value, dict) and k in value:
+                value = value[k]
+            else:
+                return default
+        return value
+    
+    def set_config_value(self, key: str, value: Any) -> None:
+        """
+        Définit une valeur dans la configuration.
+        
+        Args:
+            key: Clé de la configuration (peut être dotée)
+            value: Valeur à définir
+        """
+        if not self.config:
+            self.config = {}
+        
+        keys = key.split(".")
+        target = self.config
+        for k in keys[:-1]:
+            if k not in target or not isinstance(target[k], dict):
+                target[k] = {}
+            target = target[k]
+        target[keys[-1]] = value
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def add_metadata(self, key: str, value: Any) -> None:
+        """
+        Ajoute une métadonnée.
+        
+        Args:
+            key: Clé de la métadonnée
+            value: Valeur de la métadonnée
+        """
+        if not self.metadata:
+            self.metadata = {}
+        self.metadata[key] = value
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def get_metadata(self, key: str, default: Any = None) -> Any:
+        """
+        Récupère une métadonnée.
+        
+        Args:
+            key: Clé de la métadonnée
+            default: Valeur par défaut
+            
+        Returns:
+            Any: Valeur de la métadonnée
+        """
+        if not self.metadata:
+            return default
+        return self.metadata.get(key, default)
+    
+    # ==========================================================================
+    # MÉTHODES STATIQUES
+    # ==========================================================================
+    
+    @staticmethod
+    def create_from_config(name: str, spec_yaml: str, config: Optional[Dict[str, Any]] = None) -> "ProjectModel":
+        """
+        Crée un projet à partir d'une configuration.
+        
+        Args:
+            name: Nom du projet
+            spec_yaml: Spécification YAML
+            config: Configuration optionnelle
+            
+        Returns:
+            ProjectModel: Instance du projet
+        """
+        import yaml
+        
+        # Parser le YAML pour extraire les informations
+        try:
+            spec_data = yaml.safe_load(spec_yaml)
+        except:
+            spec_data = {}
+        
+        project = ProjectModel(
+            id=str(uuid.uuid4()),
+            name=name,
+            spec_yaml=spec_yaml,
+            config=config or {},
+            chain=ProjectChain(spec_data.get("chain", "ethereum")),
+            version=spec_data.get("version", "1.0.0"),
+            description=spec_data.get("description", ""),
+        )
+        
+        # Extraire les métadonnées du YAML
+        if "metadata" in spec_data:
+            project.metadata = spec_data["metadata"]
+        
+        return project
+    
+    # ==========================================================================
+    # REPRÉSENTATION
+    # ==========================================================================
+    
+    def __repr__(self) -> str:
+        return f"<ProjectModel(id={self.id}, name={self.name}, status={self.status})>"
+    
+    def __str__(self) -> str:
+        return f"Project: {self.name} ({self.id}) - Status: {self.status.value if self.status else 'N/A'}"
+
+
+# ==============================================================================
+# TEST UNITAIRE (si exécuté directement)
+# ==============================================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Smart Contract Dev Pipeline 2.0 - Modèle Projet")
+    print("=" * 60)
+    
+    # Création d'un projet
+    project = ProjectModel(
+        id=str(uuid.uuid4()),
+        name="Mon Super Projet",
+        description="Un projet de smart contract DeFi",
+        spec_yaml="""project:
+  name: Mon Super Projet
+  chain: ethereum
+  version: 1.0.0
+""",
+        config={"deployment": {"safe_address": "0x123..."}},
+        metadata={"team": "Dev Squad", "priority": "high"}
+    )
+    
+    print(f"\n📋 Projet créé:")
+    print(f"  ID: {project.id}")
+    print(f"  Nom: {project.name}")
+    print(f"  Description: {project.description}")
+    print(f"  Status: {project.status.value if project.status else 'N/A'}")
+    print(f"  Chain: {project.chain.value if project.chain else 'N/A'}")
+    print(f"  Version: {project.version}")
+    
+    # Test des méthodes
+    print(f"\n📊 Taux de complétion: {project.get_completion_rate()}%")
+    
+    # Test update status
+    project.update_status(ProjectStatus.IN_PROGRESS)
+    print(f"\n🔄 Statut après démarrage: {project.status.value}")
+    
+    # Test incrémentation
+    project.increment_task_count()
+    project.increment_completed_tasks()
+    print(f"📊 Tâches: {project.task_count} (terminées: {project.completed_task_count})")
+    print(f"📊 Taux de complétion: {project.get_completion_rate()}%")
+    
+    # Test to_dict
+    print(f"\n📋 Dictionnaire:")
+    project_dict = project.to_dict(include_config=True)
+    for key, value in project_dict.items():
+        if key in ["config", "metadata"]:
+            print(f"  {key}: {value}")
+        else:
+            print(f"  {key}: {value}")
+    
+    print("\n✅ Tests terminés.")
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\models\skill_record.py ===
@@ -31498,41 +33784,668 @@ class SkillRecordModel(Base):
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\models\task.py ===
 
-# src/models/task.py
-from sqlalchemy import Column, String, ForeignKey, Integer, JSON, Enum
-from sqlalchemy.orm import relationship
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Modèle Tâche
+# ==============================================================================
+# Fichier: src/models/task.py
+# Description: Modèle SQLAlchemy pour la table tasks.
+#              Représente une tâche unitaire dans le pipeline.
+# ==============================================================================
+
+from sqlalchemy import Column, String, ForeignKey, Integer, JSON, Enum, DateTime, Text, Float
+from sqlalchemy.orm import relationship, validates
 from src.db.database import Base
-from src.models.project import ProjectStatus
+import datetime
 import enum
+import uuid
+from typing import List, Dict, Any, Optional, Set
+
+
+# ==============================================================================
+# ENUMS
+# ==============================================================================
 
 class TaskState(str, enum.Enum):
+    """États possibles d'une tâche."""
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     AUTO_TESTING = "AUTO_TESTING"
     WAITING_HUMAN_VALIDATION = "WAITING_HUMAN_VALIDATION"
     SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
     CIRCUIT_BROKEN = "CIRCUIT_BROKEN"
+    CANCELLED = "CANCELLED"
+
+
+class TaskPriority(str, enum.Enum):
+    """Priorités d'une tâche."""
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+# ==============================================================================
+# MODÈLE TASK
+# ==============================================================================
 
 class TaskModel(Base):
+    """
+    Modèle ORM pour la table tasks.
+    Représente une tâche unitaire dans le pipeline.
+    """
     __tablename__ = "tasks"
     
-    id = Column(String, primary_key=True)
-    project_id = Column(String, ForeignKey("projects.id"))
-    state = Column(Enum(TaskState), default=TaskState.PENDING)
-    dependencies = Column(JSON, default=[])
-    retry_count = Column(Integer, default=0)
+    # ==========================================================================
+    # COLONNES
+    # ==========================================================================
     
-    # Relation avec le projet
-    project = relationship("ProjectModel", back_populates="tasks")
+    id = Column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        doc="Identifiant unique de la tâche (UUID)"
+    )
     
-    def is_executable(self, completed_task_ids: set) -> bool:
-        """Vérifie si toutes les dépendances sont satisfaites."""
+    project_id = Column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        doc="ID du projet parent"
+    )
+    
+    name = Column(
+        String(100),
+        nullable=False,
+        doc="Nom de la tâche"
+    )
+    
+    description = Column(
+        Text,
+        default="",
+        doc="Description de la tâche"
+    )
+    
+    state = Column(
+        Enum(TaskState),
+        default=TaskState.PENDING,
+        doc="État actuel de la tâche"
+    )
+    
+    priority = Column(
+        Enum(TaskPriority),
+        default=TaskPriority.NORMAL,
+        doc="Priorité de la tâche"
+    )
+    
+    # Compétence à exécuter
+    skill_id = Column(
+        String(100),
+        nullable=False,
+        doc="ID de la compétence à exécuter"
+    )
+    
+    # Paramètres de la tâche
+    parameters = Column(
+        JSON,
+        default={},
+        doc="Paramètres d'exécution"
+    )
+    
+    # Dépendances
+    dependencies = Column(
+        JSON,
+        default=[],
+        doc="IDs des tâches précédentes"
+    )
+    
+    # Résultat
+    result = Column(
+        JSON,
+        nullable=True,
+        doc="Résultat de l'exécution"
+    )
+    
+    error_message = Column(
+        Text,
+        nullable=True,
+        doc="Message d'erreur si échec"
+    )
+    
+    # Logs
+    logs = Column(
+        Text,
+        default="",
+        doc="Logs d'exécution"
+    )
+    
+    # Compteurs
+    retry_count = Column(
+        Integer,
+        default=0,
+        doc="Nombre de tentatives"
+    )
+    
+    max_retries = Column(
+        Integer,
+        default=3,
+        doc="Nombre maximum de tentatives"
+    )
+    
+    # Timeouts
+    timeout_seconds = Column(
+        Integer,
+        default=600,
+        doc="Timeout en secondes"
+    )
+    
+    # Validation humaine
+    requires_human_validation = Column(
+        Integer,
+        default=1,  # 1 = true, 0 = false
+        doc="Nécessite une validation humaine"
+    )
+    
+    human_validated = Column(
+        Integer,
+        default=0,
+        doc="Validé par un humain"
+    )
+    
+    # Métriques
+    duration_seconds = Column(
+        Float,
+        default=0.0,
+        doc="Durée d'exécution en secondes"
+    )
+    
+    # Dates
+    created_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        doc="Date de création"
+    )
+    
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        doc="Date de dernière mise à jour"
+    )
+    
+    started_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Date de début d'exécution"
+    )
+    
+    completed_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Date de fin d'exécution"
+    )
+    
+    # Métadonnées
+    metadata = Column(
+        JSON,
+        default={},
+        doc="Métadonnées additionnelles"
+    )
+    
+    # ==========================================================================
+    # RELATIONS
+    # ==========================================================================
+    
+    project = relationship(
+        "ProjectModel",
+        back_populates="tasks",
+        doc="Projet parent"
+    )
+    
+    logs_relation = relationship(
+        "ExecutionLogModel",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        lazy="select",
+        doc="Logs d'exécution"
+    )
+    
+    # ==========================================================================
+    # VALIDATEURS
+    # ==========================================================================
+    
+    @validates('name')
+    def validate_name(self, key: str, value: str) -> str:
+        """Valide le nom de la tâche."""
+        if not value or len(value.strip()) < 1:
+            raise ValueError("Task name cannot be empty")
+        if len(value) > 100:
+            raise ValueError("Task name cannot exceed 100 characters")
+        return value.strip()
+    
+    @validates('skill_id')
+    def validate_skill_id(self, key: str, value: str) -> str:
+        """Valide l'ID de la compétence."""
+        if not value or len(value.strip()) < 1:
+            raise ValueError("Skill ID cannot be empty")
+        return value.strip()
+    
+    @validates('dependencies')
+    def validate_dependencies(self, key: str, value: List[str]) -> List[str]:
+        """Valide que les dépendances sont une liste."""
+        if not isinstance(value, list):
+            raise ValueError("Dependencies must be a list")
+        return value
+    
+    @validates('retry_count', 'max_retries')
+    def validate_retry_counts(self, key: str, value: int) -> int:
+        """Valide les compteurs de retry."""
+        if value < 0:
+            raise ValueError(f"{key} cannot be negative")
+        if key == 'max_retries' and value > 10:
+            raise ValueError("Max retries cannot exceed 10")
+        return value
+    
+    @validates('timeout_seconds')
+    def validate_timeout(self, key: str, value: int) -> int:
+        """Valide le timeout."""
+        if value <= 0:
+            raise ValueError("Timeout must be greater than 0")
+        if value > 3600:
+            raise ValueError("Timeout cannot exceed 3600 seconds (1 hour)")
+        return value
+    
+    # ==========================================================================
+    # MÉTHODES PUBLIQUES
+    # ==========================================================================
+    
+    def to_dict(self, include_result: bool = False) -> Dict[str, Any]:
+        """
+        Convertit le modèle en dictionnaire.
+        
+        Args:
+            include_result: Si True, inclut le résultat
+            
+        Returns:
+            Dict[str, Any]: Dictionnaire de la tâche
+        """
+        result = {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "state": self.state.value if self.state else None,
+            "priority": self.priority.value if self.priority else None,
+            "project_id": self.project_id,
+            "skill_id": self.skill_id,
+            "dependencies": self.dependencies,
+            "retry_count": self.retry_count,
+            "max_retries": self.max_retries,
+            "timeout_seconds": self.timeout_seconds,
+            "requires_human_validation": bool(self.requires_human_validation),
+            "human_validated": bool(self.human_validated),
+            "duration_seconds": self.duration_seconds,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+        }
+        
+        if include_result:
+            result["result"] = self.result
+            result["error_message"] = self.error_message
+            result["logs"] = self.logs[:500] + "..." if len(self.logs) > 500 else self.logs
+        
+        return result
+    
+    def to_summary(self) -> Dict[str, Any]:
+        """
+        Retourne un résumé de la tâche.
+        
+        Returns:
+            Dict[str, Any]: Résumé de la tâche
+        """
+        return {
+            "id": self.id,
+            "name": self.name,
+            "state": self.state.value if self.state else None,
+            "priority": self.priority.value if self.priority else None,
+            "skill_id": self.skill_id,
+            "retry_count": self.retry_count,
+            "duration_seconds": self.duration_seconds,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+    
+    def is_executable(self, completed_task_ids: Set[str]) -> bool:
+        """
+        Vérifie si la tâche peut être exécutée.
+        Toutes les dépendances doivent être dans completed_task_ids.
+        
+        Args:
+            completed_task_ids: Ensemble des IDs de tâches terminées
+            
+        Returns:
+            bool: True si exécutable
+        """
         return set(self.dependencies).issubset(completed_task_ids)
+    
+    def can_retry(self) -> bool:
+        """Vérifie si la tâche peut être réessayée."""
+        return self.retry_count < self.max_retries
     
     def increment_retry(self) -> int:
         """Incrémente le compteur de tentatives."""
         self.retry_count += 1
+        self.updated_at = datetime.datetime.utcnow()
         return self.retry_count
+    
+    def get_remaining_retries(self) -> int:
+        """Retourne le nombre de tentatives restantes."""
+        return max(0, self.max_retries - self.retry_count)
+    
+    def is_terminal(self) -> bool:
+        """
+        Vérifie si la tâche est dans un état terminal.
+        
+        Returns:
+            bool: True si terminée
+        """
+        return self.state in [
+            TaskState.SUCCESS,
+            TaskState.FAILED,
+            TaskState.CIRCUIT_BROKEN,
+            TaskState.CANCELLED
+        ]
+    
+    def is_running(self) -> bool:
+        """Vérifie si la tâche est en cours d'exécution."""
+        return self.state in [
+            TaskState.RUNNING,
+            TaskState.AUTO_TESTING,
+            TaskState.WAITING_HUMAN_VALIDATION
+        ]
+    
+    def is_pending(self) -> bool:
+        """Vérifie si la tâche est en attente."""
+        return self.state == TaskState.PENDING
+    
+    def is_success(self) -> bool:
+        """Vérifie si la tâche a réussi."""
+        return self.state == TaskState.SUCCESS
+    
+    def is_failed(self) -> bool:
+        """Vérifie si la tâche a échoué."""
+        return self.state in [TaskState.FAILED, TaskState.CIRCUIT_BROKEN]
+    
+    def mark_started(self) -> None:
+        """Marque la tâche comme démarrée."""
+        self.state = TaskState.RUNNING
+        self.started_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def mark_success(self, result: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Marque la tâche comme réussie.
+        
+        Args:
+            result: Résultat de l'exécution (optionnel)
+        """
+        self.state = TaskState.SUCCESS
+        self.completed_at = datetime.datetime.utcnow()
+        self.duration_seconds = (self.completed_at - self.started_at).total_seconds() if self.started_at else 0.0
+        if result:
+            self.result = result
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def mark_failed(self, error_message: str, result: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Marque la tâche comme échouée.
+        
+        Args:
+            error_message: Message d'erreur
+            result: Résultat partiel (optionnel)
+        """
+        self.state = TaskState.FAILED
+        self.completed_at = datetime.datetime.utcnow()
+        self.duration_seconds = (self.completed_at - self.started_at).total_seconds() if self.started_at else 0.0
+        self.error_message = error_message
+        if result:
+            self.result = result
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def mark_circuit_broken(self, error_message: str) -> None:
+        """
+        Marque la tâche comme circuit broken (trop de tentatives).
+        
+        Args:
+            error_message: Message d'erreur
+        """
+        self.state = TaskState.CIRCUIT_BROKEN
+        self.completed_at = datetime.datetime.utcnow()
+        self.error_message = f"Circuit breaker: {error_message}"
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def mark_waiting_human(self) -> None:
+        """Marque la tâche comme en attente de validation humaine."""
+        self.state = TaskState.WAITING_HUMAN_VALIDATION
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def mark_human_validated(self, approved: bool, comments: Optional[str] = None) -> None:
+        """
+        Marque la tâche comme validée par un humain.
+        
+        Args:
+            approved: True si approuvé
+            comments: Commentaires optionnels
+        """
+        self.human_validated = 1 if approved else 0
+        if comments:
+            self.metadata["human_comments"] = comments
+        self.updated_at = datetime.datetime.utcnow()
+        
+        # Si approuvé et déjà en attente, passer en succès
+        if approved and self.state == TaskState.WAITING_HUMAN_VALIDATION:
+            self.mark_success()
+        elif not approved:
+            self.state = TaskState.FAILED
+            self.completed_at = datetime.datetime.utcnow()
+            self.updated_at = datetime.datetime.utcnow()
+    
+    def add_log(self, log_entry: str) -> None:
+        """
+        Ajoute une entrée de log.
+        
+        Args:
+            log_entry: Entrée de log
+        """
+        timestamp = datetime.datetime.utcnow().isoformat()
+        self.logs += f"[{timestamp}] {log_entry}\n"
+        self.updated_at = datetime.datetime.utcnow()
+    
+    def get_dependency_depth(self) -> int:
+        """
+        Retourne la profondeur des dépendances.
+        Utile pour l'ordonnancement DAG.
+        
+        Returns:
+            int: Profondeur des dépendances
+        """
+        return len(self.dependencies)
+    
+    def get_elapsed_time(self) -> float:
+        """
+        Retourne le temps écoulé depuis le début de la tâche.
+        
+        Returns:
+            float: Temps écoulé en secondes
+        """
+        if self.started_at:
+            now = datetime.datetime.utcnow()
+            return (now - self.started_at).total_seconds()
+        return 0.0
+    
+    def is_timeout(self) -> bool:
+        """
+        Vérifie si la tâche a dépassé son timeout.
+        
+        Returns:
+            bool: True si timeout
+        """
+        if self.started_at and self.state in [TaskState.RUNNING, TaskState.AUTO_TESTING]:
+            elapsed = self.get_elapsed_time()
+            return elapsed > self.timeout_seconds
+        return False
+    
+    def get_dependency_graph(self) -> Dict[str, List[str]]:
+        """
+        Retourne le graphe des dépendances pour cette tâche.
+        Utile pour l'analyse DAG.
+        
+        Returns:
+            Dict[str, List[str]]: Graphe des dépendances
+        """
+        return {
+            self.id: self.dependencies
+        }
+    
+    # ==========================================================================
+    # MÉTHODES STATIQUES
+    # ==========================================================================
+    
+    @staticmethod
+    def create_from_spec(
+        task_spec: Dict[str, Any],
+        project_id: str,
+        skill_id: str,
+        parameters: Optional[Dict[str, Any]] = None
+    ) -> "TaskModel":
+        """
+        Crée une tâche à partir d'une spécification.
+        
+        Args:
+            task_spec: Spécification de la tâche
+            project_id: ID du projet
+            skill_id: ID de la compétence
+            parameters: Paramètres optionnels
+            
+        Returns:
+            TaskModel: Instance de la tâche
+        """
+        return TaskModel(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            name=task_spec.get("name", "Unnamed Task"),
+            description=task_spec.get("description", ""),
+            skill_id=skill_id,
+            parameters=parameters or task_spec.get("parameters", {}),
+            dependencies=task_spec.get("depends_on", []),
+            requires_human_validation=1 if task_spec.get("requires_human_validation", True) else 0,
+            timeout_seconds=task_spec.get("timeout_seconds", 600),
+            max_retries=task_spec.get("retry_count", 3),
+            priority=TaskPriority(task_spec.get("priority", "normal")),
+        )
+    
+    @staticmethod
+    def create_from_dict(data: Dict[str, Any]) -> "TaskModel":
+        """
+        Crée une tâche à partir d'un dictionnaire.
+        
+        Args:
+            data: Dictionnaire des données
+            
+        Returns:
+            TaskModel: Instance de la tâche
+        """
+        return TaskModel(
+            id=data.get("id", str(uuid.uuid4())),
+            project_id=data.get("project_id", ""),
+            name=data.get("name", "Unnamed Task"),
+            description=data.get("description", ""),
+            skill_id=data.get("skill_id", ""),
+            parameters=data.get("parameters", {}),
+            dependencies=data.get("dependencies", []),
+            requires_human_validation=1 if data.get("requires_human_validation", True) else 0,
+            timeout_seconds=data.get("timeout_seconds", 600),
+            max_retries=data.get("max_retries", 3),
+            priority=TaskPriority(data.get("priority", "normal")),
+            metadata=data.get("metadata", {}),
+        )
+    
+    # ==========================================================================
+    # REPRÉSENTATION
+    # ==========================================================================
+    
+    def __repr__(self) -> str:
+        return f"<TaskModel(id={self.id}, name={self.name}, state={self.state})>"
+    
+    def __str__(self) -> str:
+        return f"Task: {self.name} ({self.id}) - State: {self.state.value if self.state else 'N/A'}"
+
+
+# ==============================================================================
+# TEST UNITAIRE (si exécuté directement)
+# ==============================================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Smart Contract Dev Pipeline 2.0 - Modèle Tâche")
+    print("=" * 60)
+    
+    # Création d'une tâche
+    task = TaskModel(
+        id=str(uuid.uuid4()),
+        project_id="proj_123",
+        name="Générer le contrat ERC20",
+        description="Génère un contrat ERC20 avec mint et burn",
+        skill_id="erc20_generator",
+        parameters={
+            "name": "MyToken",
+            "symbol": "MTK",
+            "initial_supply": 1000000
+        },
+        dependencies=["task_001", "task_002"],
+        max_retries=3,
+        timeout_seconds=600
+    )
+    
+    print(f"\n📋 Tâche créée:")
+    print(f"  ID: {task.id}")
+    print(f"  Nom: {task.name}")
+    print(f"  Description: {task.description}")
+    print(f"  Skill: {task.skill_id}")
+    print(f"  Dépendances: {task.dependencies}")
+    print(f"  Timeout: {task.timeout_seconds}s")
+    
+    # Test des méthodes
+    print(f"\n🔄 Test des méthodes:")
+    
+    # Vérifier l'exécutabilité
+    completed = {"task_001", "task_002"}
+    print(f"  Exécutable (dépendances satisfaites): {task.is_executable(completed)}")
+    
+    # Marquer le démarrage
+    task.mark_started()
+    print(f"  Démarrage: {task.started_at}")
+    print(f"  State: {task.state.value}")
+    
+    # Ajouter un log
+    task.add_log("Début de l'exécution de la compétence")
+    task.add_log("Compilation réussie")
+    
+    # Simuler un succès
+    task.mark_success({
+        "contract_code": "contract MyToken { ... }",
+        "abi": ["function transfer", "function approve"]
+    })
+    
+    print(f"  Succès: {task.state.value}")
+    print(f"  Durée: {task.duration_seconds}s")
+    print(f"  Résultat: {task.result}")
+    
+    # Test des logs
+    print(f"\n📋 Logs:")
+    print(task.logs)
+    
+    print("\n✅ Tests terminés.")
 
 
 === D:\Web3Projects\20260817_SmartContractDevPipeline2.0\src\orchestration\circuit_breaker.py ===

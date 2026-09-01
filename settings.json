@@ -1,0 +1,102 @@
+{
+  "environment": "development",
+  "debug": true,
+  "test_mode": false,
+  
+  "database": {
+    "url": "postgresql+asyncpg://pipeline:pipeline@localhost:5432/pipeline",
+    "pool_size": 5,
+    "max_overflow": 10,
+    "echo": false,
+    "pool_pre_ping": true,
+    "pool_recycle": 3600
+  },
+  
+  "redis": {
+    "url": "redis://localhost:6379/0",
+    "max_connections": 10,
+    "socket_timeout": 5.0,
+    "socket_connect_timeout": 5.0,
+    "retry_on_timeout": true,
+    "health_check_interval": 30
+  },
+  
+  "llm": {
+    "ollama_url": "http://localhost:11434",
+    "default_model": "deepseek-coder:6.7b-instruct",
+    "embedding_model": "nomic-embed-text",
+    "timeout": 60,
+    "temperature": 0.1,
+    "max_tokens": 4096,
+    "top_p": 0.9,
+    "top_k": 40,
+    "repeat_penalty": 1.1,
+    "num_ctx": 4096,
+    "num_gpu": 0,
+    "use_mock": false
+  },
+  
+  "chroma": {
+    "host": "localhost",
+    "port": 8000,
+    "collection": "web3_docs",
+    "ssl": false,
+    "max_batch_size": 100,
+    "timeout": 30
+  },
+  
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "reload": true,
+    "cors_origins": ["*"],
+    "cors_credentials": true,
+    "max_body_size": 10485760,
+    "timeout": 60,
+    "workers": 1
+  },
+  
+  "security": {
+    "rate_limit_enabled": true,
+    "rate_limit_requests": 100,
+    "rate_limit_period": 60,
+    "require_https": false,
+    "allowed_ips": [],
+    "blocked_ips": []
+  },
+  
+  "logging": {
+    "level": "INFO",
+    "format": "colored",
+    "file_path": "./logs/pipeline.log",
+    "file_max_bytes": 10485760,
+    "file_backup_count": 5,
+    "include_traceback": true
+  },
+  
+  "circuit_breaker": {
+    "max_retries": 3,
+    "timeout_seconds": 60,
+    "half_open_timeout": 10,
+    "failure_threshold": 5,
+    "success_threshold": 2
+  },
+  
+  "pipeline": {
+    "max_auto_debug_retries": 3,
+    "verification_timeout": 300,
+    "halmos_max_depth": 10,
+    "slither_timeout": 60,
+    "foundry_timeout": 120,
+    "max_parallel_tasks": 4,
+    "default_workspace": "./workspace",
+    "enable_metrics": true,
+    "enable_tracing": false
+  },
+  
+  "github": {
+    "username": "octocat",
+    "repo": "smart-contract-pipeline",
+    "enterprise_url": null
+  }
+}

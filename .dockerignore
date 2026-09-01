@@ -1,0 +1,49 @@
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Docker Ignore
+# ==============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Environnement
+.env
+.env.local
+.env.*.local
+
+# Workspace
+workspace/
+logs/
+*.log
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Local
+.local/
+*.local

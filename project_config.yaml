@@ -1,0 +1,246 @@
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Project Configuration
+# ==============================================================================
+# Fichier: project_config.yaml
+# Description: Configuration complète d'un projet de smart contract.
+#              Utilisé par l'Agent Architecte pour générer le DAG.
+# ==============================================================================
+
+project:
+  name: "SecureVault"
+  description: "A secure token vault with governance and multi-signature support"
+  version: "1.0.0"
+  chain: "ethereum"
+  category: "defi"
+  priority: "high"
+  
+  # Tags pour la recherche et la catégorisation
+  tags:
+    - "vault"
+    - "defi"
+    - "security"
+    - "multi-sig"
+    - "governance"
+
+  # Métadonnées supplémentaires
+  metadata:
+    team: "DevSquad"
+    repository: "https://github.com/org/secure-vault"
+    license: "MIT"
+    documentation: "https://docs.securevault.io"
+
+# ==============================================================================
+# EXIGENCES D'ÉQUIPE
+# ==============================================================================
+
+team_requirements:
+  - skill: "solidity_architect"
+    count: 1
+    priority: 1  # Critique
+  - skill: "solidity_developer"
+    count: 2
+    priority: 2  # Normal
+  - skill: "security_auditor"
+    count: 1
+    priority: 1  # Critique
+  - skill: "test_engineer"
+    count: 1
+    priority: 2  # Normal
+
+# ==============================================================================
+# QUALITY GATES
+# ==============================================================================
+
+quality_gates:
+  test_coverage: 80
+  gas_increase_limit: 10
+  max_cyclomatic_complexity: 10
+  slither_severity: "high"
+  formal_verification: true
+  min_security_score: 80.0
+
+# ==============================================================================
+# CONFIGURATION DE DÉPLOIEMENT
+# ==============================================================================
+
+deployment:
+  safe_address: "0x1234567890123456789012345678901234567890"
+  admin_address: "0x0987654321098765432109876543210987654321"
+  rpc_endpoints:
+    ethereum: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"
+    polygon: "https://polygon-rpc.com"
+    arbitrum: "https://arb1.arbitrum.io/rpc"
+  gas_limit: 3000000
+  confirmations: 2
+
+# ==============================================================================
+# CONFIGURATION DES UPGRADES
+# ==============================================================================
+
+upgrades:
+  proxy_pattern: "UUPS"
+  storage_slots:
+    - "__gap"
+    - "_owners"
+    - "_balances"
+  upgrade_delay_days: 7
+  timelock_days: 2
+
+# ==============================================================================
+# CONFIGURATION DU MONITORING
+# ==============================================================================
+
+monitoring:
+  prometheus_endpoint: "http://prometheus:9090"
+  grafana_dashboard: "http://grafana:3000/d/secure-vault"
+  alert_email: "security@securevault.io"
+  slack_webhook: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+
+# ==============================================================================
+# WORKFLOW DU SPRINT
+# ==============================================================================
+
+sprint_workflow:
+  - id: "T01"
+    name: "Contract Design"
+    description: "Design the vault contract architecture and interfaces"
+    type: "design"
+    priority: 10
+    skills_required:
+      - "solidity_architect"
+      - "smart_contract_design"
+    estimated_duration: 4.0
+    requires_human_validation: true
+    
+  - id: "T02"
+    name: "Contract Generation"
+    description: "Generate the main Vault.sol contract"
+    type: "contract_generation"
+    depends_on: ["T01"]
+    priority: 9
+    skills_required:
+      - "solidity_developer"
+      - "openzeppelin"
+      - "erc20"
+    parameters:
+      name: "Vault"
+      symbol: "VAULT"
+      decimals: 18
+      initial_supply: 1000000
+    estimated_duration: 8.0
+    requires_human_validation: false
+    
+  - id: "T03"
+    name: "Test Generation"
+    description: "Generate comprehensive test suite for the vault"
+    type: "test_generation"
+    depends_on: ["T02"]
+    priority: 8
+    skills_required:
+      - "test_engineer"
+      - "foundry"
+      - "forge_testing"
+    parameters:
+      test_framework: "foundry"
+      coverage_target: 80
+    estimated_duration: 6.0
+    requires_human_validation: false
+    
+  - id: "T04"
+    name: "Security Audit"
+    description: "Audit the contract for vulnerabilities"
+    type: "security_audit"
+    depends_on: ["T02"]
+    priority: 10
+    skills_required:
+      - "security_auditor"
+      - "slither"
+      - "security_analysis"
+    parameters:
+      audit_level: "full"
+      include_formal_verification: true
+    estimated_duration: 12.0
+    requires_human_validation: true
+    
+  - id: "T05"
+    name: "Formal Verification"
+    description: "Formal verification of critical invariants"
+    type: "formal_verification"
+    depends_on: ["T02"]
+    priority: 9
+    skills_required:
+      - "security_auditor"
+      - "halmos"
+      - "symbolic_execution"
+    parameters:
+      max_depth: 10
+      timeout: 300
+    estimated_duration: 8.0
+    requires_human_validation: true
+    
+  - id: "T06"
+    name: "Optimization"
+    description: "Optimize code for gas efficiency"
+    type: "optimization"
+    depends_on: ["T02", "T03"]
+    priority: 7
+    skills_required:
+      - "solidity_developer"
+      - "gas_optimization"
+    estimated_duration: 4.0
+    requires_human_validation: false
+    
+  - id: "T07"
+    name: "Documentation"
+    description: "Generate Natspec documentation and user guides"
+    type: "documentation"
+    depends_on: ["T02"]
+    priority: 5
+    skills_required:
+      - "technical_writing"
+      - "natspec"
+    estimated_duration: 3.0
+    requires_human_validation: true
+    
+  - id: "T08"
+    name: "Deployment"
+    description: "Deploy the contract to target network"
+    type: "deployment"
+    depends_on: ["T02", "T03", "T04"]
+    priority: 9
+    skills_required:
+      - "foundry_script"
+      - "deployment"
+    parameters:
+      network: "ethereum"
+      verify: true
+    estimated_duration: 2.0
+    requires_human_validation: true
+    
+  - id: "T09"
+    name: "Code Review"
+    description: "Human review of the final contract"
+    type: "review"
+    depends_on: ["T02", "T03", "T04", "T05"]
+    priority: 8
+    skills_required:
+      - "code_review"
+    estimated_duration: 4.0
+    requires_human_validation: true
+
+# ==============================================================================
+# INTÉGRATIONS
+# ==============================================================================
+
+integrations:
+  - type: "chainlink"
+    description: "Chainlink price feeds for oracle"
+    required: true
+  - type: "openzeppelin"
+    description: "OpenZeppelin contracts library"
+    required: true
+    version: "^5.0.0"
+  - type: "safe"
+    description: "Gnosis Safe multi-sig"
+    required: true
+    version: "^1.4.0"

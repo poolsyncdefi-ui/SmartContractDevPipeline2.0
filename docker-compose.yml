@@ -1,4 +1,150 @@
+# # ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Docker Compose
+# ==============================================================================
+# Fichier: docker-compose.yml
+# Description: Services conteneurisés pour le pipeline.
+# ==============================================================================
+
 services:
+  # ============================================================================
+  # POSTGRESQL
+  # ============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: pipeline_postgres
+    environment:
+      POSTGRES_DB: pipeline
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # REDIS
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: pipeline_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # CHROMADB
+  # ============================================================================
+  chromadb:
+    image: chromadb/chroma:0.4.22
+    container_name: pipeline_chroma
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
+  # ANVIL - Blockchain locale
+  # ============================================================================
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    container_name: pipeline_anvil
+    ports:
+      - "8545:8545"
+    command: [
+      "anvil",
+      "--host", "0.0.0.0",
+      "--port", "8545",
+      "--chain-id", "313133",
+      "--block-time", "3",
+      "--gas-price", "1",
+      "--balance", "10000000000000000000000"
+    ]
+    restart: unless-stopped
+
+  # ============================================================================
+  # OLLAMA - Modèles LLM locaux
+  # ============================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: pipeline_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=5m
+      - OLLAMA_HOST=0.0.0.0
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ============================================================================
+  # PIPELINE API
+  # ============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pipeline_api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://pipeline:pipeline@postgres:5432/pipeline
+      - REDIS_URL=redis://redis:6379/0
+      - CHROMA_HOST=chromadb
+      - OLLAMA_URL=http://ollama:11434
+      - ETH_RPC_URL=http://anvil:8545
+    volumes:
+      - ./workspace:/app/workspace
+      - ./contracts:/app/contracts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      anvil:
+        condition: service_started
+    restart: unless-stopped
+    command: uvicorn src.api.web_dashboard:app --host 0.0.0.0 --port 8000 --reload
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+volumes:
+  postgres_data:
+  redis_data:
+  chroma_data:
+  ollama_data:services:
   redis:
     image: redis:7-alpine
     container_name: pipeline_redis

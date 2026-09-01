@@ -1,4 +1,63 @@
-# Pipeline 2.0 - Python Dependencies
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Python Dependencies
+# ==============================================================================
+
+# Framework Web
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Base de données
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+alembic==1.12.1
+
+# Validation et Configuration
+pydantic==2.5.2
+pydantic-settings==2.1.0
+python-dotenv==1.0.1
+
+# Redis
+redis==5.0.1
+
+# HTTP Client
+httpx==0.25.2
+
+# Vector Database
+chromadb==0.4.18
+
+# Analyse Statique
+slither-analyzer==0.11.6
+
+# Vérification Formelle
+halmos==0.3.3
+
+# YAML/JSON
+pyyaml==6.0.1
+
+# Git
+gitpython==3.1.40
+
+# CLI
+click==8.1.7
+
+# Utilitaires
+typing-extensions==4.8.0
+python-dateutil==2.8.2
+
+# Logging coloré (optionnel)
+colorlog==6.7.0
+
+# Monitoring
+prometheus-client==0.19.0
+
+# Tests
+pytest==7.4.0
+pytest-asyncio==0.21.0
+pytest-cov==4.1.0
+
+# Sécurité
+cryptography==41.0.7# Pipeline 2.0 - Python Dependencies
 slither-analyzer==0.10.0
 halmos==0.2.3
 fastapi==0.110.0
