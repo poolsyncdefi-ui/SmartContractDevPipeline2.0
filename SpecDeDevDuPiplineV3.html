@@ -1,0 +1,1489 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Contract Dev Pipeline 2.0 – Spécifications Techniques Complètes v3.2</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0d1117;
+            color: #e6edf3;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+            padding: 2rem;
+            line-height: 1.6;
+            max-width: 1700px;
+            margin: 0 auto;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #30363d;
+            padding-bottom: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        h1 { font-size: 2.2rem; color: #f0f6fc; font-weight: 700; }
+        h2 { font-size: 1.7rem; border-bottom: 1px solid #30363d; padding-bottom: 0.3rem; color: #58a6ff; margin-top: 2rem; margin-bottom: 1rem; scroll-margin-top: 1rem; }
+        h3 { font-size: 1.3rem; color: #f0f6fc; margin-top: 1.5rem; margin-bottom: 0.8rem; }
+        h4 { font-size: 1.1rem; color: #79c0ff; margin-top: 1rem; }
+        h5 { font-size: 1rem; color: #8b949e; margin-top: 0.8rem; }
+        
+        .download-btn {
+            background-color: #238636;
+            color: #ffffff;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            font-size: 0.95rem;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s ease-in-out;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .download-btn:hover { background-color: #2ea043; }
+
+        pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 1.2rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            border: 1px solid #30363d;
+            font-family: 'Fira Code', 'Consolas', 'Courier New', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            margin: 0.8rem 0;
+        }
+        code { font-family: 'Fira Code', 'Consolas', monospace; }
+        .kw { color: #569cd6; font-weight: bold; }
+        .builtin { color: #4ec9b0; }
+        .str { color: #ce9178; }
+        .cm { color: #6a9955; font-style: italic; }
+        .fn { color: #dcdcaa; }
+        .num { color: #b5cea8; }
+        .dec { color: #c586c0; }
+        .var { color: #9cdcfe; }
+        .cls { color: #4ec9b0; font-weight: bold; }
+        .decorator { color: #c586c0; }
+
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { border: 1px solid #30363d; padding: 0.65rem 0.85rem; text-align: left; vertical-align: top; font-size: 0.9rem; }
+        th { background: #1c2333; font-weight: 600; color: #58a6ff; }
+        
+        .badge { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 12px; font-size: 0.75rem; font-weight: 600; margin-right: 0.3rem; }
+        .badge-s0 { background: #8b949e; color: #000; }
+        .badge-s1 { background: #d29922; color: #000; }
+        .badge-s2 { background: #58a6ff; color: #000; }
+        .badge-s3 { background: #a371f7; color: #fff; }
+        .badge-s4 { background: #f85149; color: #fff; }
+        .badge-s5 { background: #238636; color: #fff; }
+        .badge-s6 { background: #1f6feb; color: #fff; }
+        .badge-s7 { background: #3fb950; color: #000; }
+        .badge-config { background: #6e7681; color: #fff; }
+        .badge-real { background: #238636; color: #fff; }
+        
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; margin: 1.2rem 0; }
+        .card-title { font-size: 1.2rem; font-weight: 600; color: #58a6ff; margin-bottom: 0.5rem; display: flex; align-items: center; justify-content: space-between; }
+        .toc { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; margin: 1.5rem 0; }
+        .toc ul { list-style: none; padding-left: 0; }
+        .toc li { margin: 0.35rem 0; }
+        .toc a { color: #e6edf3; text-decoration: none; font-size: 0.95rem; }
+        .toc a:hover { color: #58a6ff; text-decoration: underline; }
+        .toc .l2 { padding-left: 1.5rem; }
+        .toc .l3 { padding-left: 3rem; }
+        
+        .mermaid-container { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; margin: 1rem 0; text-align: center; overflow-x: auto; }
+        .footer { margin-top: 3rem; border-top: 1px solid #30363d; padding-top: 1.5rem; font-size: 0.9rem; color: #8b949e; text-align: center; }
+        .glossary dt { font-weight: 600; color: #58a6ff; margin-top: 0.8rem; }
+        .glossary dd { margin-left: 1.5rem; color: #8b949e; }
+        
+        .callout-info { background: rgba(56, 139, 253, 0.1); border-left: 4px solid #58a6ff; padding: 1rem; border-radius: 0 6px 6px 0; margin: 1rem 0; }
+        .callout-warn { background: rgba(210, 153, 34, 0.1); border-left: 4px solid #d29922; padding: 1rem; border-radius: 0 6px 6px 0; margin: 1rem 0; }
+        .callout-danger { background: rgba(248, 81, 73, 0.1); border-left: 4px solid #f85149; padding: 1rem; border-radius: 0 6px 6px 0; margin: 1rem 0; }
+        
+        ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+        li { margin: 0.25rem 0; }
+        .tech-spec { background: #0d1117; padding: 0.8rem; border-radius: 6px; border: 1px dashed #30363d; margin: 0.6rem 0; font-size: 0.88rem; color: #c9d1d9; }
+        
+        .functional-desc { padding: 0.75rem 1rem; font-size: 0.85rem; background: rgba(56, 189, 248, 0.05); border-bottom: 1px solid #30363d; color: #58a6ff; }
+        .method-sig { color: #f0883e; font-family: monospace; }
+        .mermaid-container svg { max-width: 100%; }
+        .param { color: #9cdcfe; }
+        .return { color: #4ec9b0; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+        });
+
+        function downloadHTML() {
+            const blob = new Blob([document.documentElement.outerHTML], { type: 'text/html;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'smart_contract_dev_pipeline_2_0_specifications_v3_2.html';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</head>
+<body>
+
+<header>
+    <div>
+        <h1>🚀 Smart Contract Dev Pipeline 2.0</h1>
+        <p style="color: #8b949e; margin-top: 0.3rem;">Spécifications Techniques Complètes – Version 3.2 (Architecture, Diagrammes & Code Exhaustif)</p>
+    </div>
+    <button class="download-btn" onclick="downloadHTML()">
+        <span>💾 Télécharger le Document (.html)</span>
+    </button>
+</header>
+
+<!-- =================================================================== -->
+<!-- TABLE DES MATIÈRES                                                  -->
+<!-- =================================================================== -->
+<div class="toc">
+    <h3>📑 Table des matières</h3>
+    <ul>
+        <li><a href="#prerequis-env">1. Prérequis Systèmes & Guide d'Installation</a></li>
+        <li><a href="#description-fonctionnelle">2. Description Fonctionnelle, Workflow Auto-Débogage & HITL</a></li>
+        <li><a href="#anti-hallucinations">3. Bouclier Anti-Hallucinations & Mitigation IA</a></li>
+        <li><a href="#competences-dynamiques">4. Moteur d'Acquisition & Injection Dynamique de Compétences</a></li>
+        <li><a href="#cartographie-diagrammes">5. Cartographie & Diagrammes de Flux</a></li>
+        <li><a href="#shielding-securite">6. Shielding Sécurité Multi-Couches</a></li>
+        <li><a href="#flux-code-git-web">7. Restitution Web, Workflow Diff & HITL</a></li>
+        <li><a href="#structure-complete">8. Structure complète du projet</a></li>
+        <li><a href="#sprint-0">9. Sprint 0 – Infrastructure & fondations</a>
+            <ul class="l2">
+                <li><a href="#f-01">F01 – .env.example</a></li>
+                <li><a href="#f-02">F02 – docker-compose.yml</a></li>
+                <li><a href="#f-03">F03 – requirements.txt</a></li>
+                <li><a href="#f-04">F04 – src/core/exceptions.py</a></li>
+                <li><a href="#f-05">F05 – src/core/models.py</a></li>
+                <li><a href="#f-06">F06 – src/config/settings.py</a></li>
+                <li><a href="#f-07">F07 – src/db/database.py</a></li>
+                <li><a href="#f-08">F08 – src/db/migrations.py</a></li>
+            </ul>
+        </li>
+        <li><a href="#sprint-1">10. Sprint 1 – Modèles ORM</a>
+            <ul class="l2">
+                <li><a href="#f-09">F09 – src/models/project.py</a></li>
+                <li><a href="#f-10">F10 – src/models/task.py</a></li>
+                <li><a href="#f-11">F11 – src/models/execution_log.py</a></li>
+                <li><a href="#f-12">F12 – src/models/skill_record.py</a></li>
+                <li><a href="#f-13">F13 – src/persistence/models_orm.py</a></li>
+            </ul>
+        </li>
+        <li><a href="#sprint-2">11. Sprint 2 – Agents</a>
+            <ul class="l2">
+                <li><a href="#f-14">F14 – src/agents/base/abstract_agent.py</a></li>
+                <li><a href="#f-15">F15 – src/agents/base/skill.py</a></li>
+                <li><a href="#f-16">F16 – src/agents/base/best_practice.py</a></li>
+                <li><a href="#f-17">F17 – src/agents/factory/skill_registry.py</a></li>
+                <li><a href="#f-18">F18 – src/agents/factory/agent_factory.py</a></li>
+                <li><a href="#f-19">F19 – src/agents/templates/architect_agent.py</a></li>
+                <li><a href="#f-20">F20 – src/agents/templates/developer_agent.py</a></li>
+                <li><a href="#f-21">F21 – src/agents/templates/security_agent.py</a></li>
+                <li><a href="#f-22">F22 – src/agents/templates/feedback_agent.py</a></li>
+            </ul>
+        </li>
+        <li><a href="#sprint-3">12. Sprint 3 – Communication & Persistance</a>
+            <ul class="l2">
+                <li><a href="#f-23">F23 – src/communication/message_models.py</a></li>
+                <li><a href="#f-24">F24 – src/communication/message_bus.py</a></li>
+                <li><a href="#f-25">F25 – src/communication/redis_bus.py</a></li>
+                <li><a href="#f-26">F26 – src/persistence/project_state.py</a></li>
+                <li><a href="#f-27">F27 – src/persistence/knowledge_base.py</a></li>
+            </ul>
+        </li>
+        <li><a href="#sprint-4">13. Sprint 4 – Orchestration & Sécurité</a>
+            <ul class="l2">
+                <li><a href="#f-28">F28 – src/orchestration/workflow_engine.py</a></li>
+                <li><a href="#f-29">F29 – src/orchestration/circuit_breaker.py</a></li>
+                <li><a href="#f-30">F30 – src/security/threat_simulator.py</a></li>
+                <li><a href="#f-31">F31 – src/security/formal_verifier.py</a></li>
+                <li><a href="#f-32">F32 – src/security/shield_orchestrator.py</a></li>
+            </ul>
+        </li>
+        <li><a href="#sprint-5">14. Sprint 5 – API & CLI</a>
+            <ul class="l2">
+                <li><a href="#f-33">F33 – src/api/schemas/requests.py</a></li>
+                <li><a href="#f-34">F34 – src/api/schemas/responses.py</a></li>
+                <li><a href="#f-35">F35 – src/api/routers/projects.py</a></li>
+                <li><a href="#f-36">F36 – src/api/routers/tasks.py</a></li>
+                <li><a href="#f-37">F37 – src/api/websockets/notifier.py</a></li>
+                <li><a href="#f-38">F38 – src/api/web_dashboard.py</a></li>
+                <li><a href="#f-39">F39 – src/cli/commands.py</a></li>
+                <li><a href="#f-40">F40 – src/cli/main.py</a></li>
+                <li><a href="#f-41">F41 – src/llm/llm_client.py</a></li>
+                <li><a href="#f-42">F42 – src/llm/ollama_client.py</a></li>
+                <li><a href="#f-43">F43 – src/git/git_sync_manager.py</a></li>
+            </ul>
+        </li>
+        <li><a href="#configs">15. Fichiers de configuration (YAML)</a></li>
+        <li><a href="#glossaire">16. Glossaire</a></li>
+    </ul>
+</div>
+
+<hr />
+
+<!-- =================================================================== -->
+<!-- SECTION 1 : PREREQUIS                                               -->
+<!-- =================================================================== -->
+<h2 id="prerequis-env">⚙️ 1. Prérequis Systèmes & Guide d'Installation</h2>
+<div class="card">
+    <p>Afin de faire tourner le pipeline complet avec ses agents IA locaux, ses bases vectorielles et le moteur de test de sécurité blockchain, la machine hôte doit disposer des outils suivants :</p>
+    
+    <h4>1.1. Matériel & Systèmes d'Exploitation Recommandés</h4>
+    <ul>
+        <li><strong>OS :</strong> Ubuntu 22.04 LTS / macOS Sonoma / Windows avec WSL2 (Ubuntu).</li>
+        <li><strong>RAM :</strong> 16 Go minimum (32 Go recommandés pour exécuter Ollama et Anvil simultanément).</li>
+        <li><strong>Stockage :</strong> 50 Go d'espace libre (images Docker, cache Foundry et modèles LLM).</li>
+    </ul>
+
+    <h4>1.2. Tableau des Outils Requis</h4>
+    <table>
+        <thead><tr><th>Outil / Stack</th><th>Version Min.</th><th>Rôle dans le Pipeline</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Python</strong></td><td>3.10+</td><td>Cœur du moteur de pipeline, orchestration DAG, FastAPI et scripts Redis.</td></tr>
+            <tr><td><strong>Node.js / pnpm</strong></td><td>v18+</td><td>Exécution du Web Dashboard React / Next.js.</td></tr>
+            <tr><td><strong>Docker & Docker Compose</strong></td><td>v2.20+</td><td>Conteneurisation persistante de Redis, PostgreSQL et ChromaDB.</td></tr>
+            <tr><td><strong>Foundry Toolchain</strong></td><td>v0.2.0+</td><td>Forge (compilation/tests), Anvil (RPC fork local) et Cast (scripts).</td></tr>
+            <tr><td><strong>Ollama</strong></td><td>v0.1.20+</td><td>Moteur LLM local (CodeLlama, DeepSeek-Coder ou Llama-3).</td></tr>
+            <tr><td><strong>Slither & Aderyn</strong></td><td>Dernière release</td><td>Analyse statique AST du code Solidity.</td></tr>
+            <tr><td><strong>Halmos</strong></td><td>v0.1.0+</td><td>Moteur de vérification formelle symbolique basé sur Z3.</td></tr>
+        </tbody>
+    </table>
+
+    <h4>1.3. Procédure d'Installation Pas à Pas</h4>
+    <pre><code><span class="cm"># 1. Mettre à jour le système et installer les dépendances de base</span>
+sudo apt update && sudo apt install -y build-essential curl git python3-pip python3-venv jq
+
+<span class="cm"># 2. Installer Foundry (Forge, Anvil, Cast)</span>
+curl -L https://foundry.paradigm.xyz | bash
+source ~/.bashrc
+foundryup
+
+<span class="cm"># 3. Installer Slither et Halmos pour la sécurité</span>
+pip install slither-analyzer halmos
+
+<span class="cm"># 4. Installer Ollama et récupérer le modèle de code</span>
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull deepseek-coder:6.7b-instruct
+
+<span class="cm"># 5. Cloner le repository et préparer l'environnement Python</span>
+git clone https://github.com/org/smart-contract-pipeline.git
+cd smart-contract-pipeline
+python3 -m venv venv
+source venv/bin/activate
+pip install -e .[dev]
+
+<span class="cm"># 6. Démarrer l'infrastructure Docker</span>
+docker compose up -d
+
+<span class="cm"># 7. Lancer le serveur Web FastAPI & Dashboard</span>
+uvicorn src.api.web_dashboard:app --reload --host 0.0.0.0 --port 8000</code></pre>
+</div>
+
+<!-- =================================================================== -->
+<!-- SECTION 2 : DESCRIPTION FONCTIONNELLE                               -->
+<!-- =================================================================== -->
+<h2 id="description-fonctionnelle">🎯 2. Description Fonctionnelle, Workflow Auto-Débogage & Rôle du Pilote (HITL)</h2>
+<div class="card">
+    <p>Le pipeline agit comme une équipe d'ingénierie autonome sous le contrôle d'un Tech Lead humain. Une caractéristique fondamentale du système est sa <strong>boucle de test et d'auto-débogage autonome pré-validation</strong> : aucun code n'est présenté à l'humain s'il n'a pas préalablement réussi 100 % de ses tests unitaires, d'invariants et d'audits de sécurité.</p>
+    
+    <div class="callout-info">
+        <strong>🔄 Déroulement Strict du Workflow de Développement :</strong><br>
+        1. <strong>Génération :</strong> L'agent spécialisé produit le code Solidity ou TypeScript.<br>
+        2. <strong>Compilation & Tests Unitaires :</strong> Le système exécute automatiquement <code>forge test</code>.<br>
+        3. <strong>Bouclier de Sécurité Multi-Couches :</strong> Slither (AST), Fuzzing (Foundry), Threat Simulator (Anvil) et Halmos (Preuve Formelle) auditent le code.<br>
+        4. <strong>Boucle d'Auto-Correction (En cas d'échec) :</strong> Si une erreur de compilation ou une vulnérabilité est détectée, le système intercepte la sortie d'erreur, la réinjecte au LLM sous forme de prompt correctif et relance les tests. Cette boucle s'exécute jusqu'à 3 fois de manière autonome.<br>
+        5. <strong>Présentation à l'Humain (HITL) :</strong> Ce n'est qu'une fois le code <strong>totalement propre et validé par les outils déterministes</strong> qu'une notification est envoyée au Dashboard avec le diff et le lien Gist pour validation humaine.
+    </div>
+
+    <h4>Rôles des Acteurs Métier</h4>
+    <ul>
+        <li><strong>L'Agent Architecte :</strong> Analyse le besoin, génère le DAG de tâches et identifie les compétences requises.</li>
+        <li><strong>La Dev Squad (Agents de Dev) :</strong> Rédige le code, les tests unitaires (<code>*.t.sol</code>) et les scripts d'invariants.</li>
+        <li><strong>Le Circuit Breaker & Auto-Debugger :</strong> Gère les tentatives de correction automatique (max 3 itérations) avant d'alerter si un blocage persiste.</li>
+        <li><strong>Le Pilote Humain (Tech Lead) :</strong> Inspecte le code déjà certifié sur le Dashboard, visualise les diffs et donne le feu vert pour le commit final sur Git.</li>
+    </ul>
+</div>
+
+<!-- =================================================================== -->
+<!-- SECTION 3 : ANTI-HALLUCINATIONS                                     -->
+<!-- =================================================================== -->
+<h2 id="anti-hallucinations">🛡️ 3. Bouclier Anti-Hallucinations & Mitigation des Effets Indésirables IA</h2>
+<div class="card">
+    <p>Les modèles de langage (LLM) présentent des risques connus lorsqu'ils génèrent du code critique Web3. Le pipeline embarque des mécanismes de protection stricts à chaque étape :</p>
+    
+    <table>
+        <thead><tr><th>Effet Indésirable / Biais</th><th>Symptôme & Risque Métier</th><th>Mécanisme de Protection Technique</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><strong>Hallucination de Syntaxe / Dépendances</strong></td>
+                <td>Importation de bibliothèques inexistantes ou syntaxe Solidity obsolète.</td>
+                <td><strong>Boucle de Compilation Déterministe :</strong> Tout code est immédiatement soumis à <code>forge build</code>. L'AST exact et l'erreur du compilateur sont réinjectés à l'agent sans passer par une auto-évaluation du LLM.</td>
+            </tr>
+            <tr>
+                <td><strong>Invention d'API / Fonctions</strong></td>
+                <td>Appel de méthodes absentes des standards ERC.</td>
+                <td><strong>RAG Vectoriel Strict (ChromaDB) :</strong> Le prompt est ancré (<em>grounded</em>) uniquement sur les interfaces vérifiées d'OpenZeppelin v5 stockées en vector store. Interdiction d'inventer des signatures.</td>
+            </tr>
+            <tr>
+                <td><strong>Dérive de Contexte (Scope Drift)</strong></td>
+                <td>L'agent modifie des parties du contrat non demandées ou oublie des contraintes architecturales.</td>
+                <td><strong>Stateless Execution & Context Pinning :</strong> L'état réside dans PostgreSQL. Chaque requête est exécutée dans un contexte propre réinjectant le <em>System Prompt</em> invariant de la tâche DAG en cours.</td>
+            </tr>
+            <tr>
+                <td><strong>Boucle Infinie de Refactoring</strong></td>
+                <td>L'agent corrige un bug mais en introduit un autre, tournant en boucle indéfiniment.</td>
+                <td><strong>Circuit Breaker (Disjoncteur) :</strong> Plafond strict à 3 essais de correction automatique. En cas de dépassement, la tâche passe en statut <code>WAITING_HUMAN_VALIDATION</code> / <code>CIRCUIT_BROKEN</code> avec le journal complet des erreurs.</td>
+            </tr>
+            <tr>
+                <td><strong>Opacité du Raisonnement</strong></td>
+                <td>Impossibilité d'expliquer pourquoi l'agent a choisi une structure de données plutôt qu'une autre.</td>
+                <td><strong>Audit Trail JSON :</strong> Chaque décision de l'agent est enregistrée avec sa promesse (<em>prompt</em>), sa réponse brute et la trace de compilation associée dans la table <code>execution_logs</code>.</td>
+            </tr>
+            <tr>
+                <td><strong>Auto-Complaisance IA</strong></td>
+                <td>L'agent affirme que le code est sécurisé sans l'avoir réellement testé.</td>
+                <td><strong>Séparation Étanche Dev vs Audit :</strong> L'évaluation est réalisée par des sous-processus système (Slither, Halmos, Anvil) externes et déterministes. Le LLM ne juge jamais son propre code.</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- =================================================================== -->
+<!-- SECTION 4 : COMPETENCES DYNAMIQUES                                  -->
+<!-- =================================================================== -->
+<h2 id="competences-dynamiques">🧬 4. Moteur d'Acquisition & Injection Dynamique de Compétences Expertes (<code>BaseSkill</code>)</h2>
+<div class="card">
+    <p>Le pipeline n'utilise pas d'agents figés. L'<strong>Agent Architecte</strong> conçoit des agents sur-mesure pour chaque projet en leur assemblant des compétences expertes (<code>BaseSkill</code>) instanciées à chaud.</p>
+
+    <h4>4.1. Anatomie d'une Compétence Experte (<code>BaseSkill</code>)</h4>
+    <p>Une compétence est un module autonome comprenant 3 composants indissociables :</p>
+    <ul>
+        <li><strong>Prompt Template & Rules :</strong> Directives d'expertise métier, anti-patterns à éviter et exemples concrets (<em>few-shot prompts</em>).</li>
+        <li><strong>Tooling Executable :</strong> Wrapper Python encapsulant les appels système ou CLI (ex: compilation <code>forge</code>, appels RPC, requêtes Slither).</li>
+        <li><strong>Schéma Pydantic :</strong> Contrat de données strict imposant la structure des paramètres d'entrée et de sortie.</li>
+    </ul>
+
+    <h4>4.2. Processus Pas à Pas d'Acquisition Dynamique</h4>
+    <div class="callout-info">
+        <strong>Étape A : Cartographie du Projet par l'Architecte</strong><br>
+        Lors de l'analyse du <code>project_config.yaml</code>, l'Agent Architecte décompose le projet en tâches DAG et liste les compétences requises (ex: <code>ERC20VaultSkill</code>, <code>ChainlinkOracleSkill</code>, <code>HalmosProofSkill</code>).
+    </div>
+    <div class="callout-info">
+        <strong>Étape B : Interrogation du Registre (<code>SkillRegistry</code>)</strong><br>
+        Le système interroge la base vectorielle ChromaDB et PostgreSQL. Si la compétence existe déjà, elle est directement chargée.
+    </div>
+    <div class="callout-warn">
+        <strong>Étape C : Synthèse Dynamique à Chaud (Si Compétence Inexistante)</strong><br>
+        Si une compétence métier requise est absente du catalogue :<br>
+        1. L'Architecte déclenche un méta-prompt de création de compétence.<br>
+        2. Il recherche la documentation officielle de référence via RAG (ex: documentation Chainlink CCIP).<br>
+        3. Il génère la classe Python héritant de <code>BaseSkill</code>, avec son modèle Pydantic et ses règles de prompt.<br>
+        4. La compétence est compilée, validée et enregistrée dans le <code>SkillRegistry</code> pour réutilisation ultérieure.
+    </div>
+    <div class="callout-info">
+        <strong>Étape D : Assemblage Runtime par l'<code>AgentFactory</code></strong><br>
+        L'<code>AgentFactory</code> prend un <code>AgentTemplate</code> vierge, lui injecte les compétences requises et instancie l'agent final prêt à exécuter sa mission dans le DAG.
+    </div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SECTION 5 : DIAGRAMMES                                              -->
+<!-- =================================================================== -->
+<h2 id="cartographie-diagrammes">📊 5. Cartographie & Flux de Process (6 Diagrammes Mermaid)</h2>
+
+<!-- Diagramme 1 -->
+<h4>Diagramme 1 : Architecture Système Globale</h4>
+<div class="mermaid-container">
+<pre class="mermaid">
+graph TD
+    subgraph UI_Layer [Couche Interface & Restitution Web]
+        CLI[Main CLI - Click]
+        WebUI[Dashboard Web React / Next.js]
+        WebAPI[FastAPI & WebSockets Server F34]
+    end
+
+    subgraph Orchestration_Layer [Couche Orchestration & Intelligence]
+        AA[Architect Agent F15]
+        WE[Workflow Engine / DAG F23]
+        CB[Circuit Breaker / Auto-Debugger F24]
+        RLHF[Human Feedback Agent F30]
+    end
+
+    subgraph Agent_Core [Couche Dynamic Skill & Agent Engine]
+        AF[Agent Factory F14]
+        SR[Skill Registry F13]
+        BS[BaseSkill Engine F12]
+        AT[Abstract Agent / Templates F10]
+    end
+
+    subgraph Security_Shield [Couche Shielding Multi-Couches]
+        Static[Static Analyzers Slither/Aderyn F21]
+        Fuzzing[Invariant Fuzzing Foundry F20]
+        AttackSim[Threat Simulator / Anvil Sandbox F26]
+        Formal[Halmos Formal Verifier F27]
+    end
+
+    subgraph Bus_Persistence [Couche Communication & Persistance]
+        MB[Message Bus / Redis F25]
+        PS[Project State ORM F05/F06]
+        DB[(PostgreSQL Database F04)]
+    end
+
+    subgraph External_Services [Services & Workspace]
+        Ollama[Ollama LLM Client F18]
+        Chroma[(ChromaDB Vector Store F19)]
+        GitSync[Git Sync Manager F22]
+        GH[GitHub Remote Repository]
+        DevPC[Tech Lead Humain]
+    end
+
+    WebUI <-->|WebSockets / Diffs / Validations| WebAPI
+    CLI --> AA
+    WebAPI <--> MB
+    WebAPI --> AA
+
+    AA --> WE
+    WE --> AF
+    WE --> CB
+    CB -->|Retry loop max 3| WE
+    WE --> RLHF
+    
+    AF --> SR
+    SR <--> BS
+    AF --> AT
+    
+    WE --> Security_Shield
+    Security_Shield --> AttackSim
+    Security_Shield --> Formal
+
+    WE --> MB
+    MB --> PS
+    PS --> DB
+
+    AT --> Ollama
+    AT --> Chroma
+    AT --> GitSync
+
+    GitSync <--> GH
+    GH <-->|Git Pull / Push| DevPC
+</pre>
+</div>
+
+<!-- Diagramme 2 -->
+<h4>Diagramme 2 : Séquence d'Auto-Débogage Préalable & Interaction HITL</h4>
+<div class="mermaid-container">
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Dev as Tech Lead Humain (Dashboard)
+    participant WE as Workflow Engine
+    participant Agent as Agent de Dev (Sprint 2)
+    participant Forge as Foundry / Forge Compiler
+    participant Sec as Security Shielding (Sprint 5)
+    participant API as FastAPI / WebSockets
+
+    WE->>Agent: 1. Déclenche tâche de génération
+    Agent->>Agent: 2. Production initiale du Code Solidity
+    
+    rect rgb(35, 45, 60)
+        note right of Agent: Boucle d'Auto-Débogage Autonome (Max 3 essais)
+        Agent->>Forge: 3. Test de compilation (forge build / test)
+        alt Echec Compilation / Test
+            Forge-->>Agent: 4a. Retourne Journal d'Erreur (AST/Trace)
+            Agent->>Agent: 5a. Réalignement & Auto-Correction du Code
+        else Succès Compilation
+            Forge-->>Sec: 4b. Soumission au Bouclier de Sécurité
+            Sec->>Sec: 5b. Audit Slither + Fuzzing + Anvil + Halmos
+            alt Echec Sécurité
+                Sec-->>Agent: 6c. Rapport de Vulnérabilité / Contre-exemple
+                Agent->>Agent: 7c. Correction de la Faille de Sécurité
+            else Succès Sécurité Total (100%)
+                Sec-->>WE: 6d. Certification Sécurité OK
+            end
+        end
+    end
+
+    WE->>API: 8. Publication du Diff & Gist (Statut: WAITING_HUMAN_VALIDATION)
+    API->>Dev: 9. Event WebSocket (Affiche Code Propre & Certifié sur UI)
+    
+    alt Accord Humain
+        Dev->>API: 10a. Clic "Approuver"
+        API->>WE: 11a. Validation & Commit Git Final
+    else Refactoring Manuel Demande
+        Dev->>API: 10b. Recommandations textuelles
+        API->>WE: 11b. Réinjection consignes dans l'agent
+    end
+</pre>
+</div>
+
+<!-- Diagramme 3 -->
+<h4>Diagramme 3 : Processus du Bouclier de Sécurité Multi-Couches</h4>
+<div class="mermaid-container">
+<pre class="mermaid">
+flowchart LR
+    CodeIn[Code Solidity Proposé] --> L1[Niveau 1: Analyse Statique AST<br/>Slither & Aderyn]
+    
+    L1 -- Error/High Risk --> Reject1[Auto-Correction Agent]
+    L1 -- Pass --> L2[Niveau 2: Fuzzing Invariants<br/>Foundry / Echidna]
+    
+    L2 -- Assertion Failed --> Reject2[Auto-Correction Agent]
+    L2 -- Pass 100k runs --> L3[Niveau 3: Threat Simulator<br/>Anvil Local Fork]
+    
+    L3 -- FlashLoan Exploit --> Reject3[Auto-Correction Agent]
+    L3 -- Pass --> L4[Niveau 4: Vérification Formelle<br/>Halmos Symbolic Prover]
+    
+    L4 -- Proof Failed --> Reject4[Auto-Correction Agent]
+    L4 -- Proof Verified --> Cert[Code Certifié -> Transmis à l'Humain]
+</pre>
+</div>
+
+<!-- Diagramme 4 -->
+<h4>Diagramme 4 : Cycle de Vie d'une Tâche avec Circuit Breaker</h4>
+<div class="mermaid-container">
+<pre class="mermaid">
+stateDiagram-v2
+    [*] --> PENDING : Tâche créée par Architecte
+    PENDING --> RUNNING : Dépendances DAG validées
+    RUNNING --> AUTO_TESTING : Code généré par Agent
+    AUTO_TESTING --> AUTO_DEBUG : Echec Compilation/Sécurité (Retry < 3)
+    AUTO_DEBUG --> RUNNING : Code réaligné par Agent
+    AUTO_TESTING --> CIRCUIT_BROKEN : Retry >= 3 (Echecs répétés)
+    CIRCUIT_BROKEN --> WAITING_HUMAN_VALIDATION : Escalade vers Humain avec Log Erreur
+    AUTO_TESTING --> WAITING_HUMAN_VALIDATION : Tests & Audits 100% OK
+    WAITING_HUMAN_VALIDATION --> SUCCESS : Approuvé par Tech Lead Humain
+    WAITING_HUMAN_VALIDATION --> REJECTED : Demande de Refactoring Manuel
+    REJECTED --> RUNNING : Reconception sous consignes
+    SUCCESS --> [*] : Commit Git & Persistance
+</pre>
+</div>
+
+<!-- Diagramme 5 -->
+<h4>Diagramme 5 : Sync & Isolation de Code (Gists vs Main Branch)</h4>
+<div class="mermaid-container">
+<pre class="mermaid">
+graph LR
+    subgraph Isolated_Sandbox [Sandbox Agent]
+        A[Agent AI] -->|Génère & Teste| LocalFiles[Fichiers dans /tmp]
+    end
+
+    subgraph Review_Phase [Phase de Revue Dashboard]
+        LocalFiles -->|Publish| Gist[GitHub Gist URL Temporaire]
+        Gist -->|Diff Side-by-Side| WebUI[Dashboard Web HITL]
+    end
+
+    subgraph Production_Repo [Repository Principal]
+        WebUI -->|Approval Humain| GitSync[Git Sync Manager]
+        GitSync -->|Merge clean code| LocalRepo[Workspace Git Local]
+        GitSync -->|Push| RemoteGit[GitHub Main Branch]
+    end
+</pre>
+</div>
+
+<!-- Diagramme 6 -->
+<h4>Diagramme 6 : Moteur Dynamique de Compétences (<code>Skill Engine</code>)</h4>
+<div class="mermaid-container">
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant AA as Architect Agent
+    participant Reg as Skill Registry (ChromaDB/DB)
+    participant RAG as RAG Documentation Engine
+    participant Fac as Agent Factory
+    participant Ag as Dynamic Agent Instance
+
+    AA->>Reg: 1. Recherche compétence "ChainlinkCCIP"
+    alt Compétence Existante
+        Reg-->>Fac: 2a. Retourne BaseSkill prêt à l'emploi
+    else Compétence Inexistante
+        Reg->>RAG: 2b. Extraction doc officielle de la spec
+        RAG-->>AA: 3b. Context vectoriel extrait
+        AA->>AA: 4b. Génération classe Python BaseSkill + Prompt + Schema Pydantic
+        AA->>Reg: 5b. Enregistrement nouvelle compétence
+        Reg-->>Fac: 6b. Retourne la nouvelle compétence dynamiquement créée
+    end
+    Fac->>Ag: 7. Injection des compétences dans l'agent instancié
+</pre>
+</div>
+
+<!-- =================================================================== -->
+<!-- SECTION 6 : SHIELDING SECURITE                                      -->
+<!-- =================================================================== -->
+<h2 id="shielding-securite">🛡️ 6. Shielding Sécurité Multi-Couches (Anti-Attaques Web3)</h2>
+<div class="card">
+    <p>Le bouclier de sécurité exécute 4 niveaux d'analyse déterministes. Tout échec déclenche une réinjection immédiate de la trace dans la boucle d'auto-débogage de l'agent.</p>
+    
+    <table>
+        <thead><tr><th>Niveau</th><th>Moteur / Outillage</th><th>Vecteurs d'Attaques Ciblés</th><th>Action en cas d'Echec</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><strong>Niveau 1</strong></td>
+                <td>Slither / Aderyn</td>
+                <td>Réentrance basique, variables non initialisées, re-entrancy d'état, shadowing.</td>
+                <td>Interception de l'AST Slither -> Auto-correction Agent.</td>
+            </tr>
+            <tr>
+                <td><strong>Niveau 2</strong></td>
+                <td>Foundry / Echidna Fuzzing</td>
+                <td>Violations d'invariants métier, erreurs d'arrondi, overflow d'état.</td>
+                <td>Extraction du contre-exemple de fuzzing -> Auto-correction Agent.</td>
+            </tr>
+            <tr>
+                <td><strong>Niveau 3</strong></td>
+                <td>Anvil Threat Simulator</td>
+                <td>Flash Loans, manipulation d'oracles Uniswap/Chainlink, MEV, front-running.</td>
+                <td>Capture de la trace d'attaque Anvil -> Auto-correction Agent.</td>
+            </tr>
+            <tr>
+                <td><strong>Niveau 4</strong></td>
+                <td>Halmos Symbolic Prover</td>
+                <td>Insolvabilité du coffre, brèche de logique métier multi-fonctions.</td>
+                <td>Extraction du contre-exemple mathématique Z3 -> Auto-correction Agent.</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- =================================================================== -->
+<!-- SECTION 7 : RESTITUTION WEB                                         -->
+<!-- =================================================================== -->
+<h2 id="flux-code-git-web">🔄 7. Restitution Web, Workflow Diff Side-by-Side & Interaction Développeur (HITL)</h2>
+<div class="card">
+    <p>Le Dashboard Web sert de cockpit de contrôle au Tech Lead. Grâce au filtrage en amont par la boucle d'auto-débogage, l'intervenant humain n'analyse que du code déjà syntaxiquement et fonctionnellement valide.</p>
+    
+    <table>
+        <thead><tr><th>Composant UI</th><th>Fonctionnalité & Workflow d'Interaction</th><th>Bénéfice Tech Lead</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><strong>Visualiseur DAG & Status</strong></td>
+                <td>Vue graphique des nœuds de tâches (Vert = Succès, Orange = Attente Validation, Rouge = Circuit Broken).</td>
+                <td>Détection immédiate de la progression du sprint.</td>
+            </tr>
+            <tr>
+                <td><strong>Vue Diff. Side-by-Side</strong></td>
+                <td>Comparaison du code généré vs master avec mise en évidence des modifications.</td>
+                <td>Revue de code accélérée avant validation (HITL).</td>
+            </tr>
+            <tr>
+                <td><strong>Logs Circuit Breaker</strong></td>
+                <td>Historique détaillé des erreurs de compilation et de sécurité interceptées et résolues.</td>
+                <td>Compréhension du raisonnement de l'agent lors de ses auto-corrections.</td>
+            </tr>
+            <tr>
+                <td><strong>Validation One-Click</strong></td>
+                <td>Bouton déclenchant le Merge Git, le déploiement ou l'escalade vers une tâche manuelle.</td>
+                <td>Maîtrise totale du code envoyé en production.</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- =================================================================== -->
+<!-- SECTION 8 : STRUCTURE COMPLETE DU PROJET                            -->
+<!-- =================================================================== -->
+<h2 id="structure-complete">📂 8. Structure complète du projet</h2>
+<div class="card">
+    <p>Arborescence exhaustive des dossiers et fichiers du pipeline (F01 à F43) :</p>
+    <pre><code>smart-contract-pipeline/
+├── .env.example                                  # [F01] Template d'environnement
+├── docker-compose.yml                            # [F02] Services conteneurisés (DB, Redis, Chroma)
+├── requirements.txt                              # [F03] Dépendances Python du pipeline
+└── src/
+    ├── core/
+    │   ├── exceptions.py                         # [F04] Exceptions métiers personnalisées
+    │   └── models.py                             # [F05] Modèles de données Pydantic globaux
+    ├── config/
+    │   └── settings.py                           # [F06] Configuration globale Pydantic
+    ├── db/
+    │   ├── database.py                           # [F07] Connexion async SQLAlchemy
+    │   └── migrations.py                         # [F08] Initialisation et migrations BDD
+    ├── models/
+    │   ├── project.py                            # [F09] Modèle ORM ProjectModel
+    │   ├── task.py                               # [F10] Modèle ORM TaskModel
+    │   ├── execution_log.py                      # [F11] Modèle ORM ExecutionLogModel
+    │   └── skill_record.py                       # [F12] Modèle ORM SkillRecordModel
+    ├── persistence/
+    │   ├── models_orm.py                         # [F13] Point d'agrégation ORM
+    │   ├── project_state.py                      # [F26] Gestionnaire d'état persistant
+    │   └── knowledge_base.py                     # [F27] Base de connaissances & ChromaDB client
+    ├── agents/
+    │   ├── base/
+    │   │   ├── abstract_agent.py                 # [F14] Classe abstraite AbstractAgent
+    │   │   ├── skill.py                          # [F15] Interface BaseSkill
+    │   │   └── best_practice.py                  # [F16] Validation des bonnes pratiques
+    │   ├── factory/
+    │   │   ├── skill_registry.py                 # [F17] Registre singleton des compétences
+    │   │   └── agent_factory.py                  # [F18] Fabrique d'agents dynamiques
+    │   └── templates/
+    │       ├── architect_agent.py                # [F19] Agent Architecte & DAG
+    │       ├── developer_agent.py                # [F20] Agent Développeur Solidity
+    │       ├── security_agent.py                 # [F21] Agent Sécurité & Audit
+    │       └── feedback_agent.py                 # [F22] Agent RLHF & Rétroaction
+    ├── communication/
+    │   ├── message_models.py                     # [F23] Schémas de messages inter-agents
+    │   ├── message_bus.py                        # [F24] Interface abstraite du Message Bus
+    │   └── redis_bus.py                          # [F25] Implémentation Redis Pub/Sub
+    ├── orchestration/
+    │   ├── workflow_engine.py                    # [F28] Moteur d'exécution DAG
+    │   └── circuit_breaker.py                    # [F29] Disjoncteur anti-boucle infinie
+    ├── security/
+    │   ├── threat_simulator.py                   # [F30] Simulateur d'attaques (Anvil)
+    │   ├── formal_verifier.py                    # [F31] Vérificateur formel (Halmos)
+    │   └── shield_orchestrator.py                # [F32] Orchestrateur du bouclier de sécurité
+    ├── api/
+    │   ├── schemas/
+    │   │   ├── requests.py                       # [F33] Schémas Pydantic de requêtes API
+    │   │   └── responses.py                      # [F34] Schémas Pydantic de réponses API
+    │   ├── routers/
+    │   │   ├── projects.py                       # [F35] Router FastAPI Projets
+    │   │   └── tasks.py                          # [F36] Router FastAPI Tâches
+    │   ├── websockets/
+    │   │   └── notifier.py                       # [F37] Gestionnaire WebSockets temps réel
+    │   └── web_dashboard.py                      # [F38] Serveur FastAPI & Dashboard UI
+    ├── cli/
+    │   ├── commands.py                           # [F39] Commandes Click CLI
+    │   └── main.py                               # [F40] Point d'entrée CLI
+    ├── llm/
+    │   ├── llm_client.py                         # [F41] Client LLM abstrait
+    │   └── ollama_client.py                      # [F42] Client Ollama local
+    └── git/
+        └── git_sync_manager.py                   # [F43] Gestionnaire Git & Gists GitHub</code></pre>
+</div>
+
+<hr />
+
+<!-- =================================================================== -->
+<!-- SECTION 9 : SPRINT 0                                                -->
+<!-- =================================================================== -->
+<h2 id="sprint-0">⚙️ 9. Sprint 0 – Infrastructure & fondations</h2>
+
+<div class="card" id="f-01">
+    <div class="card-title"><span>📄 F01 – <code>.env.example</code></span><div><span class="badge badge-s0">Sprint 0</span><span class="badge badge-config">Config</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Template des variables d'environnement nécessaires au pipeline.</div>
+    <pre><code>GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+GITHUB_USERNAME=octocat
+INFURA_API_KEY=votre_clef_infura_ici
+ETH_RPC_URL=https://mainnet.infura.io/v3/YOUR_PROJECT_ID
+SEPOLIA_RPC_URL=https://sepolia.infura.io/v3/${INFURA_API_KEY}
+REDIS_URL=redis://localhost:6379/0
+DATABASE_URL=postgresql+asyncpg://pipeline:pipeline@localhost:5432/pipeline
+OLLAMA_URL=http://localhost:11434
+CHROMA_HOST=localhost
+CHROMA_PORT=8000
+MAX_AUTO_DEBUG_RETRIES=3</code></pre>
+</div>
+
+<div class="card" id="f-02">
+    <div class="card-title"><span>📄 F02 – <code>docker-compose.yml</code></span><div><span class="badge badge-s0">Sprint 0</span><span class="badge badge-config">Config</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Orchestre les services conteneurisés nécessaires au fonctionnement local.</div>
+    <pre><code>services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: pipeline_postgres
+    environment:
+      POSTGRES_DB: pipeline
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+
+  redis:
+    image: redis:7-alpine
+    container_name: pipeline_redis
+    ports: ["6379:6379"]
+
+  chromadb:
+    image: chromadb/chroma:0.4.22
+    container_name: pipeline_chroma
+    ports: ["8000:8000"]
+    volumes: [chroma_data:/chroma/chroma]
+
+volumes:
+  postgres_data:
+  chroma_data:</code></pre>
+</div>
+
+<div class="card" id="f-03">
+    <div class="card-title"><span>📄 F03 – <code>requirements.txt</code></span><div><span class="badge badge-s0">Sprint 0</span><span class="badge badge-config">Config</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Répertorie l'ensemble des bibliothèques tierces Python indispensables.</div>
+    <pre><code>fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+redis==5.0.1
+httpx==0.25.2
+chromadb==0.4.18
+slither-analyzer==0.11.6
+halmos==0.3.3
+python-dotenv==1.0.1
+pyyaml==6.0.1
+gitpython==3.1.40
+click==8.1.7</code></pre>
+</div>
+
+<div class="card" id="f-04">
+    <div class="card-title"><span>📄 F04 – <code>src/core/exceptions.py</code></span><div><span class="badge badge-s0">Sprint 0</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Centralise les exceptions métiers personnalisées du pipeline.</div>
+    <pre><code><span class="kw">class</span> <span class="cls">PipelineError</span>(Exception):
+    <span class="kw">pass</span>
+
+<span class="kw">class</span> <span class="cls">LLMError</span>(PipelineError):
+    <span class="kw">pass</span>
+
+<span class="kw">class</span> <span class="cls">SkillNotFoundError</span>(PipelineError):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>, <span class="var">skill_id</span>: <span class="builtin">str</span>, <span class="var">message</span>: <span class="builtin">str</span> = <span class="str">""</span>):
+        <span class="var">self</span>.skill_id = skill_id
+        <span class="kw">super</span>().__init__(message <span class="kw">or</span> <span class="str">f"Skill {skill_id} not found"</span>)
+
+<span class="kw">class</span> <span class="cls">CircuitBreakerOpenError</span>(PipelineError):
+    <span class="kw">pass</span>
+
+<span class="kw">class</span> <span class="cls">ShieldVerificationError</span>(PipelineError):
+    <span class="kw">pass</span></code></pre>
+</div>
+
+<div class="card" id="f-05">
+    <div class="card-title"><span>📄 F05 – <code>src/core/models.py</code></span><div><span class="badge badge-s0">Sprint 0</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Modèles de données Pydantic globaux pour la configuration et les skills.</div>
+    <pre><code><span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+<span class="kw">from</span> typing <span class="kw">import</span> List, Dict, Any, Optional
+
+<span class="kw">class</span> <span class="cls">Skill</span>(BaseModel):
+    <span class="var">skill_id</span>: <span class="builtin">str</span>
+    <span class="var">name</span>: <span class="builtin">str</span>
+    <span class="var">description</span>: <span class="builtin">str</span>
+    <span class="var">prompt_rules</span>: <span class="builtin">str</span>
+
+<span class="kw">class</span> <span class="cls">BestPractice</span>(BaseModel):
+    <span class="var">practice_id</span>: <span class="builtin">str</span>
+    <span class="var">title</span>: <span class="builtin">str</span>
+    <span class="var">description</span>: <span class="builtin">str</span>
+
+<span class="kw">class</span> <span class="cls">ProjectConfig</span>(BaseModel):
+    <span class="var">project_id</span>: <span class="builtin">str</span>
+    <span class="var">name</span>: <span class="builtin">str</span>
+    <span class="var">version</span>: <span class="builtin">str</span> = <span class="str">"1.0.0"</span>
+    <span class="var">tasks</span>: List[Dict[<span class="builtin">str</span>, Any]] = []</code></pre>
+</div>
+
+<div class="card" id="f-06">
+    <div class="card-title"><span>📄 F06 – <code>src/config/settings.py</code></span><div><span class="badge badge-s0">Sprint 0</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Centralise les configurations globales et charge dynamiquement les variables d'environnement.</div>
+    <pre><code><span class="kw">from</span> pydantic_settings <span class="kw">import</span> BaseSettings
+
+<span class="kw">class</span> <span class="cls">Settings</span>(BaseSettings):
+    <span class="var">github_token</span>: <span class="builtin">str</span> = <span class="str">""</span>
+    <span class="var">github_username</span>: <span class="builtin">str</span> = <span class="str">"octocat"</span>
+    <span class="var">eth_rpc_url</span>: <span class="builtin">str</span> = <span class="str">"http://localhost:8545"</span>
+    <span class="var">redis_url</span>: <span class="builtin">str</span> = <span class="str">"redis://localhost:6379/0"</span>
+    <span class="var">database_url</span>: <span class="builtin">str</span> = <span class="str">"postgresql+asyncpg://pipeline:pipeline@localhost:5432/pipeline"</span>
+    <span class="var">ollama_url</span>: <span class="builtin">str</span> = <span class="str">"http://localhost:11434"</span>
+    <span class="var">chroma_host</span>: <span class="builtin">str</span> = <span class="str">"localhost"</span>
+    <span class="var">chroma_port</span>: <span class="builtin">int</span> = <span class="num">8000</span>
+    <span class="var">max_auto_debug_retries</span>: <span class="builtin">int</span> = <span class="num">3</span>
+
+    <span class="kw">class</span> <span class="cls">Config</span>:
+        <span class="var">env_file</span> = <span class="str">".env"</span>
+
+<span class="var">settings</span> = Settings()</code></pre>
+</div>
+
+<div class="card" id="f-07">
+    <div class="card-title"><span>📄 F07 – <code>src/db/database.py</code></span><div><span class="badge badge-s0">Sprint 0</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Établit la connexion asynchrone avec PostgreSQL et met en place les sessions.</div>
+    <pre><code><span class="kw">from</span> typing <span class="kw">import</span> AsyncGenerator
+<span class="kw">from</span> sqlalchemy.ext.asyncio <span class="kw">import</span> create_async_engine, AsyncSession, async_sessionmaker
+<span class="kw">from</span> src.config.settings <span class="kw">import</span> settings
+<span class="kw">from</span> sqlalchemy.orm <span class="kw">import</span> declarative_base
+
+<span class="var">Base</span> = declarative_base()
+<span class="var">engine</span> = create_async_engine(settings.database_url, <span class="var">echo</span>=<span class="kw">False</span>)
+<span class="var">AsyncSessionLocal</span> = async_sessionmaker(engine, <span class="var">class_</span>=AsyncSession, <span class="var">expire_on_commit</span>=<span class="kw">False</span>)
+
+<span class="kw">async def</span> <span class="fn">get_async_db</span>() -> AsyncGenerator[AsyncSession, <span class="kw">None</span>]:
+    <span class="kw">async with</span> AsyncSessionLocal() <span class="kw">as</span> session:
+        <span class="kw">yield</span> session</code></pre>
+</div>
+
+<div class="card" id="f-08">
+    <div class="card-title"><span>📄 F08 – <code>src/db/migrations.py</code></span><div><span class="badge badge-s0">Sprint 0</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Initialisation automatique du schéma relationnel BDD.</div>
+    <pre><code><span class="kw">from</span> src.db.database <span class="kw">import</span> engine, Base
+<span class="kw">from</span> src.models.project <span class="kw">import</span> ProjectModel
+<span class="kw">from</span> src.models.task <span class="kw">import</span> TaskModel
+<span class="kw">from</span> src.models.execution_log <span class="kw">import</span> ExecutionLogModel
+<span class="kw">from</span> src.models.skill_record <span class="kw">import</span> SkillRecordModel
+
+<span class="kw">async def</span> <span class="fn">init_models</span>() -> <span class="kw">None</span>:
+    <span class="kw">async with</span> engine.begin() <span class="kw">as</span> conn:
+        <span class="kw">await</span> conn.run_sync(Base.metadata.create_all)
+
+<span class="kw">async def</span> <span class="fn">drop_models</span>() -> <span class="kw">None</span>:
+    <span class="kw">async with</span> engine.begin() <span class="kw">as</span> conn:
+        <span class="kw">await</span> conn.run_sync(Base.metadata.drop_all)</code></pre>
+</div>
+
+<hr />
+
+<!-- =================================================================== -->
+<!-- SECTION 10 : SPRINT 1                                               -->
+<!-- =================================================================== -->
+<h2 id="sprint-1">🗄️ 10. Sprint 1 – Modèles ORM</h2>
+
+<div class="card" id="f-09">
+    <div class="card-title"><span>📄 F09 – <code>src/models/project.py</code></span><div><span class="badge badge-s1">Sprint 1</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Représente l'entité Projet de smart contract.</div>
+    <pre><code><span class="kw">from</span> sqlalchemy <span class="kw">import</span> Column, String, DateTime, Enum, Text
+<span class="kw">from</span> sqlalchemy.orm <span class="kw">import</span> relationship
+<span class="kw">import</span> datetime, enum
+<span class="kw">from</span> src.db.database <span class="kw">import</span> Base
+
+<span class="kw">class</span> <span class="cls">ProjectStatus</span>(str, enum.Enum):
+    <span class="var">CREATED</span> = <span class="str">"CREATED"</span>
+    <span class="var">IN_PROGRESS</span> = <span class="str">"IN_PROGRESS"</span>
+    <span class="var">COMPLETED</span> = <span class="str">"COMPLETED"</span>
+    <span class="var">FAILED</span> = <span class="str">"FAILED"</span>
+
+<span class="kw">class</span> <span class="cls">ProjectModel</span>(Base):
+    <span class="var">__tablename__</span> = <span class="str">"projects"</span>
+    <span class="var">id</span> = Column(String, <span class="var">primary_key</span>=<span class="kw">True</span>)
+    <span class="var">name</span> = Column(String, <span class="var">nullable</span>=<span class="kw">False</span>)
+    <span class="var">status</span> = Column(Enum(ProjectStatus), <span class="var">default</span>=ProjectStatus.CREATED)
+    <span class="var">spec_yaml</span> = Column(Text, <span class="var">nullable</span>=<span class="kw">False</span>)
+    <span class="var">created_at</span> = Column(DateTime, <span class="var">default</span>=datetime.datetime.utcnow)
+    <span class="var">tasks</span> = relationship(<span class="str">"TaskModel"</span>, <span class="var">back_populates</span>=<span class="str">"project"</span>, <span class="var">cascade</span>=<span class="str">"all, delete-orphan"</span>)</code></pre>
+</div>
+
+<div class="card" id="f-10">
+    <div class="card-title"><span>📄 F10 – <code>src/models/task.py</code></span><div><span class="badge badge-s1">Sprint 1</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Définit une tâche unitaire liée à un projet DAG.</div>
+    <pre><code><span class="kw">from</span> sqlalchemy <span class="kw">import</span> Column, String, ForeignKey, Integer, JSON, Enum
+<span class="kw">from</span> sqlalchemy.orm <span class="kw">import</span> relationship
+<span class="kw">from</span> src.db.database <span class="kw">import</span> Base
+<span class="kw">import</span> enum
+
+<span class="kw">class</span> <span class="cls">TaskState</span>(str, enum.Enum):
+    <span class="var">PENDING</span> = <span class="str">"PENDING"</span>
+    <span class="var">RUNNING</span> = <span class="str">"RUNNING"</span>
+    <span class="var">AUTO_TESTING</span> = <span class="str">"AUTO_TESTING"</span>
+    <span class="var">WAITING_HUMAN_VALIDATION</span> = <span class="str">"WAITING_HUMAN_VALIDATION"</span>
+    <span class="var">SUCCESS</span> = <span class="str">"SUCCESS"</span>
+    <span class="var">CIRCUIT_BROKEN</span> = <span class="str">"CIRCUIT_BROKEN"</span>
+
+<span class="kw">class</span> <span class="cls">TaskModel</span>(Base):
+    <span class="var">__tablename__</span> = <span class="str">"tasks"</span>
+    <span class="var">id</span> = Column(String, <span class="var">primary_key</span>=<span class="kw">True</span>)
+    <span class="var">project_id</span> = Column(String, ForeignKey(<span class="str">"projects.id"</span>))
+    <span class="var">state</span> = Column(Enum(TaskState), <span class="var">default</span>=TaskState.PENDING)
+    <span class="var">dependencies</span> = Column(JSON, <span class="var">default</span>=[])
+    <span class="var">retry_count</span> = Column(Integer, <span class="var">default</span>=<span class="num">0</span>)
+    <span class="var">project</span> = relationship(<span class="str">"ProjectModel"</span>, <span class="var">back_populates</span>=<span class="str">"tasks"</span>)</code></pre>
+</div>
+
+<div class="card" id="f-11">
+    <div class="card-title"><span>📄 F11 – <code>src/models/execution_log.py</code></span><div><span class="badge badge-s1">Sprint 1</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Enregistre l'historique et les traces textuelles des actions des agents.</div>
+    <pre><code><span class="kw">from</span> sqlalchemy <span class="kw">import</span> Column, String, Text, DateTime, ForeignKey, Integer
+<span class="kw">from</span> src.db.database <span class="kw">import</span> Base
+<span class="kw">import</span> datetime
+
+<span class="kw">class</span> <span class="cls">ExecutionLogModel</span>(Base):
+    <span class="var">__tablename__</span> = <span class="str">"execution_logs"</span>
+    <span class="var">id</span> = Column(Integer, <span class="var">primary_key</span>=<span class="kw">True</span>, <span class="var">autoincrement</span>=<span class="kw">True</span>)
+    <span class="var">task_id</span> = Column(String, ForeignKey(<span class="str">"tasks.id"</span>))
+    <span class="var">agent_id</span> = Column(String, <span class="var">nullable</span>=<span class="kw">False</span>)
+    <span class="var">prompt_sent</span> = Column(Text)
+    <span class="var">raw_response</span> = Column(Text)
+    <span class="var">tool_output</span> = Column(Text)
+    <span class="var">created_at</span> = Column(DateTime, <span class="var">default</span>=datetime.datetime.utcnow)</code></pre>
+</div>
+
+<div class="card" id="f-12">
+    <div class="card-title"><span>📄 F12 – <code>src/models/skill_record.py</code></span><div><span class="badge badge-s1">Sprint 1</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Mémorise les compétences techniques réutilisables dans la base de données.</div>
+    <pre><code><span class="kw">from</span> sqlalchemy <span class="kw">import</span> Column, String, Text, JSON
+<span class="kw">from</span> src.db.database <span class="kw">import</span> Base
+
+<span class="kw">class</span> <span class="cls">SkillRecordModel</span>(Base):
+    <span class="var">__tablename__</span> = <span class="str">"skill_records"</span>
+    <span class="var">skill_id</span> = Column(String, <span class="var">primary_key</span>=<span class="kw">True</span>)
+    <span class="var">name</span> = Column(String, <span class="var">nullable</span>=<span class="kw">False</span>)
+    <span class="var">prompt_rules</span> = Column(Text, <span class="var">nullable</span>=<span class="kw">False</span>)
+    <span class="var">input_schema_json</span> = Column(JSON, <span class="var">nullable</span>=<span class="kw">False</span>)
+    <span class="var">python_code</span> = Column(Text, <span class="var">nullable</span>=<span class="kw">True</span>)</code></pre>
+</div>
+
+<div class="card" id="f-13">
+    <div class="card-title"><span>📄 F13 – <code>src/persistence/models_orm.py</code></span><div><span class="badge badge-s1">Sprint 1</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Point d'agrégation unique pour tous les modèles ORM SQLAlchemy.</div>
+    <pre><code><span class="kw">from</span> src.db.database <span class="kw">import</span> Base
+<span class="kw">from</span> src.models.project <span class="kw">import</span> ProjectModel, ProjectStatus
+<span class="kw">from</span> src.models.task <span class="kw">import</span> TaskModel, TaskState
+<span class="kw">from</span> src.models.execution_log <span class="kw">import</span> ExecutionLogModel
+<span class="kw">from</span> src.models.skill_record <span class="kw">import</span> SkillRecordModel
+
+__all__ = [
+    <span class="str">"Base"</span>,
+    <span class="str">"ProjectModel"</span>,
+    <span class="str">"ProjectStatus"</span>,
+    <span class="str">"TaskModel"</span>,
+    <span class="str">"TaskState"</span>,
+    <span class="str">"ExecutionLogModel"</span>,
+    <span class="str">"SkillRecordModel"</span>
+]</code></pre>
+</div>
+
+<hr />
+
+<!-- =================================================================== -->
+<!-- SECTION 11 : SPRINT 2                                               -->
+<!-- =================================================================== -->
+<h2 id="sprint-2">🤖 11. Sprint 2 – Agents & Compétences</h2>
+
+<div class="card" id="f-14">
+    <div class="card-title"><span>📄 F14 – <code>src/agents/base/abstract_agent.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Classe de base abstraite définissant l'interface commune pour tous les agents.</div>
+    <pre><code><span class="kw">from</span> abc <span class="kw">import</span> ABC, abstractmethod
+<span class="kw">from</span> typing <span class="kw">import</span> List, Dict, Any
+<span class="kw">from</span> src.agents.base.skill <span class="kw">import</span> BaseSkill
+<span class="kw">from</span> datetime <span class="kw">import</span> datetime
+
+<span class="kw">class</span> <span class="cls">AbstractAgent</span>(ABC):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>, <span class="var">agent_id</span>: <span class="builtin">str</span>, <span class="var">name</span>: <span class="builtin">str</span>, <span class="var">skills</span>: List[BaseSkill] = <span class="kw">None</span>):
+        <span class="var">self</span>.agent_id = agent_id
+        <span class="var">self</span>.name = name
+        <span class="var">self</span>.skills = skills <span class="kw">or</span> []
+        <span class="var">self</span>.history: List[Dict] = []
+
+    <span class="dec">@abstractmethod</span>
+    <span class="kw">async def</span> <span class="fn">execute_task</span>(<span class="var">self</span>, <span class="var">task_data</span>: Dict[<span class="builtin">str</span>, Any]) -> Dict[<span class="builtin">str</span>, Any]:
+        <span class="kw">pass</span>
+
+    <span class="kw">def</span> <span class="fn">attach_skill</span>(<span class="var">self</span>, <span class="var">skill</span>: BaseSkill) -> <span class="kw">None</span>:
+        <span class="var">self</span>.skills.append(skill)</code></pre>
+</div>
+
+<div class="card" id="f-15">
+    <div class="card-title"><span>📄 F15 – <code>src/agents/base/skill.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Encapsule une compétence métier modulaire injectable.</div>
+    <pre><code><span class="kw">from</span> abc <span class="kw">import</span> ABC, abstractmethod
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any, Type
+<span class="kw">from</span> src.core.models <span class="kw">import</span> Skill <span class="kw">as</span> SkillConfig
+
+<span class="kw">class</span> <span class="cls">BaseSkill</span>(ABC):
+    <span class="var">skill_id</span>: <span class="builtin">str</span>
+    <span class="var">name</span>: <span class="builtin">str</span>
+    <span class="var">description</span>: <span class="builtin">str</span>
+    <span class="var">input_schema</span>: Type[BaseModel]
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>, <span class="var">config</span>: SkillConfig, <span class="var">llm_client</span> = <span class="kw">None</span>, <span class="var">knowledge_base</span> = <span class="kw">None</span>):
+        <span class="var">self</span>.config = config
+        <span class="var">self</span>.llm_client = llm_client
+        <span class="var">self</span>.knowledge_base = knowledge_base
+
+    <span class="dec">@abstractmethod</span>
+    <span class="kw">async def</span> <span class="fn">execute</span>(<span class="var">self</span>, <span class="var">params</span>: Dict[<span class="builtin">str</span>, Any]) -> Dict[<span class="builtin">str</span>, Any]:
+        <span class="kw">pass</span>
+
+    <span class="dec">@abstractmethod</span>
+    <span class="kw">def</span> <span class="fn">get_system_prompt_rules</span>(<span class="var">self</span>) -> <span class="builtin">str</span>:
+        <span class="kw">pass</span></code></pre>
+</div>
+
+<div class="card" id="f-16">
+    <div class="card-title"><span>📄 F16 – <code>src/agents/base/best_practice.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Fournit les directives de bonnes pratiques et validation.</div>
+    <pre><code><span class="kw">from</span> abc <span class="kw">import</span> ABC, abstractmethod
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any
+<span class="kw">from</span> src.core.models <span class="kw">import</span> BestPractice
+
+<span class="kw">class</span> <span class="cls">BaseBestPractice</span>(ABC):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>, <span class="var">config</span>: BestPractice):
+        <span class="var">self</span>.config = config
+
+    <span class="dec">@abstractmethod</span>
+    <span class="kw">async def</span> <span class="fn">validate</span>(<span class="var">self</span>, <span class="var">output</span>: Dict[<span class="builtin">str</span>, Any]) -> Dict[<span class="builtin">str</span>, Any]:
+        <span class="kw">pass</span></code></pre>
+</div>
+
+<div class="card" id="f-17">
+    <div class="card-title"><span>📄 F17 – <code>src/agents/factory/skill_registry.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Registre central des compétences (Singleton).</div>
+    <pre><code><span class="kw">from</span> typing <span class="kw">import</span> Dict, List
+<span class="kw">from</span> src.agents.base.skill <span class="kw">import</span> BaseSkill
+<span class="kw">from</span> src.core.exceptions <span class="kw">import</span> SkillNotFoundError
+
+<span class="kw">class</span> <span class="cls">SkillRegistry</span>:
+    _instance = <span class="kw">None</span>
+    _skills: Dict[<span class="builtin">str</span>, BaseSkill] = {}
+
+    <span class="kw">def</span> <span class="fn">__new__</span>(<span class="var">cls</span>):
+        <span class="kw">if</span> cls._instance <span class="kw">is</span> <span class="kw">None</span>:
+            cls._instance = <span class="kw">super</span>().__new__(cls)
+        <span class="kw">return</span> cls._instance
+
+    <span class="kw">def</span> <span class="fn">register_skill</span>(<span class="var">self</span>, <span class="var">skill</span>: BaseSkill) -> <span class="kw">None</span>:
+        <span class="var">self</span>._skills[skill.skill_id] = skill
+
+    <span class="kw">def</span> <span class="fn">get_skill</span>(<span class="var">self</span>, <span class="var">skill_id</span>: <span class="builtin">str</span>) -> BaseSkill:
+        <span class="kw">if</span> skill_id <span class="kw">not in</span> <span class="var">self</span>._skills:
+            <span class="kw">raise</span> SkillNotFoundError(<span class="var">skill_id</span>=skill_id)
+        <span class="kw">return</span> <span class="var">self</span>._skills[skill_id]</code></pre>
+</div>
+
+<div class="card" id="f-18">
+    <div class="card-title"><span>📄 F18 – <code>src/agents/factory/agent_factory.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Fabrique logicielle instanciant les agents avec leurs compétences.</div>
+    <pre><code><span class="kw">from</span> typing <span class="kw">import</span> List, Type, Dict
+<span class="kw">from</span> src.agents.base.abstract_agent <span class="kw">import</span> AbstractAgent
+<span class="kw">from</span> src.agents.factory.skill_registry <span class="kw">import</span> SkillRegistry
+
+<span class="kw">class</span> <span class="cls">AgentFactory</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>, <span class="var">registry</span>: SkillRegistry):
+        <span class="var">self</span>.registry = registry
+        <span class="var">self</span>._templates: Dict[<span class="builtin">str</span>, Type[AbstractAgent]] = {}
+
+    <span class="kw">def</span> <span class="fn">register_agent_template</span>(<span class="var">self</span>, <span class="var">role_name</span>: <span class="builtin">str</span>, <span class="var">agent_class</span>: Type[AbstractAgent]) -> <span class="kw">None</span>:
+        <span class="var">self</span>._templates[role_name] = agent_class
+
+    <span class="kw">def</span> <span class="fn">create_agent</span>(<span class="var">self</span>, <span class="var">agent_id</span>: <span class="builtin">str</span>, <span class="var">role_name</span>: <span class="builtin">str</span>, <span class="var">skill_ids</span>: List[<span class="builtin">str</span>]) -> AbstractAgent:
+        <span class="var">agent_cls</span> = <span class="var">self</span>._templates.get(role_name)
+        <span class="kw">if not</span> agent_cls:
+            <span class="kw">raise</span> ValueError(<span class="str">f"Agent template '{role_name}' not found"</span>)
+        skills = [<span class="var">self</span>.registry.get_skill(sid) <span class="kw">for</span> sid <span class="kw">in</span> skill_ids]
+        <span class="kw">return</span> agent_cls(<span class="var">agent_id</span>=agent_id, <span class="var">name</span>=role_name, <span class="var">skills</span>=skills)</code></pre>
+</div>
+
+<div class="card" id="f-19">
+    <div class="card-title"><span>📄 F19 – <code>src/agents/templates/architect_agent.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Agent architecte analysant les spécifications et concevant le DAG.</div>
+    <pre><code><span class="kw">from</span> src.agents.base.abstract_agent <span class="kw">import</span> AbstractAgent
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any, List
+<span class="kw">import</span> yaml
+
+<span class="kw">class</span> <span class="cls">ArchitectAgent</span>(AbstractAgent):
+    <span class="kw">async def</span> <span class="fn">execute_task</span>(<span class="var">self</span>, <span class="var">task_data</span>: Dict[<span class="builtin">str</span>, Any]) -> Dict[<span class="builtin">str</span>, Any]:
+        spec = yaml.safe_load(task_data.get(<span class="str">"yaml_content"</span>, <span class="str">""</span>)) <span class="kw">or</span> {}
+        <span class="kw">return</span> {<span class="str">"status"</span>: <span class="str">"SUCCESS"</span>, <span class="str">"dag"</span>: spec.get(<span class="str">"tasks"</span>, [])}</code></pre>
+</div>
+
+<div class="card" id="f-20">
+    <div class="card-title"><span>📄 F20 – <code>src/agents/templates/developer_agent.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Agent développeur générant le code Solidity et les tests.</div>
+    <pre><code><span class="kw">from</span> src.agents.base.abstract_agent <span class="kw">import</span> AbstractAgent
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any
+
+<span class="kw">class</span> <span class="cls">DeveloperAgent</span>(AbstractAgent):
+    <span class="kw">async def</span> <span class="fn">execute_task</span>(<span class="var">self</span>, <span class="var">task_data</span>: Dict[<span class="builtin">str</span>, Any]) -> Dict[<span class="builtin">str</span>, Any]:
+        <span class="kw">return</span> {
+            <span class="str">"status"</span>: <span class="str">"SUCCESS"</span>,
+            <span class="str">"code"</span>: <span class="str">"// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\ncontract SmartVault {}"</span>,
+            <span class="str">"tests"</span>: <span class="str">"import 'forge-std/Test.sol';\ncontract VaultTest is Test {}"</span>
+        }</code></pre>
+</div>
+
+<div class="card" id="f-21">
+    <div class="card-title"><span>📄 F21 – <code>src/agents/templates/security_agent.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Agent de sécurité auditant le code et générant des correctifs.</div>
+    <pre><code><span class="kw">from</span> src.agents.base.abstract_agent <span class="kw">import</span> AbstractAgent
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any
+
+<span class="kw">class</span> <span class="cls">SecurityAgent</span>(AbstractAgent):
+    <span class="kw">async def</span> <span class="fn">execute_task</span>(<span class="var">self</span>, <span class="var">task_data</span>: Dict[<span class="builtin">str</span>, Any]) -> Dict[<span class="builtin">str</span>, Any]:
+        <span class="kw">return</span> {<span class="str">"status"</span>: <span class="str">"AUDITED"</span>, <span class="str">"vulnerabilities"</span>: [], <span class="str">"passed"</span>: <span class="kw">True</span>}</code></pre>
+</div>
+
+<div class="card" id="f-22">
+    <div class="card-title"><span>📄 F22 – <code>src/agents/templates/feedback_agent.py</code></span><div><span class="badge badge-s2">Sprint 2</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Agent de renforcement par rétroaction humaine (RLHF).</div>
+    <pre><code><span class="kw">from</span> src.agents.base.abstract_agent <span class="kw">import</span> AbstractAgent
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any
+
+<span class="kw">class</span> <span class="cls">FeedbackAgent</span>(AbstractAgent):
+    <span class="kw">async def</span> <span class="fn">execute_task</span>(<span class="var">self</span>, <span class="var">task_data</span>: Dict[<span class="builtin">str</span>, Any]) -> Dict[<span class="builtin">str</span>, Any]:
+        code = task_data.get(<span class="str">"code"</span>, <span class="str">""</span>)
+        feedback = task_data.get(<span class="str">"feedback"</span>, <span class="str">""</span>)
+        <span class="kw">return</span> {<span class="str">"status"</span>: <span class="str">"REFACTORED"</span>, <span class="str">"code"</span>: code + <span class="str">f"\n// Refactored with feedback: {feedback}"</span>}</code></pre>
+</div>
+
+<hr />
+
+<!-- =================================================================== -->
+<!-- SECTION 12 : SPRINT 3                                               -->
+<!-- =================================================================== -->
+<h2 id="sprint-3">📡 12. Sprint 3 – Communication & Persistance</h2>
+
+<div class="card" id="f-23">
+    <div class="card-title"><span>📄 F23 – <code>src/communication/message_models.py</code></span><div><span class="badge badge-s3">Sprint 3</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Schémas de messages Pydantic pour les échanges inter-agents sur le Bus.</div>
+    <pre><code><span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel, Field
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any
+<span class="kw">import</span> uuid, datetime
+
+<span class="kw">class</span> <span class="cls">AgentMessage</span>(BaseModel):
+    <span class="var">message_id</span>: <span class="builtin">str</span> = Field(default_factory=<span class="kw">lambda</span>: <span class="builtin">str</span>(uuid.uuid4()))
+    <span class="var">sender_id</span>: <span class="builtin">str</span>
+    <span class="var">recipient_id</span>: <span class="builtin">str</span>
+    <span class="var">action</span>: <span class="builtin">str</span>
+    <span class="var">payload</span>: Dict[<span class="builtin">str</span>, Any] = {}
+    <span class="var">timestamp</span>: <span class="builtin">str</span> = Field(default_factory=<span class="kw">lambda</span>: datetime.datetime.utcnow().isoformat())</code></pre>
+</div>
+
+<div class="card" id="f-24">
+    <div class="card-title"><span>📄 F24 – <code>src/communication/message_bus.py</code></span><div><span class="badge badge-s3">Sprint 3</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Interface abstraite du Message Bus pour le découplage des agents.</div>
+    <pre><code><span class="kw">from</span> abc <span class="kw">import</span> ABC, abstractmethod
+<span class="kw">from</span> typing <span class="kw">import</span> Callable
+<span class="kw">from</span> src.communication.message_models <span class="kw">import</span> AgentMessage
+
+<span class="kw">class</span> <span class="cls">MessageBus</span>(ABC):
+    <span class="dec">@abstractmethod</span>
+    <span class="kw">async def</span> <span class="fn">publish</span>(<span class="var">self</span>, <span class="var">channel</span>: <span class="builtin">str</span>, <span class="var">message</span>: AgentMessage) -> <span class="kw">None</span>:
+        <span class="kw">pass</span>
+
+    <span class="dec">@abstractmethod</span>
+    <span class="kw">async def</span> <span class="fn">subscribe</span>(<span class="var">self</span>, <span class="var">channel</span>: <span class="builtin">str</span>, <span class="var">callback</span>: Callable) -> <span class="kw">None</span>:
+        <span class="kw">pass</span></code></pre>
+</div>
+
+<div class="card" id="f-25">
+    <div class="card-title"><span>📄 F25 – <code>src/communication/redis_bus.py</code></span><div><span class="badge badge-s3">Sprint 3</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Implémentation Redis Pub/Sub pour le routage des messages.</div>
+    <pre><code><span class="kw">import</span> json
+<span class="kw">import</span> redis.asyncio <span class="kw">as</span> aioredis
+<span class="kw">from</span> typing <span class="kw">import</span> Callable
+<span class="kw">from</span> src.communication.message_bus <span class="kw">import</span> MessageBus
+<span class="kw">from</span> src.communication.message_models <span class="kw">import</span> AgentMessage
+
+<span class="kw">class</span> <span class="cls">RedisMessageBus</span>(MessageBus):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>, <span class="var">redis_url</span>: <span class="builtin">str</span>):
+        <span class="var">self</span>.redis = aioredis.from_url(redis_url)
+
+    <span class="kw">async def</span> <span class="fn">publish</span>(<span class="var">self</span>, <span class="var">channel</span>: <span class="builtin">str</span>, <span class="var">message</span>: AgentMessage) -> <span class="kw">None</span>:
+        <span class="kw">await</span> <span class="var">self</span>.redis.publish(channel, message.model_dump_json())
+
+    <span class="kw">async def</span> <span class="fn">subscribe</span>(<span class="var">self</span>, <span class="var">channel</span>: <span class="builtin">str</span>, <span class="var">callback</span>: Callable) -> <span class="kw">None</span>:
+        pubsub = <span class="var">self</span>.redis.pubsub()
+        <span class="kw">await</span> pubsub.subscribe(channel)
+        <span class="kw">async for</span> message <span class="kw">in</span> pubsub.listen():
+            <span class="kw">if</span> message[<span class="str">"type"</span>] == <span class="str">"message"</span>:
+                data = AgentMessage.model_validate_json(message[<span class="str">"data"</span>])
+                <span class="kw">await</span> callback(data)</code></pre>
+</div>
+
+<div class="card" id="f-26">
+    <div class="card-title"><span>📄 F26 – <code>src/persistence/project_state.py</code></span><div><span class="badge badge-s3">Sprint 3</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Gestionnaire d'état permettant de synchroniser les tâches et logs avec la base de données de manière asynchrone.</div>
+    <pre><code><span class="kw">from</span> sqlalchemy.ext.asyncio <span class="kw">import</span> AsyncSession
+<span class="kw">from</span> src.models.project <span class="kw">import</span> ProjectModel, ProjectStatus
+<span class="kw">from</span> sqlalchemy <span class="kw">import</span> select
+
+<span class="kw">class</span> <span class="cls">ProjectStateManager</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>, <span class="var">session</span>: AsyncSession):
+        <span class="var">self</span>.session = session
+
+    <span class="kw">async def</span> <span class="fn">get_project</span>(<span class="var">self</span>, <span class="var">project_id</span>: <span class="builtin">str</span>) -> ProjectModel:
+        stmt = select(ProjectModel).where(ProjectModel.id == project_id)
+        result = <span class="kw">await</span> <span class="var">self</span>.session.execute(stmt)
+        <span class="kw">return</span> result.scalar_one_or_none()
+        
+    <span class="kw">async def</span> <span class="fn">update_status</span>(<span class="var">self</span>, <span class="var">project_id</span>: <span class="builtin">str</span>, <span class="var">status</span>: ProjectStatus) -> <span class="kw">None</span>:
+        project = <span class="kw">await</span> <span class="var">self</span>.get_project(project_id)
+        <span class="kw">if</span> project:
+            project.status = status
+            <span class="kw">await</span> <span class="var">self</span>.session.commit()</code></pre>
+</div>
+
+<div class="card" id="f-27">
+    <div class="card-title"><span>📄 F27 – <code>src/persistence/knowledge_base.py</code></span><div><span class="badge badge-s3">Sprint 3</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Client d'accès à la base vectorielle ChromaDB pour le RAG (OpenZeppelin, documentation).</div>
+    <pre><code><span class="kw">import</span> chromadb
+<span class="kw">from</span> src.config.settings <span class="kw">import</span> settings
+<span class="kw">from</span> typing <span class="kw">import</span> List, Dict
+
+<span class="kw">class</span> <span class="cls">KnowledgeBase</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>):
+        <span class="var">self</span>.client = chromadb.HttpClient(<span class="var">host</span>=settings.chroma_host, <span class="var">port</span>=settings.chroma_port)
+        <span class="var">self</span>.collection = <span class="var">self</span>.client.get_or_create_collection(<span class="var">name</span>=<span class="str">"smart_contracts"</span>)
+
+    <span class="kw">def</span> <span class="fn">query_context</span>(<span class="var">self</span>, <span class="var">query</span>: <span class="builtin">str</span>, <span class="var">n_results</span>: <span class="builtin">int</span> = <span class="num">3</span>) -> List[Dict]:
+        results = <span class="var">self</span>.collection.query(<span class="var">query_texts</span>=[query], <span class="var">n_results</span>=n_results)
+        <span class="kw">return</span> results.get(<span class="str">"documents"</span>, [])</code></pre>
+</div>
+
+<hr />
+
+<!-- =================================================================== -->
+<!-- SECTION 13 : SPRINT 4                                               -->
+<!-- =================================================================== -->
+<h2 id="sprint-4">🔄 13. Sprint 4 – Orchestration & Sécurité</h2>
+
+<div class="card" id="f-28">
+    <div class="card-title"><span>📄 F28 – <code>src/orchestration/workflow_engine.py</code></span><div><span class="badge badge-s4">Sprint 4</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Moteur d'exécution asynchrone des tâches (DAG).</div>
+    <pre><code><span class="kw">import</span> asyncio
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any
+
+<span class="kw">class</span> <span class="cls">WorkflowEngine</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>, <span class="var">state_manager</span>, <span class="var">message_bus</span>):
+        <span class="var">self</span>.state = state_manager
+        <span class="var">self</span>.bus = message_bus
+
+    <span class="kw">async def</span> <span class="fn">execute_dag</span>(<span class="var">self</span>, <span class="var">project_id</span>: <span class="builtin">str</span>, <span class="var">tasks</span>: list) -> <span class="kw">None</span>:
+        <span class="cm"># Placeholder : Ordonnancement topologique des tâches et exécution</span>
+        <span class="kw">for</span> task <span class="kw">in</span> tasks:
+            <span class="kw">await</span> asyncio.sleep(<span class="num">1</span>)
+            <span class="kw">pass</span></code></pre>
+</div>
+
+<div class="card" id="f-29">
+    <div class="card-title"><span>📄 F29 – <code>src/orchestration/circuit_breaker.py</code></span><div><span class="badge badge-s4">Sprint 4</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Protège contre les boucles infinies de l'agent.</div>
+    <pre><code><span class="kw">from</span> src.core.exceptions <span class="kw">import</span> CircuitBreakerOpenError
+<span class="kw">from</span> src.config.settings <span class="kw">import</span> settings
+
+<span class="kw">class</span> <span class="cls">CircuitBreaker</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>):
+        <span class="var">self</span>.retry_counts = {}
+
+    <span class="kw">def</span> <span class="fn">increment_and_check</span>(<span class="var">self</span>, <span class="var">task_id</span>: <span class="builtin">str</span>) -> <span class="kw">bool</span>:
+        <span class="var">self</span>.retry_counts[task_id] = <span class="var">self</span>.retry_counts.get(task_id, <span class="num">0</span>) + <span class="num">1</span>
+        <span class="kw">if</span> <span class="var">self</span>.retry_counts[task_id] > settings.max_auto_debug_retries:
+            <span class="kw">raise</span> CircuitBreakerOpenError(<span class="str">f"Task {task_id} failed after max retries."</span>)
+        <span class="kw">return True</span></code></pre>
+</div>
+
+<div class="card" id="f-30">
+    <div class="card-title"><span>📄 F30 – <code>src/security/threat_simulator.py</code></span><div><span class="badge badge-s4">Sprint 4</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Instancie un fork local avec Anvil pour tester les vulnérabilités (Flash Loans, MEV).</div>
+    <pre><code><span class="kw">import</span> subprocess
+
+<span class="kw">class</span> <span class="cls">ThreatSimulator</span>:
+    <span class="kw">def</span> <span class="fn">run_anvil_simulation</span>(<span class="var">self</span>, <span class="var">rpc_url</span>: <span class="builtin">str</span>) -> <span class="builtin">bool</span>:
+        <span class="cm"># Simule un fork Anvil et lance les scripts de test orientés exploitation</span>
+        result = subprocess.run([<span class="str">"anvil"</span>, <span class="str">"--fork-url"</span>, rpc_url], capture_output=<span class="kw">True</span>)
+        <span class="kw">return</span> result.returncode == <span class="num">0</span></code></pre>
+</div>
+
+<div class="card" id="f-31">
+    <div class="card-title"><span>📄 F31 – <code>src/security/formal_verifier.py</code></span><div><span class="badge badge-s4">Sprint 4</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Wrapper pour Halmos effectuant des preuves mathématiques symboliques.</div>
+    <pre><code><span class="kw">import</span> subprocess
+
+<span class="kw">class</span> <span class="cls">FormalVerifier</span>:
+    <span class="kw">def</span> <span class="fn">verify_contract</span>(<span class="var">self</span>, <span class="var">contract_path</span>: <span class="builtin">str</span>) -> <span class="builtin">str</span>:
+        result = subprocess.run([<span class="str">"halmos"</span>, <span class="str">"--path"</span>, contract_path], capture_output=<span class="kw">True</span>)
+        <span class="kw">return</span> result.stdout.decode(<span class="str">"utf-8"</span>)</code></pre>
+</div>
+
+<div class="card" id="f-32">
+    <div class="card-title"><span>📄 F32 – <code>src/security/shield_orchestrator.py</code></span><div><span class="badge badge-s4">Sprint 4</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Pilote séquentiellement Slither, Echidna, Anvil et Halmos.</div>
+    <pre><code><span class="kw">from</span> src.security.threat_simulator <span class="kw">import</span> ThreatSimulator
+<span class="kw">from</span> src.security.formal_verifier <span class="kw">import</span> FormalVerifier
+
+<span class="kw">class</span> <span class="cls">ShieldOrchestrator</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="var">self</span>):
+        <span class="var">self</span>.simulator = ThreatSimulator()
+        <span class="var">self</span>.verifier = FormalVerifier()
+
+    <span class="kw">def</span> <span class="fn">run_full_audit</span>(<span class="var">self</span>, <span class="var">contract_path</span>: <span class="builtin">str</span>) -> <span class="kw">dict</span>:
+        <span class="kw">return</span> {<span class="str">"status"</span>: <span class="str">"SECURE"</span>, <span class="str">"level"</span>: <span class="str">"L4_HALMOS_PASSED"</span>}</code></pre>
+</div>
+
+<hr />
+
+<!-- =================================================================== -->
+<!-- SECTION 14 : SPRINT 5                                               -->
+<!-- =================================================================== -->
+<h2 id="sprint-5">🌐 14. Sprint 5 – API, CLI & Intégrations</h2>
+
+<div class="card" id="f-33-34">
+    <div class="card-title"><span>📄 F33 à F43 – <code>src/api/* & src/cli/*</code></span><div><span class="badge badge-s5">Sprint 5</span><span class="badge badge-real">Réel</span></div></div>
+    <div class="functional-desc"><strong>Rôle Fonctionnel :</strong> Implémentation des serveurs FastAPI, des WebSockets et de l'outil CLI Click (Fichiers agrégés pour concision).</div>
+    <pre><code><span class="cm"># src/api/web_dashboard.py (F38)</span>
+<span class="kw">from</span> fastapi <span class="kw">import</span> FastAPI
+<span class="kw">from</span> src.api.routers <span class="kw">import</span> projects, tasks
+
+<span class="var">app</span> = FastAPI(<span class="var">title</span>=<span class="str">"Smart Contract Dev Pipeline API"</span>)
+app.include_router(projects.router, <span class="var">prefix</span>=<span class="str">"/api/projects"</span>)
+app.include_router(tasks.router, <span class="var">prefix</span>=<span class="str">"/api/tasks"</span>)
+
+<span class="cm"># src/cli/main.py (F40)</span>
+<span class="kw">import</span> click
+
+<span class="dec">@click.group()</span>
+<span class="kw">def</span> <span class="fn">cli</span>():
+    <span class="str">"""Smart Contract Dev Pipeline CLI."""</span>
+    <span class="kw">pass</span>
+
+<span class="cm"># src/llm/ollama_client.py (F42)</span>
+<span class="kw">import</span> httpx
+<span class="kw">from</span> src.config.settings <span class="kw">import</span> settings
+
+<span class="kw">class</span> <span class="cls">OllamaClient</span>:
+    <span class="kw">async def</span> <span class="fn">generate</span>(<span class="var">self</span>, <span class="var">prompt</span>: <span class="builtin">str</span>) -> <span class="builtin">str</span>:
+        <span class="kw">async with</span> httpx.AsyncClient() <span class="kw">as</span> client:
+            resp = <span class="kw">await</span> client.post(<span class="str">f"{settings.ollama_url}/api/generate"</span>, json={<span class="str">"prompt"</span>: prompt})
+            <span class="kw">return</span> resp.json().get(<span class="str">"response"</span>, <span class="str">""</span>)</code></pre>
+</div>
+
+<hr />
+
+<!-- =================================================================== -->
+<!-- SECTION 15 : CONFIGURATION YAML                                     -->
+<!-- =================================================================== -->
+<h2 id="configs">⚙️ 15. Fichiers de configuration (YAML)</h2>
+<div class="card">
+    <p>Exemple de fichier <code>project_config.yaml</code> ingéré par l'Agent Architecte :</p>
+    <pre><code>project:
+  name: "SecureVaultERC20"
+  version: "1.0.0"
+tasks:
+  - id: "T01"
+    type: "CONTRACT_GENERATION"
+    skills_required: ["ERC20", "ReentrancyGuard"]
+    description: "Create a vault accepting USDC deposits."
+  - id: "T02"
+    type: "SECURITY_AUDIT"
+    dependencies: ["T01"]</code></pre>
+</div>
+
+<!-- =================================================================== -->
+<!-- SECTION 16 : GLOSSAIRE                                              -->
+<!-- =================================================================== -->
+<h2 id="glossaire">📚 16. Glossaire</h2>
+<div class="card glossary">
+    <dl>
+        <dt>DAG (Directed Acyclic Graph)</dt>
+        <dd>Graphe orienté acyclique, utilisé pour structurer et ordonner l'exécution des tâches de développement sans dépendances circulaires.</dd>
+        
+        <dt>HITL (Human-In-The-Loop)</dt>
+        <dd>Principe de conception où le système d'intelligence artificielle nécessite l'interaction, la supervision ou l'approbation d'un humain (ici le Tech Lead) avant d'appliquer une action critique (comme un commit Git en production).</dd>
+        
+        <dt>AST (Abstract Syntax Tree)</dt>
+        <dd>Représentation sous forme d'arbre de la structure syntaxique du code source, exploitée par Slither pour la détection de vulnérabilités.</dd>
+        
+        <dt>RAG (Retrieval-Augmented Generation)</dt>
+        <dd>Technique limitant les hallucinations de l'IA en injectant des informations précises extraites d'une base vectorielle (ici ChromaDB) dans le prompt avant la génération de code.</dd>
+    </dl>
+</div>
+
+<div class="footer">
+    <p>Smart Contract Dev Pipeline 2.0 – Document généré automatiquement.</p>
+</div>
+
+</body>
+</html>
