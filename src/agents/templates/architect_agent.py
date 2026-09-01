@@ -1,7 +1,7 @@
 # src/agents/templates/architect_agent.py
+from src.agents.base.abstract_agent import AbstractAgent
 from typing import Dict, Any, List
 import yaml
-from src.agents.base.abstract_agent import AbstractAgent
 
 class ArchitectAgent(AbstractAgent):
     """Agent spécialisé dans l'architecture et l'orchestration."""
@@ -15,13 +15,19 @@ class ArchitectAgent(AbstractAgent):
         return {
             "status": "success",
             "spec": spec,
-            "dag": dag
+            "dag": dag,
+            "skills_required": self._extract_skills(spec)
         }
-    
+
     def parse_yaml_spec(self, yaml_text: str) -> Dict[str, Any]:
         """Parse la spécification YAML."""
         return yaml.safe_load(yaml_text) or {}
-    
+
     def generate_dag_nodes(self, parsed_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Génère les nœuds du DAG."""
-        return parsed_spec.get("tasks", [])
+        return parsed_spec.get("sprint_workflow", [])
+
+    def _extract_skills(self, spec: Dict[str, Any]) -> List[str]:
+        """Extrait la liste des compétences requises."""
+        requirements = spec.get("team_requirements", [])
+        return [req.get("skill") for req in requirements if req.get("skill")]

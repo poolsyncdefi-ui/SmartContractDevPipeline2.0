@@ -8,11 +8,13 @@ class BaseBestPractice(ABC):
     
     def __init__(self, config: BestPracticeConfig):
         self.config = config
-    
+
     @abstractmethod
     async def validate(self, output: Dict[str, Any]) -> Dict[str, Any]:
         """
         Valide la sortie d'une compétence.
-        Retourne: {"passed": bool, "message": str, "details": dict}
+        
+        Returns:
+            {"passed": bool, "message": str, "details": dict}
         """
         pass

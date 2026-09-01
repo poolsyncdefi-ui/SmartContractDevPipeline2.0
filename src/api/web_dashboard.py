@@ -1,85 +1,65 @@
-# ==============================================================================
-# Smart Contract Dev Pipeline 2.0 - FastAPI Dashboard & Orchestrator
-# ==============================================================================
-
-from fastapi import FastAPI, HTTPException
-import subprocess
-import os
+# src/api/web_dashboard.py
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+from src.api.routers import projects, tasks
+from src.api.websockets.notifier import ConnectionManager
+from src.db.migrations import init_models
+import asyncio
+from datetime import datetime
 
 app = FastAPI(
-    title="Smart Contract Dev Pipeline 2.0 API",
-    description="API de pilotage et de reporting pour les smart contracts (Foundry, Slither, Halmos)",
-    version="2.0.0"
+    title="Smart Contract Dev Pipeline 2.0",
+    version="2.0.0",
+    description="Pipeline de développement de smart contracts avec agents IA"
 )
 
-@app.get("/")
-def read_root():
-    return {
-        "status": "online",
-        "pipeline": "Smart Contract Dev Pipeline 2.0",
-        "modules": {
-            "halmos": "/run/halmos",
-            "slither": "/run/slither",
-            "status": "/status"
-        }
-    }
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
-@app.get("/status")
-def get_pipeline_status():
-    return {
-        "solc_version": "0.8.33",
-        "foundry_version": "1.7.1",
-        "pipeline_status": "ready"
-    }
+# Routes
+app.include_router(projects.router)
+app.include_router(tasks.router)
 
-@app.post("/run/halmos")
-def trigger_halmos():
-    """Exécute la vérification formelle Halmos via le script Python dédié."""
-    script_path = os.path.join("scripts", "run_halmos.py")
-    if not os.path.exists(script_path):
-        raise HTTPException(status_code=404, detail="Script run_halmos.py introuvable.")
-    
+# WebSocket
+manager = ConnectionManager()
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialise les ressources au démarrage."""
+    await init_models()
+    asyncio.create_task(background_loop())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Nettoie les ressources à l'arrêt."""
+    await close_db_connection()
+
+async def background_loop():
+    """Boucle de fond pour les notifications."""
+    while True:
+        await asyncio.sleep(5)
+        await manager.broadcast_status({
+            "event": "heartbeat",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+@app.get("/health")
+async def health_check():
+    """Vérifie l'état de santé de l'API."""
+    return {"status": "healthy", "version": "2.0.0"}
+
+@app.websocket("/ws/events")
+async def websocket_endpoint(websocket: WebSocket):
+    """Endpoint WebSocket pour les événements en temps réel."""
+    await manager.connect(websocket)
     try:
-        result = subprocess.run(
-            ["python", script_path],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return {
-            "success": True,
-            "message": "Vérification formelle Halmos exécutée avec succès.",
-            "output": result.stdout
-        }
-    except subprocess.CalledProcessError as e:
-        return {
-            "success": False,
-            "message": "Erreur lors de l'exécution d'Halmos.",
-            "error": e.stderr
-        }
-
-@app.post("/run/slither")
-def trigger_slither():
-    """Exécute l'analyse statique Slither via le script Python dédié."""
-    script_path = os.path.join("scripts", "run_slither.py")
-    if not os.path.exists(script_path):
-        raise HTTPException(status_code=404, detail="Script run_slither.py introuvable.")
-    
-    try:
-        result = subprocess.run(
-            ["python", script_path],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return {
-            "success": True,
-            "message": "Analyse statique Slither exécutée avec succès.",
-            "output": result.stdout
-        }
-    except subprocess.CalledProcessError as e:
-        return {
-            "success": False,
-            "message": "Erreur lors de l'exécution de Slither.",
-            "error": e.stderr
-        }
+        while True:
+            await websocket.receive_text()  # Keep connection alive
+    except Exception:
+        await manager.disconnect(websocket)
