@@ -8,10 +8,10 @@
 # ==============================================================================
 
 from sqlalchemy import Column, String, ForeignKey, Integer, JSON, Enum, DateTime, Text, Float, Boolean, Index
-from sqlalchemy.orm import relationship, validates, backref
+from sqlalchemy.orm import relationship, validates
 from sqlalchemy.ext.hybrid import hybrid_property
 from src.db.database import Base
-import datetime
+from datetime import datetime, timezone
 import enum
 import uuid
 import json
@@ -73,6 +73,7 @@ class TaskModel(Base):
     Relations:
         - project: Projet parent
         - logs: Logs d'exécution associés
+        - artifacts: Artefacts produits
     """
     __tablename__ = "tasks"
     
@@ -142,7 +143,7 @@ class TaskModel(Base):
     # Paramètres
     parameters = Column(
         JSON,
-        default={},
+        default=dict,
         doc="Paramètres d'exécution"
     )
     
@@ -244,18 +245,18 @@ class TaskModel(Base):
         doc="Indique si la tâche a été créée manuellement"
     )
     
-    # Dates
+    # Dates (UTC time-aware avec lambda pour éviter l'évaluation statique)
     created_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
         index=True,
         doc="Date de création"
     )
     
     updated_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
-        onupdate=datetime.datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         doc="Date de dernière mise à jour"
     )
     
@@ -271,10 +272,11 @@ class TaskModel(Base):
         doc="Date de fin d'exécution"
     )
     
-    # Métadonnées
-    metadata = Column(
+    # Métadonnées (renommé pour éviter le conflit avec Base.metadata de SQLAlchemy)
+    extra_metadata = Column(
+        "metadata",
         JSON,
-        default={},
+        default=dict,
         doc="Métadonnées additionnelles"
     )
     
@@ -300,7 +302,7 @@ class TaskModel(Base):
         doc="Projet parent"
     )
     
-    logs = relationship(
+    execution_logs = relationship(
         "ExecutionLogModel",
         back_populates="task",
         cascade="all, delete-orphan",
@@ -367,10 +369,13 @@ class TaskModel(Base):
     
     @hybrid_property
     def elapsed_time(self) -> float:
-        """Temps écoulé depuis le début de la tâche."""
+        """Temps écoulé depuis le début de la tâche (avec gestion robuste des fuseaux horaires)."""
         if self.started_at:
-            now = datetime.datetime.utcnow()
-            return (now - self.started_at).total_seconds()
+            now = datetime.now(timezone.utc)
+            start = self.started_at
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            return (now - start).total_seconds()
         return 0.0
     
     @hybrid_property
@@ -378,8 +383,8 @@ class TaskModel(Base):
         """Temps restant avant le timeout."""
         if self.started_at:
             elapsed = self.elapsed_time
-            return max(0, self.timeout_seconds - elapsed)
-        return self.timeout_seconds
+            return max(0.0, self.timeout_seconds - elapsed)
+        return float(self.timeout_seconds)
     
     @hybrid_property
     def is_timeout(self) -> bool:
@@ -422,9 +427,10 @@ class TaskModel(Base):
     @validates('dependencies')
     def validate_dependencies(self, key: str, value: List[str]) -> List[str]:
         """Valide que les dépendances sont une liste."""
+        if value is None:
+            return []
         if not isinstance(value, list):
             raise ValueError("Dependencies must be a list")
-        # Vérifier qu'il n'y a pas de doublons
         if len(value) != len(set(value)):
             raise ValueError("Dependencies contain duplicates")
         return value
@@ -455,45 +461,57 @@ class TaskModel(Base):
         """Marque la tâche comme prête (dépendances satisfaites)."""
         if self.state == TaskState.PENDING:
             self.state = TaskState.READY
-            self.updated_at = datetime.datetime.utcnow()
+            self.updated_at = datetime.now(timezone.utc)
             self._add_audit_log("ready", {"previous_state": TaskState.PENDING.value})
     
     def mark_started(self) -> None:
         """Marque la tâche comme démarrée."""
         old_state = self.state
         self.state = TaskState.RUNNING
-        self.started_at = datetime.datetime.utcnow()
-        self.updated_at = datetime.datetime.utcnow()
+        self.started_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("started", {"previous_state": old_state.value if old_state else None})
     
     def mark_auto_testing(self) -> None:
         """Marque la tâche comme en phase de test automatique."""
         old_state = self.state
         self.state = TaskState.AUTO_TESTING
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("auto_testing", {"previous_state": old_state.value if old_state else None})
     
     def mark_success(self, result: Optional[Dict[str, Any]] = None) -> None:
         """Marque la tâche comme réussie."""
         old_state = self.state
         self.state = TaskState.SUCCESS
-        self.completed_at = datetime.datetime.utcnow()
-        self.duration_seconds = (self.completed_at - self.started_at).total_seconds() if self.started_at else 0.0
+        self.completed_at = datetime.now(timezone.utc)
+        if self.started_at:
+            start = self.started_at
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            self.duration_seconds = (self.completed_at - start).total_seconds()
+        else:
+            self.duration_seconds = 0.0
         if result:
             self.result = result
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("success", {"previous_state": old_state.value if old_state else None})
     
     def mark_failed(self, error_message: str, result: Optional[Dict[str, Any]] = None) -> None:
         """Marque la tâche comme échouée."""
         old_state = self.state
         self.state = TaskState.FAILED
-        self.completed_at = datetime.datetime.utcnow()
-        self.duration_seconds = (self.completed_at - self.started_at).total_seconds() if self.started_at else 0.0
+        self.completed_at = datetime.now(timezone.utc)
+        if self.started_at:
+            start = self.started_at
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            self.duration_seconds = (self.completed_at - start).total_seconds()
+        else:
+            self.duration_seconds = 0.0
         self.error_message = error_message
         if result:
             self.result = result
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("failed", {
             "previous_state": old_state.value if old_state else None,
             "error": error_message
@@ -503,9 +521,9 @@ class TaskModel(Base):
         """Marque la tâche comme circuit broken (trop de tentatives)."""
         old_state = self.state
         self.state = TaskState.CIRCUIT_BROKEN
-        self.completed_at = datetime.datetime.utcnow()
+        self.completed_at = datetime.now(timezone.utc)
         self.error_message = f"Circuit breaker: {error_message}"
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("circuit_broken", {
             "previous_state": old_state.value if old_state else None,
             "error": error_message
@@ -515,7 +533,7 @@ class TaskModel(Base):
         """Marque la tâche comme en attente de validation humaine."""
         old_state = self.state
         self.state = TaskState.WAITING_HUMAN_VALIDATION
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("waiting_human", {"previous_state": old_state.value if old_state else None})
     
     def mark_human_validated(self, approved: bool, comments: Optional[str] = None) -> None:
@@ -529,27 +547,28 @@ class TaskModel(Base):
         self.human_validated = approved
         if comments:
             self.human_validation_comments = comments
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         
         self._add_audit_log("human_validated", {
             "approved": approved,
             "comments": comments
         })
         
-        # Si approuvé et déjà en attente, passer en succès
-        if approved and self.state == TaskState.WAITING_HUMAN_VALIDATION:
-            self.mark_success()
-        elif not approved and self.state == TaskState.WAITING_HUMAN_VALIDATION:
-            self.mark_failed("Rejected by human validation")
+        if approved:
+            if self.state == TaskState.WAITING_HUMAN_VALIDATION:
+                self.mark_success()
+        else:
+            if self.state == TaskState.WAITING_HUMAN_VALIDATION:
+                self.mark_failed("Rejected by human validation")
     
     def mark_cancelled(self, reason: Optional[str] = None) -> None:
         """Marque la tâche comme annulée."""
         old_state = self.state
         self.state = TaskState.CANCELLED
-        self.completed_at = datetime.datetime.utcnow()
+        self.completed_at = datetime.now(timezone.utc)
         if reason:
             self.error_message = f"Cancelled: {reason}"
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("cancelled", {
             "previous_state": old_state.value if old_state else None,
             "reason": reason
@@ -561,7 +580,7 @@ class TaskModel(Base):
         self.state = TaskState.BLOCKED
         if reason:
             self.error_message = f"Blocked: {reason}"
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("blocked", {
             "previous_state": old_state.value if old_state else None,
             "reason": reason
@@ -571,10 +590,10 @@ class TaskModel(Base):
         """Marque la tâche comme ignorée."""
         old_state = self.state
         self.state = TaskState.SKIPPED
-        self.completed_at = datetime.datetime.utcnow()
+        self.completed_at = datetime.now(timezone.utc)
         if reason:
             self.error_message = f"Skipped: {reason}"
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("skipped", {
             "previous_state": old_state.value if old_state else None,
             "reason": reason
@@ -610,6 +629,7 @@ class TaskModel(Base):
             "timeout_seconds": self.timeout_seconds,
             "requires_human_validation": self.requires_human_validation,
             "human_validated": self.human_validated,
+            "human_validation_comments": self.human_validation_comments,
             "duration_seconds": self.duration_seconds,
             "is_terminal": self.is_terminal,
             "is_running": self.is_running,
@@ -621,6 +641,7 @@ class TaskModel(Base):
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "metadata": self.extra_metadata,
         }
         
         if include_result:
@@ -663,7 +684,7 @@ class TaskModel(Base):
         Returns:
             bool: True si exécutable
         """
-        if self.state not in [TaskState.PENDING, TaskState.BLOCKED]:
+        if self.state not in [TaskState.PENDING, TaskState.BLOCKED, TaskState.READY]:
             return False
         return set(self.dependencies).issubset(completed_task_ids)
     
@@ -675,7 +696,7 @@ class TaskModel(Base):
         """Incrémente le compteur de tentatives."""
         self.retry_count += 1
         self.is_retry = True
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._add_audit_log("retry", {"retry_count": self.retry_count})
         return self.retry_count
     
@@ -714,9 +735,9 @@ class TaskModel(Base):
         Args:
             log_entry: Entrée de log
         """
-        timestamp = datetime.datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
         self.logs += f"[{timestamp}] {log_entry}\n"
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
     
     def get_logs(self, limit: Optional[int] = None) -> List[str]:
         """
@@ -728,6 +749,8 @@ class TaskModel(Base):
         Returns:
             List[str]: Liste des logs
         """
+        if not self.logs:
+            return []
         logs = self.logs.split('\n')
         logs = [log for log in logs if log.strip()]
         if limit:
@@ -740,22 +763,24 @@ class TaskModel(Base):
     
     def add_metadata(self, key: str, value: Any) -> None:
         """Ajoute une métadonnée."""
-        if not self.metadata:
-            self.metadata = {}
-        self.metadata[key] = value
-        self.updated_at = datetime.datetime.utcnow()
+        if not key or not key.strip():
+            raise ValueError("Metadata key cannot be empty")
+        if self.extra_metadata is None:
+            self.extra_metadata = {}
+        self.extra_metadata[key] = value
+        self.updated_at = datetime.now(timezone.utc)
     
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Récupère une métadonnée."""
-        if not self.metadata:
+        if not self.extra_metadata:
             return default
-        return self.metadata.get(key, default)
+        return self.extra_metadata.get(key, default)
     
     def remove_metadata(self, key: str) -> None:
         """Supprime une métadonnée."""
-        if self.metadata and key in self.metadata:
-            del self.metadata[key]
-            self.updated_at = datetime.datetime.utcnow()
+        if self.extra_metadata and key in self.extra_metadata:
+            del self.extra_metadata[key]
+            self.updated_at = datetime.now(timezone.utc)
     
     # ==========================================================================
     # AUDIT LOG
@@ -763,19 +788,21 @@ class TaskModel(Base):
     
     def _add_audit_log(self, action: str, data: Dict[str, Any]) -> None:
         """Ajoute une entrée d'audit log."""
-        if not self.metadata:
-            self.metadata = {}
-        if "audit_logs" not in self.metadata:
-            self.metadata["audit_logs"] = []
-        self.metadata["audit_logs"].append({
+        if self.extra_metadata is None:
+            self.extra_metadata = {}
+        if "audit_logs" not in self.extra_metadata:
+            self.extra_metadata["audit_logs"] = []
+        self.extra_metadata["audit_logs"].append({
             "action": action,
             "data": data,
-            "timestamp": datetime.datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
     
     def get_audit_logs(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Récupère les logs d'audit."""
-        logs = self.metadata.get("audit_logs", []) if self.metadata else []
+        if not self.extra_metadata:
+            return []
+        logs = self.extra_metadata.get("audit_logs", [])
         if limit:
             return logs[-limit:]
         return logs
@@ -802,7 +829,7 @@ class TaskModel(Base):
             "is_failed": self.is_failed,
             "elapsed_time": self.elapsed_time,
             "remaining_time": self.remaining_time,
-            "timeout_percentage": (self.elapsed_time / self.timeout_seconds * 100) if self.started_at else 0,
+            "timeout_percentage": (self.elapsed_time / self.timeout_seconds * 100) if self.started_at and self.timeout_seconds > 0 else 0,
             "memory_usage_mb": self.memory_usage_mb,
             "cpu_usage_percent": self.cpu_usage_percent,
             "completion_rate": self.completion_rate,
@@ -831,7 +858,6 @@ class TaskModel(Base):
         Returns:
             TaskModel: Instance de la tâche
         """
-        # Déterminer le type de tâche
         task_type_str = task_spec.get("type", "custom")
         try:
             task_type = TaskType(task_type_str)
@@ -851,7 +877,7 @@ class TaskModel(Base):
             timeout_seconds=task_spec.get("timeout_seconds", 600),
             max_retries=task_spec.get("retry_count", 3),
             priority=TaskPriority(task_spec.get("priority", "normal")),
-            metadata=task_spec.get("metadata", {}),
+            extra_metadata=task_spec.get("metadata", {}),
         )
     
     @staticmethod
@@ -865,7 +891,6 @@ class TaskModel(Base):
         Returns:
             TaskModel: Instance de la tâche
         """
-        # Déterminer le type de tâche
         task_type_str = data.get("task_type", "custom")
         try:
             task_type = TaskType(task_type_str)
@@ -885,7 +910,7 @@ class TaskModel(Base):
             timeout_seconds=data.get("timeout_seconds", 600),
             max_retries=data.get("max_retries", 3),
             priority=TaskPriority(data.get("priority", "normal")),
-            metadata=data.get("metadata", {}),
+            extra_metadata=data.get("metadata", {}),
             is_manual=data.get("is_manual", True),
         )
     
@@ -914,10 +939,9 @@ class TaskModel(Base):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Smart Contract Dev Pipeline 2.0 - Modèle Tâche")
+    print("Smart Contract Dev Pipeline 2.0 - Modèle Tâche (Corrigé)")
     print("=" * 60)
     
-    # Création d'une tâche
     task = TaskModel(
         id=str(uuid.uuid4()),
         project_id="proj_123",
@@ -946,14 +970,10 @@ if __name__ == "__main__":
     print(f"  Timeout: {task.timeout_seconds}s")
     print(f"  Priorité: {task.priority.value if task.priority else 'N/A'}")
     
-    # Test des méthodes
     print(f"\n🔄 Test des méthodes:")
-    
-    # Vérifier l'exécutabilité
     completed = {"task_001", "task_002"}
     print(f"  Exécutable (dépendances satisfaites): {task.is_executable(completed)}")
     
-    # Marquer le démarrage
     task.mark_ready()
     print(f"  Ready: {task.state.value}")
     
@@ -961,11 +981,9 @@ if __name__ == "__main__":
     print(f"  Démarrage: {task.started_at}")
     print(f"  State: {task.state.value}")
     
-    # Ajouter un log
     task.add_log("Début de l'exécution de la compétence")
     task.add_log("Compilation réussie")
     
-    # Simuler un succès
     task.mark_success({
         "contract_code": "contract MyToken { ... }",
         "abi": ["function transfer", "function approve"]
@@ -975,18 +993,15 @@ if __name__ == "__main__":
     print(f"  Durée: {task.duration_seconds}s")
     print(f"  Résultat: {task.result}")
     
-    # Test des hybrid properties
     print(f"\n📊 Hybrid Properties:")
     print(f"  Terminal: {task.is_terminal}")
     print(f"  Success: {task.is_success}")
     print(f"  Completion rate: {task.completion_rate}%")
     
-    # Test des logs
     print(f"\n📋 Logs:")
     for log in task.get_logs():
         print(f"  {log}")
     
-    # Test des statistiques
     stats = task.get_statistics()
     print(f"\n📊 Statistiques:")
     for key, value in stats.items():

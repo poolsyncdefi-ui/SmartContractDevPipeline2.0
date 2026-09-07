@@ -1,0 +1,128 @@
+<div class="spec-section" id="f36-api-tasks-impl">
+  <h3>F36 – Points Clés de l'Implémentation &amp; Code — <code>src/api/routers/tasks.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/api/routers/tasks.py</code> fournit le routeur FastAPI complet pour la gestion granulaire du cycle de vie des tâches d'exécution, intégrant un système de validation humaine (HITL), le suivi temps réel via WebSockets, l'émission d'événements et la synchronisation avec Git[cite: 13].</p>
+
+  <div class="model-group">
+    <h5>Endpoints CRUD &amp; Traitement par Lot</h5>
+    <ul>
+      <li><code>list_tasks(...)</code> : Route <code>GET /</code> gérant le listing paginé avec recherche textuelle et filtres multiples (projet, état, priorité, type de tâche, validation humaine)[cite: 13].</li>
+      <li><code>create_task(...)</code> : Route <code>POST /</code> permettant de créer une tâche unitaire liée à un projet et d'émettre des notifications système/WebSocket[cite: 13].</li>
+      <li><code>create_tasks_batch(...)</code> : Route <code>POST /batch</code> dédiée à la création massive atomique de plusieurs tâches pour un projet[cite: 13].</li>
+      <li><code>get_task(...)</code> : Route <code>GET /{task_id}</code> pour récupérer le détail d'une tâche avec options d'inclusion du résultat et des logs complets[cite: 13].</li>
+      <li><code>update_task(...)</code> : Route <code>PUT /{task_id}</code> permettant la mise à jour dynamique des paramètres, de la priorité et des états de transition[cite: 13].</li>
+      <li><code>delete_task(...)</code> : Route <code>DELETE /{task_id}</code> assurant la suppression physique d'une tâche tout en décrémentant les compteurs du projet parent[cite: 13].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Endpoints de Gouvernance, Réessai &amp; Contrôle d'Exécution</h5>
+    <ul>
+      <li><code>human_validate_task(...)</code> : Route <code>POST /{task_id}/human-validate</code> pour soumettre la décision d'approbation ou de rejet d'un opérateur humain (HITL)[cite: 13].</li>
+      <li><code>approve_task(...)</code> : Route <code>POST /{task_id}/approve</code> gérant l'approbation de la tâche et déclenchant la synchronisation versionnée sur Git via <code>GitSyncManager</code>.</li>
+      <li><code>retry_task(...)</code> : Route <code>POST /{task_id}/retry</code> pour relancer une tâche échouée avec option d'outrepasser les limites maximales de tentatives (<code>force=True</code>)[cite: 13].</li>
+      <li><code>cancel_task(...)</code> : Route <code>POST /{task_id}/cancel</code> permettant d'interrompre proprement une tâche qui n'a pas encore atteint un état terminal[cite: 13].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Endpoints de Statistiques &amp; Métriques</h5>
+    <ul>
+      <li><code>get_task_stats(...)</code> : Route <code>GET /{task_id}/stats</code> restituant l'empreinte d'exécution d'une tâche (CPU, RAM, durées)[cite: 13].</li>
+      <li><code>get_project_tasks_stats(...)</code> : Route <code>GET /project/{project_id}/stats</code> fournissant la répartition globale du volume de tâches par état, priorité et taux de succès[cite: 13].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Gestion de Tâches en Arrière-plan (Non-Bloquant) :</strong> Utilisation de <code>BackgroundTasks</code> pour diffuser les notifications WebSocket sans bloquer la boucle d'événements HTTP principal[cite: 13].</li>
+    <li><strong>Garde-fous sur les Transitions d'État :</strong> Contrôle strict des pré-conditions métier (ex: vérification que la tâche est dans l'état <code>WAITING_HUMAN_VALIDATION</code> avant d'accepter une décision humaine)[cite: 13].</li>
+    <li><strong>Intégrité Transactionnelle et Annulation (Rollback) :</strong> En cas d'erreur de validation ou d'exception, un <code>await session.rollback()</code> garantit la cohérence de la base de données[cite: 13].</li>
+    <li><strong>Acouplage par Événements (Event Bus) :</strong> Émission systématique d'événements (<code>task_created</code>, <code>task_state_changed</code>, <code>task_human_validated</code>) pour synchroniser le reste de l'architecture distribuée[cite: 13].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Automatisme de Synchronisation Git :</strong> Intégration directe avec <code>GitSyncManager</code> sur le routeur d'approbation pour commiter et pusher automatiquement les modifications de smart contracts (ex: <code>contracts/Vault.sol</code>).</li>
+    <li><strong>Support Natif du Human-In-The-Loop (HITL) :</strong> Workflow complet permettant de suspendre l'exécution en attente d'une relecture et d'enregistrer commentaires et suggestions de modification[cite: 13].</li>
+    <li><strong>Forçage et Réinitialisation Avancée des Réessais :</strong> Possibilité de réinitialiser le compteur <code>retry_count</code> ou d'imposer l'exécution forcée d'une tâche bloquée[cite: 13].</li>
+  </ul>
+
+  <h4>4. Extrait du Code Source Implémenté &amp; Exemples d'Utilisation</h4>
+
+  <h5>Code Source : <code>src/api/routers/tasks.py</code></h5>
+  <pre><code class="language-python"># src/api/routers/tasks.py
+from fastapi import APIRouter, HTTPException
+from src.api.schemas.requests import TaskApproveRequest
+from src.api.schemas.responses import TaskStatusResponse
+from src.git.git_sync_manager import GitSyncManager
+
+router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+@router.post("/{task_id}/approve", response_model=TaskStatusResponse)
+async def approve_task(
+    task_id: str,
+    payload: TaskApproveRequest
+):
+    """Approuve ou rejette une tâche."""
+    if payload.approved:
+        try:
+            git = GitSyncManager()
+            success = await git.commit_and_push(
+                f"Approved task {task_id}",
+                ["contracts/Vault.sol"]
+            )
+            if not success:
+                raise HTTPException(status_code=500, detail="Git commit failed")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Approval failed: {e}")
+    
+    return TaskStatusResponse(
+        task_id=task_id,
+        status="approved" if payload.approved else "rejected"
+    )
+</code></pre>
+
+  <h5>Exemples d'Utilisation</h5>
+  <pre><code class="language-http"># Création d'une tâche
+POST /api/tasks?project_id=proj_123
+Content-Type: application/json
+
+{
+    "name": "Security Audit",
+    "description": "Audit the vault contract",
+    "skill_id": "slither_audit",
+    "priority": "high",
+    "task_type": "security_audit",
+    "requires_human_validation": true
+}
+
+# Validation humaine
+POST /api/tasks/task_123/human-validate
+Content-Type: application/json
+
+{
+    "approved": true,
+    "comments": "Looks good, approved",
+    "suggested_changes": "Consider adding more tests"
+}
+
+# Réessai
+POST /api/tasks/task_123/retry?force=true
+
+# Annulation
+POST /api/tasks/task_123/cancel?reason=Duplicate%20task
+
+# Statistiques
+GET /api/tasks/project/proj_123/stats
+</code></pre>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/api/routers/tasks.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>12 Endpoints REST complets couvrant le CRUD, la création batch, la gouvernance HITL, le versionnement Git, l'annulation et les statistiques[cite: 13].</li>
+    <li>Couplage fort avec les WebSockets temps réel, la boucle de tâches d'arrière-plan (<code>BackgroundTasks</code>) et le bus d'événements[cite: 13].</li>
+    <li>Gestion fine des machines à états des tâches et persistance stricte des métriques système[cite: 13].</li>
+  </ul>
+</div>

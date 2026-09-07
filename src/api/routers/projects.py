@@ -7,7 +7,7 @@
 #              Support des événements, WebSockets et recherche avancée.
 # ==============================================================================
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, status as fastapi_status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc, asc
 from sqlalchemy.orm import selectinload
@@ -15,6 +15,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import logging
 import uuid
+import yaml
 
 from src.db.database import get_async_db
 from src.models.project import ProjectModel, ProjectStatus, ProjectChain, ProjectPriority, ProjectCategory
@@ -35,8 +36,7 @@ from src.api.schemas.responses import (
     StatusResponse
 )
 from src.api.websockets.notifier import manager
-from src.core.exceptions import StorageError, ValidationError
-from src.core.events import event_bus
+from src.core.exceptions import PipelineError, ValidationError
 
 # ==============================================================================
 # CONFIGURATION
@@ -138,7 +138,7 @@ async def list_projects(
         projects = result.scalars().all()
         
         count_result = await session.execute(count_query)
-        total = count_result.scalar()
+        total = count_result.scalar() or 0
         
         # Conversion
         items = []
@@ -153,7 +153,7 @@ async def list_projects(
                 task_count=p.task_count,
                 completed_task_count=p.completed_task_count,
                 failed_task_count=p.failed_task_count,
-                completion_rate=p.get_completion_rate(),
+                completion_rate=p.completion_rate,
                 security_score=p.security_score,
                 quality_score=p.quality_score,
                 created_at=p.created_at.isoformat() if p.created_at else "",
@@ -167,20 +167,20 @@ async def list_projects(
             total=total,
             page=page,
             page_size=page_size,
-            total_pages=(total + page_size - 1) // page_size,
-            has_next=page < ((total + page_size - 1) // page_size),
+            total_pages=(total + page_size - 1) // page_size if page_size > 0 else 0,
+            has_next=page < ((total + page_size - 1) // page_size) if page_size > 0 else False,
             has_previous=page > 1
         )
         
     except Exception as e:
         logger.error(f"Error listing projects: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list projects: {str(e)}"
         )
 
 
-@router.post("/", response_model=ProjectDetailResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=ProjectDetailResponse, status_code=fastapi_status.HTTP_201_CREATED)
 async def create_project(
     request: CreateProjectRequest,
     background_tasks: BackgroundTasks,
@@ -201,7 +201,6 @@ async def create_project(
         )
         
         # Extraction des informations du YAML
-        import yaml
         try:
             spec_data = yaml.safe_load(request.spec_yaml)
             if spec_data:
@@ -224,13 +223,6 @@ async def create_project(
         
         logger.info(f"Project created: {project.id} - {project.name}")
         
-        # Émettre un événement
-        await event_bus.emit("project_created", {
-            "project_id": project.id,
-            "name": project.name,
-            "status": project.status.value if project.status else "CREATED"
-        })
-        
         # Notification WebSocket
         background_tasks.add_task(
             manager.send_project_update,
@@ -250,7 +242,7 @@ async def create_project(
             task_count=project.task_count,
             completed_task_count=project.completed_task_count,
             failed_task_count=project.failed_task_count,
-            completion_rate=project.get_completion_rate(),
+            completion_rate=project.completion_rate,
             security_score=project.security_score,
             quality_score=project.quality_score,
             created_at=project.created_at.isoformat() if project.created_at else "",
@@ -273,14 +265,14 @@ async def create_project(
         await session.rollback()
         logger.error(f"Validation error creating project: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=fastapi_status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
         await session.rollback()
         logger.error(f"Error creating project: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create project: {str(e)}"
         )
 
@@ -296,11 +288,8 @@ async def get_project(
     Récupère un projet par son ID.
     """
     try:
-        # Construction de la requête avec relations
         query = select(ProjectModel).where(ProjectModel.id == project_id)
-        
-        if include_sprints:
-            query = query.options(selectinload(ProjectModel.sprints))
+        query = query.options(selectinload(ProjectModel.sprints))
         if include_tasks:
             query = query.options(selectinload(ProjectModel.tasks))
         
@@ -309,7 +298,7 @@ async def get_project(
         
         if not project:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=fastapi_status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
         
@@ -323,7 +312,7 @@ async def get_project(
             task_count=project.task_count,
             completed_task_count=project.completed_task_count,
             failed_task_count=project.failed_task_count,
-            completion_rate=project.get_completion_rate(),
+            completion_rate=project.completion_rate,
             security_score=project.security_score,
             quality_score=project.quality_score,
             created_at=project.created_at.isoformat() if project.created_at else "",
@@ -347,7 +336,7 @@ async def get_project(
     except Exception as e:
         logger.error(f"Error getting project {project_id}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get project: {str(e)}"
         )
 
@@ -364,20 +353,21 @@ async def update_project(
     """
     try:
         result = await session.execute(
-            select(ProjectModel).where(ProjectModel.id == project_id)
+            select(ProjectModel)
+            .where(ProjectModel.id == project_id)
+            .options(selectinload(ProjectModel.sprints))
         )
         project = result.scalar_one_or_none()
         
         if not project:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=fastapi_status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
         
         old_status = project.status
         changes = {}
         
-        # Mise à jour des champs
         if request.name is not None:
             project.name = request.name
             changes["name"] = request.name
@@ -413,14 +403,7 @@ async def update_project(
         
         logger.info(f"Project updated: {project.id} - {project.name}")
         
-        # Émettre un événement si le statut a changé
         if old_status != project.status:
-            await event_bus.emit("project_status_changed", {
-                "project_id": project.id,
-                "old_status": old_status.value if old_status else None,
-                "new_status": project.status.value if project.status else None
-            })
-            
             background_tasks.add_task(
                 manager.send_project_update,
                 project.id,
@@ -438,7 +421,7 @@ async def update_project(
             task_count=project.task_count,
             completed_task_count=project.completed_task_count,
             failed_task_count=project.failed_task_count,
-            completion_rate=project.get_completion_rate(),
+            completion_rate=project.completion_rate,
             security_score=project.security_score,
             quality_score=project.quality_score,
             created_at=project.created_at.isoformat() if project.created_at else "",
@@ -463,7 +446,7 @@ async def update_project(
         await session.rollback()
         logger.error(f"Error updating project {project_id}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=fastapi_status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to update project: {str(e)}"
         )
 
@@ -471,8 +454,8 @@ async def update_project(
 @router.patch("/{project_id}/status", response_model=ProjectDetailResponse)
 async def update_project_status(
     project_id: str,
-    status: ProjectStatus,
-    background_tasks: BackgroundTasks,
+    new_status: ProjectStatus = Query(..., description="Nouveau statut du projet"),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     session: AsyncSession = Depends(get_async_db)
 ):
     """
@@ -480,35 +463,30 @@ async def update_project_status(
     """
     try:
         result = await session.execute(
-            select(ProjectModel).where(ProjectModel.id == project_id)
+            select(ProjectModel)
+            .where(ProjectModel.id == project_id)
+            .options(selectinload(ProjectModel.sprints))
         )
         project = result.scalar_one_or_none()
         
         if not project:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=fastapi_status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
         
         old_status = project.status
-        project.update_status(status)
+        project.update_status(new_status)
         
         await session.commit()
         await session.refresh(project)
         
-        logger.info(f"Project status updated: {project.id} - {old_status} -> {status}")
-        
-        # Émettre un événement
-        await event_bus.emit("project_status_changed", {
-            "project_id": project.id,
-            "old_status": old_status.value if old_status else None,
-            "new_status": status.value
-        })
+        logger.info(f"Project status updated: {project.id} - {old_status} -> {new_status}")
         
         background_tasks.add_task(
             manager.send_project_update,
             project.id,
-            status.value,
+            new_status.value,
             {"old_status": old_status.value if old_status else None}
         )
         
@@ -522,7 +500,7 @@ async def update_project_status(
             task_count=project.task_count,
             completed_task_count=project.completed_task_count,
             failed_task_count=project.failed_task_count,
-            completion_rate=project.get_completion_rate(),
+            completion_rate=project.completion_rate,
             security_score=project.security_score,
             quality_score=project.quality_score,
             created_at=project.created_at.isoformat() if project.created_at else "",
@@ -547,7 +525,7 @@ async def update_project_status(
         await session.rollback()
         logger.error(f"Error updating project status {project_id}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update project status: {str(e)}"
         )
 
@@ -569,7 +547,7 @@ async def delete_project(
         
         if not project:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=fastapi_status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
         
@@ -579,12 +557,6 @@ async def delete_project(
         await session.commit()
         
         logger.info(f"Project deleted: {project_id} - {project_name}")
-        
-        # Émettre un événement
-        await event_bus.emit("project_deleted", {
-            "project_id": project_id,
-            "name": project_name
-        })
         
         background_tasks.add_task(
             manager.send_notification,
@@ -605,7 +577,7 @@ async def delete_project(
         await session.rollback()
         logger.error(f"Error deleting project {project_id}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete project: {str(e)}"
         )
 
@@ -626,7 +598,7 @@ async def get_project_stats(
         
         if not project:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=fastapi_status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
         
@@ -637,7 +609,7 @@ async def get_project_stats(
     except Exception as e:
         logger.error(f"Error getting project stats {project_id}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get project stats: {str(e)}"
         )
 
@@ -653,7 +625,6 @@ async def search_projects(
     Recherche avancée de projets par nom, description, tags et contenu YAML.
     """
     try:
-        # Construction de la requête avec recherche plein texte
         search_pattern = f"%{query}%"
         
         query_stmt = select(ProjectModel).where(
@@ -661,7 +632,6 @@ async def search_projects(
                 ProjectModel.name.ilike(search_pattern),
                 ProjectModel.description.ilike(search_pattern),
                 ProjectModel.spec_yaml.ilike(search_pattern),
-                # Recherche dans les tags JSON
                 ProjectModel.tags.contains([query])
             )
         )
@@ -675,7 +645,6 @@ async def search_projects(
             )
         )
         
-        # Pagination
         offset = (page - 1) * page_size
         query_stmt = query_stmt.offset(offset).limit(page_size)
         
@@ -683,7 +652,7 @@ async def search_projects(
         projects = result.scalars().all()
         
         count_result = await session.execute(count_query)
-        total = count_result.scalar()
+        total = count_result.scalar() or 0
         
         items = []
         for p in projects:
@@ -697,7 +666,7 @@ async def search_projects(
                 task_count=p.task_count,
                 completed_task_count=p.completed_task_count,
                 failed_task_count=p.failed_task_count,
-                completion_rate=p.get_completion_rate(),
+                completion_rate=p.completion_rate,
                 security_score=p.security_score,
                 quality_score=p.quality_score,
                 created_at=p.created_at.isoformat() if p.created_at else "",
@@ -711,15 +680,15 @@ async def search_projects(
             total=total,
             page=page,
             page_size=page_size,
-            total_pages=(total + page_size - 1) // page_size,
-            has_next=page < ((total + page_size - 1) // page_size),
+            total_pages=(total + page_size - 1) // page_size if page_size > 0 else 0,
+            has_next=page < ((total + page_size - 1) // page_size) if page_size > 0 else False,
             has_previous=page > 1
         )
         
     except Exception as e:
         logger.error(f"Error searching projects: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to search projects: {str(e)}"
         )
 
@@ -741,13 +710,13 @@ async def archive_project(
         
         if not project:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=fastapi_status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
         
         if project.status == ProjectStatus.ARCHIVED:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=fastapi_status.HTTP_400_BAD_REQUEST,
                 detail="Project is already archived"
             )
         
@@ -777,7 +746,7 @@ async def archive_project(
         await session.rollback()
         logger.error(f"Error archiving project {project_id}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to archive project: {str(e)}"
         )
 
@@ -799,13 +768,13 @@ async def unarchive_project(
         
         if not project:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=fastapi_status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
         
         if project.status != ProjectStatus.ARCHIVED:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=fastapi_status.HTTP_400_BAD_REQUEST,
                 detail="Project is not archived"
             )
         
@@ -835,6 +804,6 @@ async def unarchive_project(
         await session.rollback()
         logger.error(f"Error unarchiving project {project_id}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to unarchive project: {str(e)}"
         )

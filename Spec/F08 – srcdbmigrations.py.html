@@ -1,0 +1,81 @@
+<div class="spec-section" id="f08-migrations-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/db/migrations.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/db/migrations.py</code> fournit une infrastructure complète de gestion du schéma de base de données PostgreSQL, supportant l'initialisation, le versioning, l'inspection asynchrone, les migrations séquentielles et les rollbacks[cite: 7].</p>
+
+  <div class="model-group">
+    <h5>Initialisation &amp; Cycle de Vie du Schéma</h5>
+    <ul>
+      <li><code>init_models() -&gt; None</code> : Crée l'ensemble des tables définies dans la métadonnée SQLAlchemy ainsi que la table d'historique[cite: 7].</li>
+      <li><code>drop_models() -&gt; None</code> : Supprime intégralement les tables du schéma[cite: 7].</li>
+      <li><code>reset_models() -&gt; None</code> : Réinitialise la base de données via un enchaînement <code>drop_models()</code> puis <code>init_models()</code>[cite: 7].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Suivi de Versioning &amp; Historique</h5>
+    <ul>
+      <li><code>_create_migration_history_table(conn)</code> : Crée la table <code>migration_history</code> pour tracer l'auteur, la date, le statut et les scripts[cite: 7].</li>
+      <li><code>get_current_version() -&gt; Optional[str]</code> : Extrait la version active depuis <code>alembic_version</code> ou <code>migration_history</code>[cite: 7].</li>
+      <li><code>set_current_version(version, description, applied_by) -&gt; None</code> : Enregistre une nouvelle version de schéma dans les tables de suivi[cite: 7].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Inspection Asynchrone du Schéma</h5>
+    <ul>
+      <li><code>get_existing_tables() -&gt; List[str]</code> : Interroge la base via <code>conn.run_sync(inspect)</code> pour lister les tables[cite: 7].</li>
+      <li><code>table_exists(table_name) -&gt; bool</code> : Vérifie la présence d'une table[cite: 7].</li>
+      <li><code>get_table_info(table_name) -&gt; Optional[Dict[str, Any]]</code> : Inspecte les colonnes, clés primaires/étrangères et index d'une table[cite: 7].</li>
+      <li><code>column_exists(table_name, column_name) -&gt; bool</code> &amp; <code>index_exists(table_name, index_name) -&gt; bool</code> : Contrôle l'existence d'une colonne ou d'un index[cite: 7].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Utilitaires DDL Conditionnels</h5>
+    <ul>
+      <li><code>execute_migration(sql, params) -&gt; None</code> : Exécute une instruction SQL DDL de manière sécurisée et transactionnelle[cite: 7].</li>
+      <li><code>execute_migration_script(script_path) -&gt; None</code> : Lit et exécute un fichier <code>.sql</code> de migration par lot d'instructions[cite: 7].</li>
+      <li><code>add_column(...)</code>, <code>drop_column(...)</code>, <code>rename_column(...)</code> : Manipulations de colonnes avec vérification préalable d'existence[cite: 7].</li>
+      <li><code>add_index(...)</code>, <code>drop_index(...)</code> : Création et suppression conditionnelle d'index SQL[cite: 7].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Pipelines de Migrations &amp; Rollbacks Séquentiels</h5>
+    <ul>
+      <li><code>run_migrations(target_version) -&gt; None</code> : Chef d'orchestre exécutant automatiquement les migrations requises jusqu'à la version cible[cite: 7].</li>
+      <li><code>migration_v1_to_v2()</code>, <code>migration_v2_to_v3()</code>, <code>migration_v3_to_v4()</code> : Migrations graduelles (ajout de métadonnées, création de la table <code>artifacts</code>, contraintes et index composites)[cite: 7].</li>
+      <li><code>rollback_to_version(target_version) -&gt; None</code> : Restaure une version antérieure en exécutant les rollbacks inverses[cite: 7].</li>
+      <li><code>rollback_v4_to_v3()</code>, <code>rollback_v3_to_v2()</code>, <code>rollback_v2_to_v1()</code> : Fonctions de nettoyage et de rétrogradation du schéma[cite: 7].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Idempotence des Opérations DDL :</strong> Chaque modification de schéma (ajout de colonne, suppression d'index) vérifie au préalable l'état de la base pour éviter les erreurs d'exécution[cite: 7].</li>
+    <li><strong>Introspection Non-Bloquante :</strong> Emploi de <code>conn.run_sync()</code> avec l'inspecteur SQLAlchemy pour réaliser les audits de schéma sans bloquer la boucle <code>asyncio</code>[cite: 7].</li>
+    <li><strong>Gestion Strictement Transactionnelle :</strong> Encapsulation de toutes les modifications SQL dans des blocs `async with engine.begin()` assurant un commit/rollback automatique[cite: 7].</li>
+    <li><strong>Audit &amp; Traçabilité Complète :</strong> Conservation de l'historique complet des migrations appliquées (horodatage, script, utilisateur) dans la table <code>migration_history</code>[cite: 7].</li>
+    <li><strong>Normalisation des Exceptions :</strong> Capture des erreurs de DDL et conversion centralisée vers l'exception applicative <code>StorageError</code>[cite: 7].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Moteur de Migration Bidirectionnel :</strong> Prise en charge native des montées de version (v1 vers v4) et des rollbacks descendants (v4 vers v1)[cite: 7].</li>
+    <li><strong>Double Support Alembic &amp; Custom History :</strong> Compatibilité mixte capable de lire le pointeur standard <code>alembic_version</code> ou la table détaillée <code>migration_history</code>[cite: 7].</li>
+    <li><strong>Exécution de Scripts SQL Bruts :</strong> Fonction <code>execute_migration_script</code> permettant d'intégrer facilement des scripts DDL d'administrateurs BDD externes[cite: 7].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/db/migrations.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Functions complètes d'initialisation, suppression et réinitialisation du schéma (<code>init_models</code>, <code>drop_models</code>, <code>reset_models</code>)[cite: 7]</li>
+    <li>20+ fonctions utilitaires DDL et d'introspection asynchrone[cite: 7]</li>
+    <li>Gestion de versioning dynamique et enregistrement d'historique d'audit[cite: 7]</li>
+    <li>Pipeline séquentiel de migrations v1 à v4 et rollbacks v4 à v1[cite: 7]</li>
+    <li>Capacité d'exécution de fichiers SQL bruts et gestion typée des erreurs (<code>StorageError</code>)[cite: 7]</li>
+    <li>Documentation complète au format Docstrings Python et script de test unitaire autonome intégré[cite: 7]</li>
+  </ul>
+</div>

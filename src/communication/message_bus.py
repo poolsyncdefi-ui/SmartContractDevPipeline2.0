@@ -19,12 +19,15 @@ Cette interface est implementee par RedisBus, mais peut etre etendue
 pour d'autres transports (RabbitMQ, Kafka, etc.)
 """
 from abc import ABC, abstractmethod
-from typing import Callable, Awaitable, Optional, Dict, Any, List, Set, Union
+from typing import Callable, Awaitable, Optional, Dict, Any, List, Set, Union, Tuple
 from datetime import datetime
 import logging
 import asyncio
+import re
 from enum import Enum
 from dataclasses import dataclass, field
+import uuid
+import inspect
 
 # Import des modules du pipeline
 from src.communication.message_models import (
@@ -66,8 +69,8 @@ class SubscriptionType(str, Enum):
 @dataclass
 class Subscription:
     """
-    Représente un abonnement.
-    
+    Represente un abonnement.
+
     Attributes:
         id (str): Identifiant unique de l'abonnement
         topic (str): Topic du message
@@ -81,21 +84,21 @@ class Subscription:
     """
     id: str
     topic: str
-    callback: Callable[[BaseMessage], Awaitable[None]]
+    callback: Callable[[BaseMessage], Any]
     subscription_type: SubscriptionType = SubscriptionType.EXACT
     filter_criteria: Optional[Dict[str, Any]] = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     active: bool = True
     message_count: int = 0
     last_message_at: Optional[datetime] = None
-    
+
     def matches(self, topic: str) -> bool:
         """
-        Vérifie si le topic correspond à l'abonnement.
-        
+        Verifie si le topic correspond à l'abonnement.
+
         Args:
             topic: Topic à vérifier
-            
+
         Returns:
             bool: True si correspond
         """
@@ -104,7 +107,6 @@ class Subscription:
         elif self.subscription_type == SubscriptionType.PREFIX:
             return topic.startswith(self.topic)
         elif self.subscription_type == SubscriptionType.PATTERN:
-            import re
             return re.match(self.topic, topic) is not None
         return False
 
@@ -113,12 +115,12 @@ class Subscription:
 class MessageBusStats:
     """
     Statistiques du bus de messages.
-    
+
     Attributes:
         total_published (int): Nombre total de messages publiés
         total_delivered (int): Nombre total de messages délivrés
         total_errors (int): Nombre total d'erreurs
-        total_subscriptions (int): Nombre total d'abonnements
+        total_subscriptions (int): Nombre total d'abonnements créés
         topics_count (int): Nombre de topics actifs
         active_subscribers (int): Nombre d'abonnés actifs
         last_activity (Optional[datetime]): Dernière activité
@@ -141,21 +143,21 @@ class MessageBusStats:
 class MessageBus(ABC):
     """
     Interface abstraite pour le bus de messages.
-    
-    Cette interface définit le contrat pour toutes les implémentations
+
+    Cette interface definit le contrat pour toutes les implementations
     du bus de messages. Elle permet la communication asynchrone et
-    découplée entre les composants du pipeline.
-    
+    decouplée entre les composants du pipeline.
+
     Attributes:
         name (str): Nom du bus
         stats (MessageBusStats): Statistiques du bus
         subscriptions (Dict[str, Subscription]): Abonnements actifs
         message_queue (asyncio.Queue): File d'attente des messages
-        is_running (bool): Indique si le bus est en cours d'exécution
+        is_running (bool): Indique si le bus est en cours d'execution
         max_queue_size (int): Taille maximale de la file d'attente
         retry_attempts (int): Nombre de tentatives de livraison
     """
-    
+
     def __init__(
         self,
         name: str = "default",
@@ -166,12 +168,12 @@ class MessageBus(ABC):
     ):
         """
         Initialise le bus de messages.
-        
+
         Args:
             name: Nom du bus (defaut: "default")
             max_queue_size: Taille maximale de la file d'attente
             retry_attempts: Nombre de tentatives de livraison
-            retry_delay: Délai entre les tentatives (secondes)
+            retry_delay: Delai entre les tentatives (secondes)
             enable_stats: Activer les statistiques (defaut: True)
         """
         self.name = name
@@ -179,88 +181,132 @@ class MessageBus(ABC):
         self.retry_attempts = retry_attempts
         self.retry_delay = retry_delay
         self.enable_stats = enable_stats
-        
+
         # Gestion des abonnements
         self._subscriptions: Dict[str, Subscription] = {}
         self._subscription_counter = 0
-        
-        # File d'attente des messages
+
+        # File d'attente des messages (topic, message)
         self._message_queue: Optional[asyncio.Queue] = None
         self._is_running = False
         self._worker_task: Optional[asyncio.Task] = None
-        
+
         # Statistiques
         self._stats = MessageBusStats() if enable_stats else None
-        
+
         # Verrouillage
         self._lock = asyncio.Lock()
-        
+
         logger.info(f"MessageBus initialized: {name}")
-    
+
     # =========================================================================
-    # METHODES ABSTRAITES A IMPLEMENTER
+    # METHODES DE BASE (avec implementations par defaut)
     # =========================================================================
-    
-    @abstractmethod
+
     async def publish(self, topic: str, message: BaseMessage) -> None:
         """
         Publie un message sur un topic.
-        
+
         Args:
             topic: Topic du message
             message: Message à publier
-            
+
         Raises:
             ValueError: Si le topic ou le message est invalide
         """
-        pass
-    
-    @abstractmethod
+        self._validate_topic(topic)
+        self._validate_message(message)
+
+        # Mise à jour des statistiques
+        self._update_stats(message)
+
+        # Enfile le message avec son topic
+        if self._message_queue is None:
+            raise RuntimeError("MessageBus not started. Call start() first.")
+
+        await self._message_queue.put((topic, message))
+
+        logger.debug(f"Message published: topic={topic}, type={message.type.value}, sender={message.sender}")
+
     async def subscribe(
         self,
         topic: str,
-        callback: Callable[[BaseMessage], Awaitable[None]],
+        callback: Callable[[BaseMessage], Any],
         subscription_type: SubscriptionType = SubscriptionType.EXACT,
         filter_criteria: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         S'abonne à un topic.
-        
+
         Args:
             topic: Topic à écouter
             callback: Fonction de callback
             subscription_type: Type d'abonnement
             filter_criteria: Critères de filtrage
-            
+
         Returns:
             str: ID de l'abonnement
         """
-        pass
-    
-    @abstractmethod
+        self._validate_topic(topic)
+
+        async with self._lock:
+            sub_id = self._generate_subscription_id()
+            subscription = Subscription(
+                id=sub_id,
+                topic=topic,
+                callback=callback,
+                subscription_type=subscription_type,
+                filter_criteria=filter_criteria
+            )
+            self._subscriptions[sub_id] = subscription
+            if self._stats:
+                self._stats.total_subscriptions += 1
+                self._stats.topics_count = len(set(s.topic for s in self._subscriptions.values()))
+                self._stats.active_subscribers = len([s for s in self._subscriptions.values() if s.active])
+
+        logger.info(f"Subscribed: {sub_id} to topic '{topic}' (type={subscription_type.value})")
+        return sub_id
+
     async def unsubscribe(self, subscription_id: str) -> bool:
         """
         Se désabonne d'un topic.
-        
+
         Args:
             subscription_id: ID de l'abonnement
-            
+
         Returns:
             bool: True si désabonné avec succès
         """
-        pass
-    
-    @abstractmethod
+        async with self._lock:
+            if subscription_id not in self._subscriptions:
+                logger.warning(f"Subscription {subscription_id} not found")
+                return False
+
+            del self._subscriptions[subscription_id]
+            if self._stats:
+                self._stats.topics_count = len(set(s.topic for s in self._subscriptions.values()))
+                self._stats.active_subscribers = len([s for s in self._subscriptions.values() if s.active])
+
+        logger.info(f"Unsubscribed: {subscription_id}")
+        return True
+
     async def close(self) -> None:
         """
         Ferme la connexion au bus.
         """
-        pass
-    
+        if self._message_queue:
+            while not self._message_queue.empty():
+                try:
+                    self._message_queue.get_nowait()
+                    self._message_queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+        logger.info(f"MessageBus {self.name} closed")
+
     # =========================================================================
     # METHODES AVANCEES
     # =========================================================================
-    
+
     async def request_response(
         self,
         topic: str,
@@ -269,44 +315,37 @@ class MessageBus(ABC):
     ) -> Optional[BaseMessage]:
         """
         Effectue une requête et attend une réponse (pattern request/response).
-        
+
         Args:
             topic: Topic de la requête
             message: Message de requête
             timeout: Timeout en secondes
-            
+
         Returns:
             Optional[BaseMessage]: Message de réponse ou None
         """
-        # Création d'un identifiant de corrélation
         if not message.correlation_id:
-            import uuid
             message.correlation_id = str(uuid.uuid4())
-        
-        # Création d'un événement pour la réponse
+
         response_event = asyncio.Event()
         response_message = None
-        
-        # Callback de réponse
+
         async def response_callback(msg: BaseMessage):
             nonlocal response_message
             if msg.correlation_id == message.correlation_id:
                 response_message = msg
                 response_event.set()
-        
-        # Abonnement temporaire
+
         response_topic = f"{topic}.response"
         subscription_id = await self.subscribe(
             topic=response_topic,
             callback=response_callback,
             filter_criteria={"correlation_id": message.correlation_id}
         )
-        
+
         try:
-            # Publication de la requête
             await self.publish(topic, message)
-            
-            # Attente de la réponse avec timeout
+
             try:
                 await asyncio.wait_for(response_event.wait(), timeout)
                 return response_message
@@ -314,19 +353,17 @@ class MessageBus(ABC):
                 logger.warning(f"Request timed out: {message.correlation_id}")
                 return None
         finally:
-            # Nettoyage
             await self.unsubscribe(subscription_id)
-    
+
     async def broadcast(self, message: BaseMessage) -> None:
         """
         Diffuse un message à tous les abonnés (broadcast).
-        
+
         Args:
             message: Message à diffuser
         """
-        # Utilise le topic spécial 'broadcast'
         await self.publish("broadcast", message)
-    
+
     async def send_to_agent(
         self,
         agent_id: str,
@@ -334,22 +371,21 @@ class MessageBus(ABC):
     ) -> None:
         """
         Envoie un message à un agent spécifique.
-        
+
         Args:
             agent_id: ID de l'agent destinataire
             message: Message à envoyer
         """
-        # Utilise le topic 'agent.{agent_id}'
         topic = f"agent.{agent_id}"
         await self.publish(topic, message)
-    
+
     async def get_subscription_info(self, subscription_id: str) -> Optional[Dict]:
         """
         Récupère les informations d'un abonnement.
-        
+
         Args:
             subscription_id: ID de l'abonnement
-            
+
         Returns:
             Optional[Dict]: Informations de l'abonnement
         """
@@ -357,7 +393,7 @@ class MessageBus(ABC):
             sub = self._subscriptions.get(subscription_id)
             if not sub:
                 return None
-            
+
             return {
                 "id": sub.id,
                 "topic": sub.topic,
@@ -368,17 +404,17 @@ class MessageBus(ABC):
                 "message_count": sub.message_count,
                 "last_message_at": sub.last_message_at.isoformat() if sub.last_message_at else None
             }
-    
+
     async def get_stats(self) -> Optional[Dict[str, Any]]:
         """
         Récupère les statistiques du bus.
-        
+
         Returns:
             Optional[Dict]: Statistiques du bus
         """
         if not self._stats:
             return None
-        
+
         return {
             "name": self.name,
             "total_published": self._stats.total_published,
@@ -392,7 +428,7 @@ class MessageBus(ABC):
             "by_priority": self._stats.by_priority,
             "by_status": self._stats.by_status
         }
-    
+
     async def clear_stats(self) -> None:
         """
         Réinitialise les statistiques.
@@ -400,11 +436,11 @@ class MessageBus(ABC):
         if self._stats:
             self._stats = MessageBusStats()
             logger.info("Stats cleared")
-    
+
     # =========================================================================
     # GESTION DU CYCLE DE VIE
     # =========================================================================
-    
+
     async def start(self) -> None:
         """
         Démarre le bus de messages.
@@ -412,15 +448,14 @@ class MessageBus(ABC):
         if self._is_running:
             logger.warning("MessageBus already running")
             return
-        
+
         self._message_queue = asyncio.Queue(maxsize=self.max_queue_size)
         self._is_running = True
-        
-        # Démarrage du worker
+
         self._worker_task = asyncio.create_task(self._process_messages())
-        
+
         logger.info(f"MessageBus {self.name} started")
-    
+
     async def stop(self) -> None:
         """
         Arrête le bus de messages.
@@ -428,10 +463,9 @@ class MessageBus(ABC):
         if not self._is_running:
             logger.warning("MessageBus already stopped")
             return
-        
+
         self._is_running = False
-        
-        # Attente de la fin du worker
+
         if self._worker_task:
             self._worker_task.cancel()
             try:
@@ -439,78 +473,83 @@ class MessageBus(ABC):
             except asyncio.CancelledError:
                 pass
             self._worker_task = None
-        
-        # Fermeture de la connexion
+
         await self.close()
-        
+
         logger.info(f"MessageBus {self.name} stopped")
-    
+
     async def _process_messages(self) -> None:
         """
         Traite les messages en file d'attente.
         """
         while self._is_running:
             try:
-                # Récupération du message
-                message = await self._message_queue.get()
-                
-                # Traitement du message
-                await self._deliver_message(message)
-                
-                # Marquage comme traité
-                self._message_queue.task_done()
-                
+                topic, message = await self._message_queue.get()
+
+                try:
+                    await self._deliver_message(topic, message)
+                except Exception as e:
+                    logger.error(f"Error delivering message: {str(e)}")
+                    if self._stats:
+                        self._stats.total_errors += 1
+                finally:
+                    self._message_queue.task_done()
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error processing message: {str(e)}")
+                logger.error(f"Error processing message queue item: {str(e)}")
                 if self._stats:
                     self._stats.total_errors += 1
-    
-    async def _deliver_message(self, message: BaseMessage) -> None:
+
+    async def _deliver_message(self, topic: str, message: BaseMessage) -> None:
         """
         Délivre un message à ses abonnés.
-        
+
         Args:
+            topic: Topic du message
             message: Message à délivrer
         """
-        # Filtrage des abonnements correspondants
         matched_subs = []
-        
-        for sub_id, sub in self._subscriptions.items():
+
+        for sub in self._subscriptions.values():
             if not sub.active:
                 continue
-            
-            if sub.matches(message.type.value):
-                # Vérification des filtres
+
+            if sub.matches(topic):
                 if sub.filter_criteria:
                     if not self._matches_filter(message, sub.filter_criteria):
                         continue
                 matched_subs.append(sub)
-        
-        # Livraison du message
+
         for sub in matched_subs:
             try:
-                await sub.callback(message)
+                if asyncio.iscoroutinefunction(sub.callback):
+                    await sub.callback(message)
+                else:
+                    res = sub.callback(message)
+                    if asyncio.isfuture(res) or inspect.isawaitable(res):
+                        await res
+
                 sub.message_count += 1
                 sub.last_message_at = datetime.utcnow()
-                
+
                 if self._stats:
                     self._stats.total_delivered += 1
-                    
+
             except Exception as e:
                 logger.error(f"Error delivering message to {sub.id}: {str(e)}")
                 if self._stats:
                     self._stats.total_errors += 1
-    
+
     def _matches_filter(self, message: BaseMessage, filter_criteria: Dict) -> bool:
         """
         Vérifie si un message correspond aux critères de filtrage.
-        
+
         Args:
             message: Message à vérifier
             filter_criteria: Critères de filtrage
-            
+
         Returns:
             bool: True si le message correspond
         """
@@ -525,108 +564,97 @@ class MessageBus(ABC):
             elif key in message.metadata:
                 if message.metadata[key] != value:
                     return False
+            else:
+                continue
         return True
-    
+
     # =========================================================================
     # UTILITAIRES
     # =========================================================================
-    
+
     def _generate_subscription_id(self) -> str:
         """
         Génère un ID d'abonnement unique.
-        
+
         Returns:
             str: ID d'abonnement
         """
         self._subscription_counter += 1
         return f"sub_{self._subscription_counter}_{id(self)}"
-    
+
     def _update_stats(self, message: BaseMessage) -> None:
         """
         Met à jour les statistiques.
-        
+
         Args:
             message: Message publié
         """
         if not self._stats:
             return
-        
+
         self._stats.total_published += 1
         self._stats.last_activity = datetime.utcnow()
-        
-        # Par type
+
         type_key = message.type.value
         self._stats.by_type[type_key] = self._stats.by_type.get(type_key, 0) + 1
-        
-        # Par priorité
+
         priority_key = f"p{message.priority}"
         self._stats.by_priority[priority_key] = self._stats.by_priority.get(priority_key, 0) + 1
-        
-        # Par statut
+
         status_key = message.status.value
         self._stats.by_status[status_key] = self._stats.by_status.get(status_key, 0) + 1
-        
-        # Mise à jour des topics
-        self._stats.topics_count = len(set(
-            sub.topic for sub in self._subscriptions.values()
-        ))
-        self._stats.active_subscribers = len([
-            sub for sub in self._subscriptions.values() if sub.active
-        ])
-    
+
     # =========================================================================
     # VALIDATION
     # =========================================================================
-    
+
     def _validate_message(self, message: BaseMessage) -> None:
         """
         Valide un message avant publication.
-        
+
         Args:
             message: Message à valider
-            
+
         Raises:
             ValueError: Si le message est invalide
         """
         if not isinstance(message, BaseMessage):
             raise ValueError("Message must be a BaseMessage instance")
-        
+
         if not message.sender:
             raise ValueError("Message must have a sender")
-        
+
         if not message.type:
             raise ValueError("Message must have a type")
-    
+
     def _validate_topic(self, topic: str) -> None:
         """
         Valide un topic.
-        
+
         Args:
             topic: Topic à valider
-            
+
         Raises:
             ValueError: Si le topic est invalide
         """
         if not topic or len(topic.strip()) == 0:
             raise ValueError("Topic cannot be empty")
-        
-        # Vérification des caractères valides
-        import re
+
         if not re.match(r'^[a-zA-Z0-9._\-*]+$', topic):
             raise ValueError(f"Invalid topic: {topic}")
-    
+
     # =========================================================================
     # REPRESENTATION
     # =========================================================================
-    
+
     def __repr__(self) -> str:
         subs_count = len(self._subscriptions)
         return f"<MessageBus(name='{self.name}', subscriptions={subs_count}, running={self._is_running})>"
-    
+
     def to_dict(self) -> Dict:
         """
         Convertit le bus en dictionnaire.
-        
+
         Returns:
             Dict: Représentation du bus
         """

@@ -1,0 +1,88 @@
+<div class="spec-section" id="f10-task-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/models/task.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/models/task.py</code> définit le modèle ORM SQLAlchemy pour la table <code>tasks</code>, représentant une tâche unitaire d'exécution dans le pipeline avec gestion avancée des dépendances (DAG), des retries, du timeout et de la validation humaine[cite: 9].</p>
+
+  <div class="model-group">
+    <h5>Énumérations Typées</h5>
+    <ul>
+      <li><code>TaskState</code> : Machine à états de la tâche (<code>PENDING</code>, <code>READY</code>, <code>RUNNING</code>, <code>AUTO_TESTING</code>, <code>WAITING_HUMAN_VALIDATION</code>, <code>SUCCESS</code>, <code>FAILED</code>, <code>CIRCUIT_BROKEN</code>, <code>CANCELLED</code>, <code>BLOCKED</code>, <code>SKIPPED</code>)[cite: 9].</li>
+      <li><code>TaskPriority</code> : Niveaux de priorité (<code>LOW</code>, <code>NORMAL</code>, <code>HIGH</code>, <code>CRITICAL</code>)[cite: 9].</li>
+      <li><code>TaskType</code> : Typologie métier de la tâche (<code>CONTRACT_GENERATION</code>, <code>TEST_GENERATION</code>, <code>SECURITY_AUDIT</code>, <code>FORMAL_VERIFICATION</code>, <code>DEPLOYMENT</code>, <code>DOCUMENTATION</code>, <code>REVIEW</code>, <code>ANALYSIS</code>, <code>OPTIMIZATION</code>, <code>CUSTOM</code>)[cite: 9].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Modèle Principal <code>TaskModel(Base)</code></h5>
+    <ul>
+      <li><strong>Colonnes &amp; Indexation :</strong> Identifiant UUID, clé étrangère <code>project_id</code> (vers <code>projects.id</code> avec suppression en cascade), métriques de ressources (CPU, Mémoire), timeouts, compteurs de retries, statut de validation humaine et index composites d'optimisation d'ordonnancement[cite: 9].</li>
+      <li><strong>Relations SQLAlchemy :</strong> Relation parente avec <code>ProjectModel</code> et relations filles avec <code>ExecutionLogModel</code> et <code>Artifact</code> avec chargement réactif <code>lazy="selectin"</code> et suppression en cascade[cite: 9].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Propriétés Hybrides &amp; Validateurs</h5>
+    <ul>
+      <li>
+        <strong>Propriétés Hybrides (<code>@hybrid_property</code>) :</strong>
+        <ul>
+          <li><code>is_terminal</code>, <code>is_running</code>, <code>is_pending</code>, <code>is_success</code>, <code>is_failed</code>, <code>is_blocked</code>, <code>is_ready</code> : Prédicats d'état métier[cite: 9].</li>
+          <li><code>elapsed_time</code> &amp; <code>remaining_time</code> : Calcul dynamique en secondes du temps d'exécution écoulé et restant[cite: 9].</li>
+          <li><code>is_timeout</code> : Détection automatique de dépassement du temps limite configuré[cite: 9].</li>
+          <li><code>completion_rate</code> : Taux de complétion dynamique (0%, 50% ou 100% selon l'état)[cite: 9].</li>
+        </ul>
+      </li>
+      <li>
+        <strong>Validateurs Intégrés (<code>@validates</code>) :</strong>
+        <ul>
+          <li><code>validate_name</code> &amp; <code>validate_skill_id</code> : Filtrage Regex strict des caractères autorisés et contrôle de longueur[cite: 9].</li>
+          <li><code>validate_dependencies</code> : Garantie de structure sous forme de liste sans éléments en double[cite: 9].</li>
+          <li><code>validate_retry_counts</code> : Bornage des tentatives (compteurs non négatifs, maximum 10 retries)[cite: 9].</li>
+          <li><code>validate_timeout</code> : Validation du délai d'exécution ($1 \text{s} \le \text{timeout} \le 3600 \text{s}$)[cite: 9].</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Transitions d'État, Logique DAG &amp; Utilitaires</h5>
+    <ul>
+      <li><strong>Transitions de Cycle de Vie :</strong> Méthodes explicites <code>mark_ready</code>, <code>mark_started</code>, <code>mark_auto_testing</code>, <code>mark_success</code>, <code>mark_failed</code>, <code>mark_circuit_broken</code>, <code>mark_waiting_human</code>, <code>mark_human_validated</code>, <code>mark_cancelled</code>, <code>mark_blocked</code>, <code>mark_skipped</code> (avec traçabilité d'audit automatique)[cite: 9].</li>
+      <li><strong>Ordonnancement DAG &amp; Exécution :</strong> <code>is_executable(completed_task_ids)</code> (vérification des dépendances prérequises), <code>get_dependency_depth()</code> et <code>get_dependency_graph()</code>[cite: 9].</li>
+      <li><strong>Gestion des Retries :</strong> <code>can_retry()</code>, <code>increment_retry()</code> et <code>get_remaining_retries()</code>[cite: 9].</li>
+      <li><strong>Logs &amp; Métadonnées :</strong> Méthodes de journalisation interne (<code>add_log</code>, <code>get_logs</code>), gestionnaire de clés/valeurs de métadonnées (<code>add_metadata</code>, <code>get_metadata</code>, <code>remove_metadata</code>) et journal d'audit (<code>_add_audit_log</code>, <code>get_audit_logs</code>)[cite: 9].</li>
+      <li><strong>Monitoring &amp; Sérialisation :</strong> <code>get_statistics()</code> (synthèse d'exécution et ressources), <code>to_dict()</code> et <code>to_summary()</code>[cite: 9].</li>
+      <li><strong>Méthodes Usines (Factories) :</strong> <code>create_from_spec(...)</code> et <code>create_from_dict(...)</code> pour instancier des tâches depuis une spécification ou un dictionnaire[cite: 9].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Machine à États Explicite et Traçable :</strong> Les changements d'état s'effectuent exclusivement via des méthodes dédiées (<code>mark_*</code>) enregistrant systématiquement un journal d'audit avec l'état précédent et les motifs[cite: 9].</li>
+    <li><strong>Ordonnancement Exécutoire DAG :</strong> La méthode <code>is_executable</code> permet à l'orchestrateur de vérifier si une tâche est débloquée en comparant ses dépendances avec l'ensemble des tâches terminées[cite: 9].</li>
+    <li><strong>Tolérance aux Panne &amp; Circuit Breaker :</strong> Gestion granulaire des tentatives d'exécution empêchant les boucles infinies grâce à l'état <code>CIRCUIT_BROKEN</code> et le contrôle <code>max_retries</code>[cite: 9].</li>
+    <li><strong>Validation Stricte des Paramètres d'Entrée :</strong> Assainissement systématique des chaînes (Regex) et validation de bornes sur les timeouts et retries dès l'affectation[cite: 9].</li>
+    <li><strong>Calcul Temporalisé Réactif :</strong> Métriques de temps écoulé et restant calculées à la volée via <code>@hybrid_property</code> évitant les incohérences de persistance[cite: 9].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Integration Native du Human-in-the-Loop :</strong> Prise en compte explicite de la validation humaine dans le flux de travail avec l'état <code>WAITING_HUMAN_VALIDATION</code> et la méthode <code>mark_human_validated</code>[cite: 9].</li>
+    <li><strong>Circuit Breaker Intégré :</strong> Bascule automatique vers l'état de rupture de circuit lors de l'atteinte du seuil d'échec critique sans bloquer indéfiniment le pipeline[cite: 9].</li>
+    <li><strong>Méthodes d'Analyse Topology DAG :</strong> Extraction instantanée des graphes et de la profondeur de dépendances pour alimenter les algorithmes d'ordonnancement parallèle[cite: 9].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/models/task.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Modèle ORM <code>TaskModel</code> complet de 25+ colonnes, indexation composite et relations SQLAlchemy[cite: 9]</li>
+    <li>3 énumérations métier (<code>TaskState</code>, <code>TaskPriority</code>, <code>TaskType</code>)[cite: 9]</li>
+    <li>5 validateurs de données à l'assignation (Regex, bornage 1-3600s timeout, dédoublonnage)[cite: 9]</li>
+    <li>11 propriétés hybrides pour le suivi réactif du statut et du temps[cite: 9]</li>
+    <li>11 méthodes de transition d'état métier avec traçabilité d'audit intégrée[cite: 9]</li>
+    <li>Outillage DAG (<code>is_executable</code>, <code>get_dependency_graph</code>) et gestionnaire de retries/circuit breaker[cite: 9]</li>
+    <li>Usines statiques de création (<code>create_from_spec</code>, <code>create_from_dict</code>) et sérialisation flexible[cite: 9]</li>
+    <li>Documentation complète au format Docstrings et script de test unitaire CLI exécutable[cite: 9]</li>
+  </ul>
+</div>

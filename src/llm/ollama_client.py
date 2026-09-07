@@ -11,8 +11,8 @@ import httpx
 import json
 import asyncio
 import hashlib
-from typing import Optional, List, Dict, Any, AsyncIterator, Union
-from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any, AsyncIterator, Union, Callable
+from datetime import datetime, timedelta, timezone
 import logging
 
 from src.llm.llm_client import LLMClient
@@ -71,14 +71,20 @@ class OllamaClient(LLMClient):
             cache_embeddings: Activer le cache des embeddings
             cache_ttl: Durée de vie du cache en secondes
         """
+        # Valeurs par défaut sécurisées avec getattr
+        default_model = getattr(settings.llm, 'default_model', 'llama2') if hasattr(settings, 'llm') else 'llama2'
+        embedding_model_default = getattr(settings.llm, 'embedding_model', 'nomic-embed-text') if hasattr(settings, 'llm') else 'nomic-embed-text'
+        ollama_url_default = getattr(settings.llm, 'ollama_url', 'http://localhost:11434') if hasattr(settings, 'llm') else 'http://localhost:11434'
+        
         super().__init__(
-            model=model or settings.llm.default_model,
+            model=model or default_model,
             temperature=temperature,
-            timeout=timeout
+            timeout=timeout,
+            provider="ollama"
         )
         
-        self.base_url = base_url or settings.llm.ollama_url
-        self.embedding_model = embedding_model or settings.llm.embedding_model
+        self.base_url = base_url or ollama_url_default
+        self.embedding_model = embedding_model or embedding_model_default
         self.connect_timeout = connect_timeout
         self.max_retries = max_retries
         self.cache_embeddings = cache_embeddings
@@ -117,13 +123,13 @@ class OllamaClient(LLMClient):
         if self._client:
             await self._client.aclose()
         
-        # Configuration des timeouts granulaires
+        # Configuration des timeouts granulaires (utilisation de pool_timeout au lieu de pool)
         timeout_config = httpx.Timeout(
             timeout=self.timeout,
             connect=self.connect_timeout,
             read=self.timeout,
             write=30.0,
-            pool=5.0
+            pool_timeout=5.0
         )
         
         self._client = httpx.AsyncClient(
@@ -133,8 +139,11 @@ class OllamaClient(LLMClient):
         )
         self._initialized = True
         
-        # Mettre à jour les modèles disponibles
-        await self._update_models_available()
+        # Mettre à jour les modèles disponibles (ne pas bloquer si échec)
+        try:
+            await self._update_models_available()
+        except Exception as e:
+            logger.warning(f"Could not update models list: {str(e)}")
     
     async def _update_models_available(self) -> None:
         """
@@ -171,8 +180,8 @@ class OllamaClient(LLMClient):
         """
         await self._ensure_client()
         
-        url = f"{self.base_url}/{endpoint}"
-        start_time = datetime.utcnow()
+        url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+        start_time = datetime.now(timezone.utc)
         
         for attempt in range(self.max_retries if retry_on_failure else 1):
             try:
@@ -184,7 +193,7 @@ class OllamaClient(LLMClient):
                 response.raise_for_status()
                 
                 # Mettre à jour les métriques
-                duration = (datetime.utcnow() - start_time).total_seconds()
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
                 self._update_metrics(endpoint, duration, success=True)
                 
                 return response.json()
@@ -234,6 +243,7 @@ class OllamaClient(LLMClient):
             duration: Durée de la requête
             success: Succès de la requête
         """
+        now_utc = datetime.now(timezone.utc)
         if "generate" in endpoint:
             self._metrics["total_generations"] += 1
             if success:
@@ -242,7 +252,7 @@ class OllamaClient(LLMClient):
                 self._metrics["average_generation_time"] = (
                     (current_avg * (count - 1) + duration) / count
                 )
-                self._metrics["last_generation_time"] = datetime.utcnow()
+                self._metrics["last_generation_time"] = now_utc
         elif "embeddings" in endpoint:
             self._metrics["total_embeddings"] += 1
             if success:
@@ -251,7 +261,7 @@ class OllamaClient(LLMClient):
                 self._metrics["average_embedding_time"] = (
                     (current_avg * (count - 1) + duration) / count
                 )
-                self._metrics["last_embedding_time"] = datetime.utcnow()
+                self._metrics["last_embedding_time"] = now_utc
     
     # ==========================================================================
     # GÉNÉRATION
@@ -289,9 +299,8 @@ class OllamaClient(LLMClient):
             str: Réponse générée
         """
         self._request_count += 1
-        self._last_request_time = datetime.utcnow()
+        self._last_request_time = datetime.now(timezone.utc)
         
-        # Préparer les données
         data = {
             "model": self.model,
             "prompt": prompt,
@@ -303,7 +312,6 @@ class OllamaClient(LLMClient):
         if system_prompt:
             data["system"] = system_prompt
         
-        # Options avancées
         options = {}
         if max_tokens is not None:
             options["num_predict"] = max_tokens
@@ -362,11 +370,10 @@ class OllamaClient(LLMClient):
             str: Tokens générés en streaming
         """
         self._request_count += 1
-        self._last_request_time = datetime.utcnow()
+        self._last_request_time = datetime.now(timezone.utc)
         
         await self._ensure_client()
         
-        # Préparer les données
         data = {
             "model": self.model,
             "prompt": prompt,
@@ -381,7 +388,7 @@ class OllamaClient(LLMClient):
         if max_tokens:
             data["options"] = {"num_predict": max_tokens}
         
-        url = f"{self.base_url}/api/generate"
+        url = f"{self.base_url.rstrip('/')}/api/generate"
         
         try:
             async with self._client.stream("POST", url, json=data) as response:
@@ -414,23 +421,20 @@ class OllamaClient(LLMClient):
         Returns:
             List[float]: Embedding vectoriel
         """
-        # Vérifier le cache
+        now_utc = datetime.now(timezone.utc)
         if use_cache and self.cache_embeddings:
             cache_key = hashlib.md5(text.encode()).hexdigest()
             if cache_key in self._embedding_cache:
                 cache_entry = self._embedding_cache[cache_key]
-                # Vérifier le TTL
-                if (datetime.utcnow() - cache_entry["timestamp"]).total_seconds() < self.cache_ttl:
+                if (now_utc - cache_entry["timestamp"]).total_seconds() < self.cache_ttl:
                     self._metrics["total_cache_hits"] += 1
                     logger.debug(f"Embedding cache hit for key: {cache_key[:8]}")
                     return cache_entry["embedding"]
                 else:
-                    # Cache expiré
                     del self._embedding_cache[cache_key]
         
         self._metrics["total_cache_misses"] += 1
         
-        # Générer l'embedding
         data = {
             "model": self.embedding_model,
             "prompt": text
@@ -447,13 +451,12 @@ class OllamaClient(LLMClient):
             
             embedding = response["embedding"]
             
-            # Mettre en cache
             if use_cache and self.cache_embeddings:
                 cache_key = hashlib.md5(text.encode()).hexdigest()
                 self._embedding_cache[cache_key] = {
                     "embedding": embedding,
-                    "timestamp": datetime.utcnow(),
-                    "text": text[:100]  # Aperçu
+                    "timestamp": datetime.now(timezone.utc),
+                    "text": text[:100]
                 }
                 logger.debug(f"Embedding cached with key: {cache_key[:8]}")
             
@@ -495,15 +498,16 @@ class OllamaClient(LLMClient):
         Returns:
             Dict[str, Any]: Statistiques du cache
         """
+        total_hits = self._metrics["total_cache_hits"]
+        total_misses = self._metrics["total_cache_misses"]
+        total_requests = total_hits + total_misses
+        hit_rate = (total_hits / total_requests) if total_requests > 0 else 0.0
+        
         return {
             "total_cached": len(self._embedding_cache),
-            "cache_hits": self._metrics["total_cache_hits"],
-            "cache_misses": self._metrics["total_cache_misses"],
-            "hit_rate": (
-                self._metrics["total_cache_hits"] / (self._metrics["total_cache_hits"] + self._metrics["total_cache_misses"])
-                if self._metrics["total_cache_hits"] + self._metrics["total_cache_misses"] > 0
-                else 0
-            ),
+            "cache_hits": total_hits,
+            "cache_misses": total_misses,
+            "hit_rate": hit_rate,
             "ttl_seconds": self.cache_ttl
         }
     
@@ -520,7 +524,7 @@ class OllamaClient(LLMClient):
         """
         try:
             await self._ensure_client()
-            response = await self._client.get(f"{self.base_url}/api/tags")
+            response = await self._client.get(f"{self.base_url.rstrip('/')}/api/tags")
             return response.status_code == 200
         except Exception as e:
             logger.warning(f"Health check failed: {str(e)}")
@@ -544,15 +548,13 @@ class OllamaClient(LLMClient):
         try:
             await self._ensure_client()
             
-            # Vérifier la disponibilité
-            response = await self._client.get(f"{self.base_url}/api/tags")
+            response = await self._client.get(f"{self.base_url.rstrip('/')}/api/tags")
             if response.status_code == 200:
                 data = response.json()
                 result["status"] = "healthy"
                 result["version"] = data.get("version", "unknown")
                 result["models"] = [m.get("name") for m in data.get("models", [])]
                 
-                # Vérifier que le modèle par défaut est disponible
                 if self.model not in result["models"]:
                     result["status"] = "degraded"
                     result["warning"] = f"Default model '{self.model}' not found"
@@ -646,7 +648,7 @@ class OllamaClient(LLMClient):
         """
         await self._ensure_client()
         
-        url = f"{self.base_url}/api/pull"
+        url = f"{self.base_url.rstrip('/')}/api/pull"
         data = {"name": model_name}
         
         try:

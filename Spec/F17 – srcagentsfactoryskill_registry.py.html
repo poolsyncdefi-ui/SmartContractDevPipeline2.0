@@ -1,0 +1,71 @@
+<div class="spec-section" id="f17-skill-registry-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/agents/factory/skill_registry.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/agents/factory/skill_registry.py</code> implémente le registre centralisé et singleton permettant de gérer le cycle de vie, la persistance, le versionnage et les dépendances de toutes les compétences (Skills) du pipeline[cite: 16].</p>
+
+  <div class="model-group">
+    <h5>Énumérations &amp; Métadonnées</h5>
+    <ul>
+      <li><code>SkillStatus</code> : Énumération des états d'enregistrement d'une compétence (<code>REGISTERED</code>, <code>INITIALIZED</code>, <code>VALIDATED</code>, <code>ACTIVE</code>, <code>DEPRECATED</code>, <code>ARCHIVED</code>)[cite: 16].</li>
+      <li><code>SkillScope</code> : Portée de disponibilité d'une compétence (<code>GLOBAL</code>, <code>PROJECT</code>, <code>SESSION</code>)[cite: 16].</li>
+      <li><code>SkillMetadata</code> : DataClass de métadonnées associées à une compétence (IDs, version, portée, tags, compteur d'utilisation, dépendances, horodatages) avec sérialisation <code>to_dict()</code>[cite: 16].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Registre Singleton : <code>SkillRegistry</code></h5>
+    <ul>
+      <li><code>__new__()</code> &amp; <code>initialize(knowledge_base, message_bus)</code> : Implémentation du pattern Singleton garantissant une instance unique, avec raccordement asynchrone au bus de messages et à la base de connaissances RAG[cite: 16].</li>
+      <li><code>register()</code> &amp; <code>register_instance()</code> : Enregistrement de classes ou d'instances de compétences avec validation d'héritage <code>BaseSkill</code> et vérification de collision de versions[cite: 16].</li>
+      <li><code>get()</code> &amp; <code>get_instance()</code> : Récupération des classes de compétences ou instanciation dynamique configurée avec injection du client LLM et du RAG[cite: 16].</li>
+      <li><code>get_metadata()</code>, <code>has_skill()</code>, <code>list_skills()</code> : Primitives de consultation et filtrage multicritères (par portée, statut, tag ou projet)[cite: 16].</li>
+      <li><code>list_versions()</code>, <code>get_current_version()</code>, <code>set_current_version()</code> : Gestion dynamique du multi-versionnage des compétences[cite: 16].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Indexation, Dépendances &amp; Persistance SQL</h5>
+    <ul>
+      <li><code>add_tags()</code>, <code>remove_tag()</code>, <code>get_tags()</code> : Gestion des tags et indexation inversée (<code>_tags_index</code>) pour la recherche rapide[cite: 16].</li>
+      <li><code>add_dependency()</code>, <code>get_dependencies()</code>, <code>get_dependents()</code>, <code>get_dependency_graph()</code> : Construction et extraction du graphe orienté bidirectionnel des dépendances entre compétences[cite: 16].</li>
+      <li><code>load_from_database(db_session)</code> : Chargement asynchrone des compétences depuis la base de données via SQLAlchemy avec instanciation de classes dynamiques[cite: 16].</li>
+      <li><code>save_to_database(db_session)</code> : Synchronisation et sauvegarde état/métadonnées dans le modèle ORM <code>SkillRecordModel</code>[cite: 16].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Statistiques, Télémétrie &amp; Décorateur Automatique</h5>
+    <ul>
+      <li><code>get_stats()</code> &amp; <code>_get_most_used_skills()</code> : Génération de métriques globales (répartition par statut/portée, compétences les plus sollicitées, taux d'erreurs)[cite: 16].</li>
+      <li><code>archive_skill()</code>, <code>unarchive_skill()</code>, <code>clear_cache()</code> : Opérations de maintenance et gestion du cache mémoire[cite: 16].</li>
+      <li><code>_create_skill_class_from_record()</code> : Création dynamique de sous-classes <code>BaseSkill</code> à la volée avec modèles Pydantic générés (<code>create_model</code>) depuis la BDD[cite: 16].</li>
+      <li><code>@register_skill(...)</code> : Décorateur Python permettant l'auto-enregistrement déclaratif des compétences lors de la définition de leur classe[cite: 16].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Garantie d'Instance Unique (Pattern Singleton) :</strong> Contrôle d'accès centralisé à toutes les compétences du pipeline pour prévenir les inconsistances de registres secondaires via <code>__new__</code>[cite: 16].</li>
+    <li><strong>Enregistrement Déclaratif par Décorateur :</strong> Utilisation du décorateur <code>@register_skill</code> pour simplifier l'extensibilité et auto-enregistrer les nouvelles compétences sans modifier le code cœur[cite: 16].</li>
+    <li><strong>Gestion Avancée du Graphe de Dépendances :</strong> Maintien bidirectionnel des relations (dépendances requises vs compétences dépendantes) facilitant l'analyse d'impact en cas de mise à jour[cite: 16].</li>
+    <li><strong>Persistance Rétrocompatible et Instanciation Dynamique :</strong> Reconstruction automatique de classes de compétences à partir de schémas JSON stockés en BDD grâce à <code>create_model</code> de Pydantic[cite: 16].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Découplage Événementiel via MessageBus :</strong> Émission automatique d'événements (<code>skill_registered</code>) sur le bus système pour notifier les autres agents du pipeline[cite: 16].</li>
+    <li><strong>Télémétrie d'Usage Intégrée :</strong> Traçabilité native du nombre d'exécutions (<code>usage_count</code>) et de la date de dernière utilisation (<code>last_used</code>) pour identifier les compétences obsolètes ou critiques[cite: 16].</li>
+    <li><strong>Système de Versionnage par Compétence :</strong> Support simultané de plusieurs versions pour une même compétence avec gestion explicite de la version active par défaut[cite: 16].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/agents/factory/skill_registry.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 classe Singleton centrale (<code>SkillRegistry</code>)[cite: 16]</li>
+    <li>1 DataClass de métadonnées (<code>SkillMetadata</code>) et 2 énumérations (<code>SkillStatus</code>, <code>SkillScope</code>)[cite: 16]</li>
+    <li>1 décorateur d'auto-enregistrement (<code>@register_skill</code>)[cite: 16]</li>
+    <li>Gestionnaire de graphes de dépendances bidirectionnel et indexation par tags[cite: 16]</li>
+    <li>Persistance SQLAlchemy asynchrone et instanciation dynamique à la volée[cite: 16]</li>
+  </ul>
+</div>

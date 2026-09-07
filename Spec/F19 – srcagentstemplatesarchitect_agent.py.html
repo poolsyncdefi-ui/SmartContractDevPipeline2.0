@@ -1,0 +1,73 @@
+<div class="spec-section" id="f19-architect-agent-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/agents/templates/architect_agent.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/agents/templates/architect_agent.py</code> implémente l'agent coordinateur et architecte responsable de l'analyse des spécifications YAML, de la décomposition en un graphe orienté acyclique de tâches (DAG), de la planification du workflow et de la création dynamique de compétences manquantes via LLM[cite: 18].</p>
+
+  <div class="model-group">
+    <h5>Énumérations &amp; Structures du DAG</h5>
+    <ul>
+      <li><code>TaskType</code> : Énumération des typologies de tâches du pipeline (<code>ANALYSIS</code>, <code>DESIGN</code>, <code>CONTRACT_GENERATION</code>, <code>TEST_GENERATION</code>, <code>SECURITY_AUDIT</code>, <code>FORMAL_VERIFICATION</code>, <code>OPTIMIZATION</code>, <code>DEPLOYMENT</code>, <code>DOCUMENTATION</code>, <code>REVIEW</code>, <code>CUSTOM</code>)[cite: 18].</li>
+      <li><code>TaskStatus</code> : Énumération des états d'exécution d'un nœud du DAG (<code>PENDING</code>, <code>READY</code>, <code>IN_PROGRESS</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>BLOCKED</code>, <code>SKIPPED</code>)[cite: 18].</li>
+      <li><code>TaskNode</code> : DataClass représentant un nœud de tâche (identifiant, type, description, compétences requises, dépendances, priorité, durée estimée, agent assigné, métadonnées) avec méthode de sérialisation <code>to_dict()</code>[cite: 18].</li>
+      <li><code>ProjectAnalysis</code> : DataClass résumant l'analyse globale d'un projet (score de complexité, nombre de tâches, compétences requises/manquantes, durée totale estimée, métadonnées d'exécution)[cite: 18].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Agent Architecte Principal : <code>ArchitectAgent</code> (Parsing &amp; Orchestration)</h5>
+    <ul>
+      <li><code>__init__()</code> : Initialisation avec injection du <code>SkillRegistry</code>, de la <code>KnowledgeBase</code>, paramétrage de <code>max_tasks</code> et activation optionnelle de la création automatique de compétences (<code>auto_create_skills</code>)[cite: 18].</li>
+      <li><code>execute_task()</code> : Point d'entrée principal orchestrant le parsing de la spec YAML, la validation, l'évaluation de la complexité, la génération du DAG, la résolution des compétences et l'enregistrement de l'historique[cite: 18].</li>
+      <li><code>parse_yaml_spec()</code> : Parsing sécurisé des spécifications YAML avec gestion robuste des erreurs de syntaxe[cite: 18].</li>
+      <li><code>_validate_spec()</code> : Contrôle de conformité de la spécification (présence des champs requis, validation de la structure de workflow, respect de la limite <code>max_tasks</code>)[cite: 18].</li>
+      <li><code>_analyze_complexity()</code> : Calcul algorithmique d'un score de complexité projet (sur une échelle de 1 à 10) prenant en compte le nombre de tâches, les exigences de sécurité, les intégrations et les dépendances[cite: 18].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Génération, Validation &amp; Tri du DAG</h5>
+    <ul>
+      <li><code>generate_dag()</code> : Pipeline complet de construction des nœuds de tâches à partir de la spécification projet[cite: 18].</li>
+      <li><code>_validate_dag()</code> : Algorithme de recherche en profondeur (DFS avec stack de récurrence) détectant les cycles d'interdépendance et vérifiant l'existence de chaque tâche parente[cite: 18].</li>
+      <li><code>_topological_sort()</code> : Ordonnancement topologique des tâches basé sur l'algorithme de Kahn pour garantir l'exécution séquentielle optimale des dépendances[cite: 18].</li>
+      <li><code>_enrich_with_context()</code> : Interrogation de la base de connaissances RAG pour enrichir la description des tâches et métadonnées du DAG avec du contexte documentaire[cite: 18].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Extraction &amp; Synthèse Dynamique de Compétences (Skill Synthesis)</h5>
+    <ul>
+      <li><code>_extract_skills()</code> &amp; <code>_extract_task_skills()</code> : Identification globale des compétences nécessaires (explicites dans la spec, associées aux tâches ou liées aux intégrations)[cite: 18].</li>
+      <li><code>_get_implicit_skills()</code> : Cartographie des compétences implicites requises selon le type de tâche (ex: Solidity/OpenZeppelin pour <code>contract_generation</code>, Slither pour <code>security_audit</code>)[cite: 18].</li>
+      <li><code>_check_available_skills()</code> : Vérification de la présence des compétences requises au sein du <code>SkillRegistry</code>[cite: 18].</li>
+      <li><code>_create_missing_skills()</code> &amp; <code>_synthesize_skill()</code> : Génération automatique de classes de compétences manquantes par le LLM et enregistrement dynamique dans le registre avec la portée <code>PROJECT</code>[cite: 18].</li>
+      <li><code>get_analysis()</code>, <code>get_recent_analyses()</code> &amp; <code>get_statistics()</code> : Primitives de consultation d'historique et calcul de métriques globales sur les analyses réalisées[cite: 18].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Détection Proactive des Cycles (DFS) :</strong> Validation stricte du graphe par détection de cycle avant toute exécution pour prévenir les blocages indéfinis lors de l'exécution du pipeline[cite: 18].</li>
+    <li><strong>Ordonnancement Topologique Déterministe :</strong> Application de l'algorithme de Kahn pour garantir un ordre d'exécution strict et parallélisable des tâches[cite: 18].</li>
+    <li><strong>Enrichissement Contextuel RAG :</strong> Augmentation dynamique de la précision des tâches par injection de contexte extrait de la base de connaissances[cite: 18].</li>
+    <li><strong>Tolérance aux Erreurs et Diagnostics :</strong> Captures d'exceptions détaillées à chaque niveau (YAML parsing, validation DAG, génération de compétences) évitant l'arrêt brutal du pipeline[cite: 18].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Auto-Extension Dynamique du Registre (Skill Synthesis) :</strong> Capacité à générer à chaud de nouvelles compétences personnalisées via LLM si une spécification exige une fonction absente du registre[cite: 18].</li>
+    <li><strong>Inférence de Compétences Implicites :</strong> Déduction automatique du stack technique recommandé selon les types de tâches définis (ex: Foundry, Halmos, Slither, NatSpec)[cite: 18].</li>
+    <li><strong>Scoring Algorithmique de Complexité :</strong> Évaluation objective de la complexité du projet (1 à 10) ajustant la planification selon la profondeur du workflow et des exigences de sécurité[cite: 18].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/agents/templates/architect_agent.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 classe Agent Architecte complète (<code>ArchitectAgent</code>)[cite: 18]</li>
+    <li>2 DataClasses de nœud/résultat (<code>TaskNode</code>, <code>ProjectAnalysis</code>) et 2 énumérations (<code>TaskType</code>, <code>TaskStatus</code>)[cite: 18]</li>
+    <li>Validation acyclique (DFS) et tri topologique (Kahn) du DAG[cite: 18]</li>
+    <li>Synthèse automatique de compétences manquantes via LLM et injection RAG[cite: 18]</li>
+    <li>Suivi statistique et historique d'analyses[cite: 18]</li>
+  </ul>
+</div>

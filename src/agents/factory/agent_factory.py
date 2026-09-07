@@ -20,7 +20,7 @@ Le processus de creation suit les etapes:
 4. Assemblage de l'agent final avec ses competences
 5. Application des bonnes pratiques et validations
 """
-from typing import List, Type, Dict, Any, Optional, Set, Union
+from typing import List, Type, Dict, Any, Optional, Set
 from datetime import datetime
 import logging
 import asyncio
@@ -201,7 +201,8 @@ class AgentFactory:
                     self._skill_configs[skill_id] = SkillConfig(
                         skill_id=skill_id,
                         name=skill_id,
-                        description=f"Default skill for {role_name}"
+                        description=f"Default skill for {role_name}",
+                        prompt_rules=f"Default prompt rules for {skill_id}"
                     )
         
         # Ajout des pratiques par defaut
@@ -303,8 +304,8 @@ class AgentFactory:
         # Mise a jour des statistiques
         self._creation_stats["total_creations"] += 1
         
-        # Verification du cache
-        cache_key = self._generate_cache_key(agent_id, role_name, skill_ids, practice_ids)
+        # Verification du cache (corrigé pour prendre en compte les pratiques par défaut)
+        cache_key = self._generate_cache_key(role_name, skill_ids, practice_ids)
         if use_cache and self.cache_enabled and cache_key in self._cache:
             self._creation_stats["cache_hits"] += 1
             logger.debug(f"Agent {agent_id} returned from cache")
@@ -362,7 +363,7 @@ class AgentFactory:
         except Exception as e:
             self._creation_stats["failed_creations"] += 1
             logger.error(f"Failed to create agent {agent_id}: {str(e)}")
-            raise PipelineError(f"Agent creation failed: {str(e)}")
+            raise PipelineError(f"Agent creation failed: {str(e)}") from e
     
     async def create_agent_async(
         self,
@@ -386,7 +387,6 @@ class AgentFactory:
         Returns:
             AbstractAgent: Agent cree
         """
-        # Pour l'instant, appels synchrones, mais prete pour des extensions async
         return self.create_agent(
             agent_id=agent_id,
             role_name=role_name,
@@ -419,7 +419,6 @@ class AgentFactory:
             AbstractAgent: Agent cree
         """
         # Recuperer les competences par defaut pour le role
-        # Cette methode peut etre surchargee par des configurations specifiques
         default_skills = self._get_default_skills_for_role(role_name)
         
         if not default_skills:
@@ -512,10 +511,12 @@ class AgentFactory:
         Returns:
             bool: True si supprime, False sinon
         """
-        if agent_id in self._cache:
+        agent = self._cache.get(agent_id)
+        if agent:
+            # Supprimer l'entrée directe par ID
             del self._cache[agent_id]
-            # Nettoyer aussi les cles de cache derives
-            keys_to_remove = [k for k in self._cache if k.startswith(f"{agent_id}_")]
+            # Supprimer également toutes les clés de cache dérivées pointant vers cet agent (Correction du bug de nettoyage)
+            keys_to_remove = [k for k, v in self._cache.items() if v is agent]
             for key in keys_to_remove:
                 del self._cache[key]
             logger.info(f"Agent {agent_id} removed from cache")
@@ -585,7 +586,8 @@ class AgentFactory:
                     skill_config = SkillConfig(
                         skill_id=skill_id,
                         name=skill_id,
-                        description=f"Skill: {skill_id}"
+                        description=f"Skill: {skill_id}",
+                        prompt_rules=f"Default prompt rules for {skill_id}"
                     )
                     logger.warning(f"Using default config for skill {skill_id}")
                 
@@ -633,12 +635,16 @@ class AgentFactory:
                 logger.warning(f"Skill {skill.skill_id} missing input_schema")
             
             # Verification des dependances
-            metadata = self.registry.get_metadata(skill.skill_id)
-            for dep_id in metadata.dependencies:
-                if not self.registry.has_skill(dep_id):
-                    raise ValueError(
-                        f"Skill {skill.skill_id} depends on {dep_id} which is not registered"
-                    )
+            try:
+                metadata = self.registry.get_metadata(skill.skill_id)
+                for dep_id in metadata.dependencies:
+                    if not self.registry.has_skill(dep_id):
+                        raise ValueError(
+                            f"Skill {skill.skill_id} depends on {dep_id} which is not registered"
+                        )
+            except SkillNotFoundError:
+                # Si la metadata n'existe pas, on ignore la vérification des dépendances
+                logger.warning(f"Metadata not found for skill {skill.skill_id}, skipping dependency check")
     
     def _prepare_practices(
         self,
@@ -656,7 +662,7 @@ class AgentFactory:
             List[BaseBestPractice]: Liste des pratiques instanciees
         """
         practices = []
-        ids_to_use = practice_ids or list(self._default_practices)
+        ids_to_use = practice_ids if practice_ids is not None else list(self._default_practices)
         
         for practice_id in ids_to_use:
             if practice_id in self._practice_instances:
@@ -702,15 +708,12 @@ class AgentFactory:
         message_bus = context.message_bus or self.message_bus
         if message_bus:
             try:
-                # Emission asynchrone simplifiee
-                # Dans la pratique, utiliserait une methode asynchrone
                 logger.debug(f"Agent creation notified: {agent.agent_id}")
             except Exception as e:
                 logger.error(f"Failed to notify agent creation: {str(e)}")
     
     def _generate_cache_key(
         self,
-        agent_id: str,
         role_name: str,
         skill_ids: List[str],
         practice_ids: Optional[List[str]]
@@ -719,7 +722,6 @@ class AgentFactory:
         Genere une cle de cache pour un agent.
         
         Args:
-            agent_id: ID de l'agent
             role_name: Role de l'agent
             skill_ids: Liste des competences
             practice_ids: Liste des pratiques
@@ -727,8 +729,8 @@ class AgentFactory:
         Returns:
             str: Cle de cache
         """
-        # Une cle simple basee sur les parametres
-        practice_key = ','.join(sorted(practice_ids or []))
+        practices_to_use = practice_ids if practice_ids is not None else list(self._default_practices)
+        practice_key = ','.join(sorted(practices_to_use))
         return f"{role_name}_{','.join(sorted(skill_ids))}_{practice_key}"
     
     def _get_default_skills_for_role(self, role_name: str) -> List[str]:
@@ -741,7 +743,6 @@ class AgentFactory:
         Returns:
             List[str]: IDs des competences par defaut
         """
-        # Mapping des roles vers leurs competences par defaut
         default_mapping = {
             AgentRole.ARCHITECT.value: ["project_analysis", "task_planning", "requirement_analysis"],
             AgentRole.DEVELOPER.value: ["solidity_generation", "test_generation", "code_optimization"],
@@ -766,8 +767,6 @@ class AgentFactory:
         Returns:
             Optional[BaseBestPractice]: Instance de pratique ou None
         """
-        # Dans la pratique, cette methode utiliserait une usine de pratiques
-        # Pour l'instant, retourne None (sera implemente plus tard)
         logger.debug(f"Practice instance creation not implemented for {config.practice_id}")
         return None
     
@@ -778,7 +777,7 @@ class AgentFactory:
     def __repr__(self) -> str:
         return f"<AgentFactory templates={len(self._templates)} cache={len(self._cache)}>"
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> Dict[str, Any]:
         """
         Convertit la fabrique en dictionnaire.
         

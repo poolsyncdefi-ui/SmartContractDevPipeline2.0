@@ -1,0 +1,83 @@
+<div class="spec-section" id="f28-workflow-engine-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/orchestration/workflow_engine.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/orchestration/workflow_engine.py</code> implémente le moteur d'exécution asynchrone de tâches structurées en DAG, assurant l'ordonnancement topologique, la parallélisation contrôlée, la tolérance aux pannes et la persistance de l'état du pipeline[cite: 15].</p>
+
+  <div class="model-group">
+    <h5>Structures de Données &amp; Modèles</h5>
+    <ul>
+      <li><code>WorkflowStatus(str, Enum)</code> : Énumération des états du workflow (<code>PENDING</code>, <code>RUNNING</code>, <code>PAUSED</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>CANCELLED</code>)[cite: 15].</li>
+      <li><code>TaskExecutionStatus(str, Enum)</code> : Énumération des états granulaires d'une tâche (<code>PENDING</code>, <code>READY</code>, <code>RUNNING</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>RETRYING</code>, <code>SKIPPED</code>, <code>BLOCKED</code>)[cite: 15].</li>
+      <li><code>TaskExecution(dataclass)</code> : Modèle d'état d'exécution d'une tâche (identifiant, paramètres, dépendances, timestamps, nombre de retries, historique des tentatives, résultat/erreur et méthode <code>to_dict()</code>)[cite: 15].</li>
+      <li><code>WorkflowExecution(dataclass)</code> : Conteneur de l'état global du workflow (identifiant, dictionnaire des tâches, suivi de progression, statut global et méthode <code>to_dict()</code>)[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Classe Principale : <code>WorkflowEngine</code></h5>
+    <ul>
+      <li><strong>Initialisation &amp; Configuration :</strong>
+        <ul>
+          <li><code>__init__()</code> : Injection des dépendances (bus de messages, dictionnaire des agents, gestionnaire d'état, circuit breaker) et configuration des limites de parallélisme (<code>max_parallel</code>) et de retry[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Gestion des Tâches du DAG :</strong>
+        <ul>
+          <li><code>add_task()</code> &amp; <code>add_tasks()</code> : Enregistrement individuel ou groupé des tâches avec définition de leurs dépendances, priorité et nombre max de tentatives[cite: 15].</li>
+          <li><code>get_task()</code> &amp; <code>get_tasks_by_status()</code> : Méthodes d'inspection pour récupérer une tâche spécifique ou filtrer les tâches par statut d'exécution[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Orchestration &amp; Exécution Asynchrone :</strong>
+        <ul>
+          <li><code>start()</code> : Inscription de l'exécution, initialisation des verrous et déclenchement du pipeline avec gestion du cycle de vie complet[cite: 15].</li>
+          <li><code>stop()</code> : Demande l'arrêt gracieux de l'exécution en cours (annulation)[cite: 15].</li>
+          <li><code>_run_pipeline()</code> : Boucle d'ordonnancement dynamique utilisant un sémaphore <code>asyncio.Semaphore</code> pour traiter les tâches prêtes ou bloquées selon les créneaux disponibles[cite: 15].</li>
+          <li><code>_execute_task()</code> : Exécution isolée d'une tâche par son agent dédié, incluant le contrôle par Circuit Breaker, le chronométrage et la gestion du backoff exponentiel en cas d'échec[cite: 15].</li>
+          <li><code>_resolve_order()</code> : Implémentation du tri topologique (Algorithme de Kahn) pour valider la structure du DAG et détecter les cycles[cite: 15].</li>
+          <li><code>_is_ready()</code> : Vérification de la satisfaction complète des dépendances amont d'une tâche[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Persistance de l'État :</strong>
+        <ul>
+          <li><code>_save_task_result()</code> &amp; <code>_save_task_error()</code> : Sauvegarde asynchrone des résultats d'exécution ou des erreurs dans le <code>ProjectState</code>[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Gestion des Événements &amp; Bus :</strong>
+        <ul>
+          <li><code>add_listener()</code> &amp; <code>remove_listener()</code> : Inscription/Désinscription de callbacks d'événements asynchrones[cite: 15].</li>
+          <li><code>_notify()</code> : Émission prioritaire vers les listeners locaux et publication d'événements structurés (<code>EventMessage</code>) sur le canal <code>workflow.events</code> du bus de communication[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Télémétrie &amp; Statistiques :</strong>
+        <ul>
+          <li><code>get_status()</code> &amp; <code>get_task_status()</code> : Extraction de la progression globale (ratio, tâche courante) et du détail par tâche[cite: 15].</li>
+          <li><code>get_execution_history()</code>, <code>to_dict()</code> &amp; <code>__repr__()</code> : Historique des workflows passés et sérialisation pour le monitoring[cite: 15].</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Parallélisme Contrôlé par Sémaphore :</strong> Utilisation de <code>asyncio.Semaphore(max_parallel)</code> pour limiter le nombre d'exécutions d'agents simultanées et prévenir la saturation des ressources[cite: 15].</li>
+    <li><strong>Résilience &amp; Retry avec Backoff Exponentiel :</strong> Gestion des erreurs à deux niveaux avec re-tentatives automatiques (délai calculé par $2^{\text{retry\_count}}$) avant déclaration d'échec définitif[cite: 15].</li>
+    <li><strong>Protection par Circuit Breaker :</strong> Interception préalable des exécutions via <code>CircuitBreaker.is_open()</code> pour éviter de surcharger des composants ou services défaillants[cite: 15].</li>
+    <li><strong>Détection de Cycles Sévère :</strong> Validation de la cohérence du DAG via l'algorithme de Kahn empêchant tout blocage indéfini en cas de dépendance circulaire[cite: 15].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Système Dual de Notification d'Événements :</strong> Notification synchrone des listeners applicatifs internes couplée à la publication distribuée sur le <code>MessageBus</code> (topic <code>workflow.events</code>)[cite: 15].</li>
+    <li><strong>Ordonnancement Dynamique Non-Bloquant :</strong> La boucle d'exécution évalue en continu les tâches en attente (<code>PENDING</code>), bloquées (<code>BLOCKED</code>) ou à re-tester (<code>RETRYING</code>) de façon totalement asynchrone[cite: 15].</li>
+    <li><strong>Traçabilité Intégrale des Tentatives :</strong> Chaque tâche conserve dans <code>attempts</code> l'historique détaillé (horodatage, message d'erreur, numéro d'essai) de toutes ses exécutions[cite: 15].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/orchestration/workflow_engine.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>2 énumérations typées (<code>WorkflowStatus</code>, <code>TaskExecutionStatus</code>) et 2 dataclasses (<code>TaskExecution</code>, <code>WorkflowExecution</code>)[cite: 15]</li>
+    <li>1 classe <code>WorkflowEngine</code> regroupant 18 méthodes couvrant la gestion du DAG, l'exécution asynchrone, la tolérance aux pannes et le monitoring[cite: 15]</li>
+    <li>Support complet des mécanismes de synchronisation <code>asyncio</code>, du retry à backoff exponentiel et de la persistance d'état[cite: 15]</li>
+  </ul>
+</div>

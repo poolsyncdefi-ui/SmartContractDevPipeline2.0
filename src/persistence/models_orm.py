@@ -4,7 +4,7 @@
 Aggregation point for all ORM models.
 F13 – src/persistence/models_orm.py
 
-Rôle Fonctionnel : Point d'agrégation unique pour tous les modèles ORM SQLAlchemy.
+Role Fonctionnel : Point d'agrégation unique pour tous les modèles ORM SQLAlchemy.
 Ce fichier centralise tous les imports de modèles pour les rendre disponibles
 via un seul point d'entree. Cela simplifie les imports dans le reste du projet
 et aide a eviter les dependances circulaires entre les modules.
@@ -22,10 +22,14 @@ Structure des relations:
 - TaskModel <-> ExecutionLogModel (one-to-many)
 - TaskModel <-> Artifact (one-to-many)
 - SkillRecordModel (standalone, referenced by SkillRegistry)
+
+Note: Les relations sont ajoutées dynamiquement après la définition des classes
+pour éviter les imports circulaires. Cela fonctionne car toutes les classes
+sont chargées avant la création du moteur SQLAlchemy.
 """
 from sqlalchemy import (
-    Column, String, JSON, DateTime, Integer, Float, ForeignKey, Text, 
-    Enum, Boolean, UniqueConstraint, Index, CheckConstraint
+    Column, String, JSON, DateTime, Integer, Float, ForeignKey, Text,
+    Enum as SQLEnum, Boolean, UniqueConstraint, Index, CheckConstraint
 )
 from sqlalchemy.orm import declarative_base, relationship, backref
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -55,37 +59,37 @@ class Sprint(Base):
     """
     Modele pour les sprints de developpement.
     Permet de regrouper les taches en cycles de developpement.
-    
+
     Relations:
         - project: ProjectModel parent (many-to-one)
         - task_results: TaskResult enfants (one-to-many)
     """
     __tablename__ = 'sprints'
-    
+
     # Identifiants
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String, ForeignKey('projects.id', ondelete='CASCADE'), nullable=False, index=True)
-    
+
     # Informations
     name = Column(String, nullable=False, index=True)
     description = Column(String, nullable=True)
     status = Column(String, default='planned', nullable=False, index=True)
     priority = Column(Integer, default=5)  # 1-10
-    
+
     # Dates
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    
-    # Métadonnées
-    metadata = Column(JSON, nullable=True, default=dict)
-    tags = Column(JSON, nullable=True, default=list)
-    
+
+    # Metadonnees (Utilisation de meta_data pour eviter le conflit avec Base.metadata)
+    meta_data = Column('metadata', JSON, nullable=True, default=dict)
+    tags = Column(JSON, nullable=True, default=list)  # Store as list of strings
+
     # Relations
     project = relationship("ProjectModel", back_populates="sprints", lazy="selectin")
     task_results = relationship("TaskResult", back_populates="sprint", cascade="all, delete-orphan", lazy="selectin")
-    
+
     # Contraintes
     __table_args__ = (
         CheckConstraint('priority >= 1 AND priority <= 10', name='chk_sprint_priority'),
@@ -93,10 +97,10 @@ class Sprint(Base):
         Index('idx_sprints_project_status', 'project_id', 'status'),
         Index('idx_sprints_created_at', 'created_at'),
     )
-    
+
     def __repr__(self) -> str:
         return f"<Sprint(id='{self.id}', name='{self.name}', status='{self.status}')>"
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convertit le sprint en dictionnaire."""
         return {
@@ -110,13 +114,13 @@ class Sprint(Base):
             "end_date": self.end_date.isoformat() if self.end_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "metadata": self.metadata,
+            "metadata": self.meta_data,
             "tags": self.get_tags(),
             "task_results_count": len(self.task_results) if self.task_results else 0
         }
-    
+
     def get_tags(self) -> List[str]:
-        """Récupère les tags sous forme de liste."""
+        """Recupere les tags sous forme de liste."""
         if not self.tags:
             return []
         if isinstance(self.tags, list):
@@ -125,19 +129,19 @@ class Sprint(Base):
             return json.loads(self.tags)
         except (json.JSONDecodeError, TypeError):
             return []
-    
+
     def set_tags(self, tags: List[str]) -> None:
-        """Définit les tags à partir d'une liste."""
+        """Definit les tags à partir d'une liste."""
         self.tags = tags if tags else []
-    
+
     @hybrid_property
     def is_active(self) -> bool:
-        """Vérifie si le sprint est actif."""
+        """Verifie si le sprint est actif."""
         return self.status == 'active'
-    
+
     @hybrid_property
     def is_completed(self) -> bool:
-        """Vérifie si le sprint est terminé."""
+        """Verifie si le sprint est termine."""
         return self.status == 'completed'
 
 
@@ -145,39 +149,39 @@ class TaskResult(Base):
     """
     Modele pour les resultats d'execution des taches.
     Stocke les sorties des agents et les metriques d'execution.
-    
+
     Relations:
         - sprint: Sprint parent (many-to-one)
     """
     __tablename__ = 'task_results'
-    
+
     # Identifiants
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     sprint_id = Column(String, ForeignKey('sprints.id', ondelete='CASCADE'), nullable=False, index=True)
-    
+
     # Informations
     task_id = Column(String, nullable=False, index=True)
     agent_id = Column(String, nullable=True, index=True)
     status = Column(String, nullable=False, index=True)  # SUCCESS, FAILED, PENDING, etc.
-    
+
     # Contenu
     output = Column(JSON, nullable=True)
     error = Column(String, nullable=True)
-    
-    # Métriques
+
+    # Metriques
     duration = Column(Float, nullable=True)  # Duree d'execution en secondes
-    memory_usage = Column(Integer, nullable=True)  # Mémoire utilisée en MB
-    cpu_usage = Column(Float, nullable=True)  # CPU utilisé en %
-    
+    memory_usage = Column(Integer, nullable=True)  # Memoire utilisee en MB
+    cpu_usage = Column(Float, nullable=True)  # CPU utilise en %
+
     # Dates
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    
-    # Métadonnées
-    metadata = Column(JSON, nullable=True, default=dict)
-    
+
+    # Metadonnees (Utilisation de meta_data pour eviter le conflit avec Base.metadata)
+    meta_data = Column('metadata', JSON, nullable=True, default=dict)
+
     # Relations
     sprint = relationship("Sprint", back_populates="task_results", lazy="selectin")
-    
+
     # Contraintes
     __table_args__ = (
         CheckConstraint("status IN ('SUCCESS', 'FAILED', 'PENDING', 'RUNNING', 'CIRCUIT_OPEN')", name='chk_task_result_status'),
@@ -185,12 +189,12 @@ class TaskResult(Base):
         Index('idx_task_results_task_id', 'task_id'),
         Index('idx_task_results_timestamp', 'timestamp'),
     )
-    
+
     def __repr__(self) -> str:
         return f"<TaskResult(id='{self.id}', task_id='{self.task_id}', status='{self.status}')>"
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convertit le résultat en dictionnaire."""
+        """Convertit le resultat en dictionnaire."""
         return {
             "id": self.id,
             "sprint_id": self.sprint_id,
@@ -203,17 +207,17 @@ class TaskResult(Base):
             "memory_usage": self.memory_usage,
             "cpu_usage": self.cpu_usage,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
-            "metadata": self.metadata
+            "metadata": self.meta_data
         }
-    
+
     @hybrid_property
     def is_success(self) -> bool:
-        """Vérifie si le résultat est un succès."""
+        """Verifie si le resultat est un succes."""
         return self.status == 'SUCCESS'
-    
+
     @hybrid_property
     def is_failure(self) -> bool:
-        """Vérifie si le résultat est un échec."""
+        """Verifie si le resultat est un echec."""
         return self.status == 'FAILED'
 
 
@@ -221,45 +225,45 @@ class Artifact(Base):
     """
     Modele pour les artefacts produits par le pipeline.
     Permet de stocker le code Solidity, les tests, la documentation, etc.
-    
+
     Relations:
         - task: TaskModel parent (many-to-one, optionnel)
     """
     __tablename__ = 'artifacts'
-    
+
     # Identifiants
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     task_id = Column(String, ForeignKey('tasks.id', ondelete='SET NULL'), nullable=True, index=True)
-    
+
     # Informations
     type = Column(String, nullable=False, index=True)  # solidity, test, doc, abi, bytecode, etc.
     name = Column(String, nullable=True, index=True)
     content = Column(Text, nullable=True)
-    
-    # Métadonnées
-    metadata = Column(JSON, nullable=True, default=dict)
+
+    # Metadonnees (Utilisation de meta_data pour eviter le conflit avec Base.metadata)
+    meta_data = Column('metadata', JSON, nullable=True, default=dict)
     vector = Column(Text, nullable=True)  # Pour le stockage de vecteurs (RAG)
-    
+
     # Version
     version = Column(String, nullable=True, default="1.0.0")
-    
+
     # Dates
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    
+
     # Relation
     task = relationship("TaskModel", back_populates="artifacts", lazy="selectin")
-    
+
     # Contraintes
     __table_args__ = (
         CheckConstraint("type IN ('solidity', 'test', 'doc', 'abi', 'bytecode', 'config', 'report', 'other')", name='chk_artifact_type'),
         Index('idx_artifacts_task_type', 'task_id', 'type'),
         Index('idx_artifacts_created_at', 'created_at'),
     )
-    
+
     def __repr__(self) -> str:
         name_display = self.name if self.name else 'N/A'
         return f"<Artifact(id='{self.id}', type='{self.type}', name='{name_display}')>"
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convertit l'artefact en dictionnaire."""
         return {
@@ -268,16 +272,16 @@ class Artifact(Base):
             "type": self.type,
             "name": self.name,
             "content": self.content,
-            "metadata": self.metadata,
+            "metadata": self.meta_data,
             "vector": self.vector,
             "version": self.version,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
-    
+
     @hybrid_property
     def is_code(self) -> bool:
-        """Vérifie si l'artefact est du code source."""
-        return self.type in ['solidity', 'javascript', 'typescript', 'python']
+        """Verifie si l'artefact est du code source ou un test."""
+        return self.type in ['solidity', 'test']
 
 
 # =============================================================================
@@ -313,25 +317,22 @@ class ArtifactType(str, enum.Enum):
 # EXTENSION DES MODELES PRINCIPAUX AVEC LES RELATIONS
 # =============================================================================
 
-# Ajout de la relation 'sprints' sur ProjectModel
 if not hasattr(ProjectModel, 'sprints'):
     ProjectModel.sprints = relationship(
-        "Sprint", 
-        back_populates="project", 
+        "Sprint",
+        back_populates="project",
         cascade="all, delete-orphan",
         lazy="selectin"
     )
 
-# Ajout de la relation 'artifacts' sur TaskModel
 if not hasattr(TaskModel, 'artifacts'):
     TaskModel.artifacts = relationship(
-        "Artifact", 
-        back_populates="task", 
+        "Artifact",
+        back_populates="task",
         cascade="all, delete-orphan",
         lazy="selectin"
     )
 
-# Ajout de la relation 'logs' sur TaskModel
 if not hasattr(TaskModel, 'logs'):
     TaskModel.logs = relationship(
         "ExecutionLogModel",
@@ -347,13 +348,13 @@ if not hasattr(TaskModel, 'logs'):
 
 def get_model_by_name(name: str):
     """
-    Récupère un modèle par son nom.
-    
+    Recupere un modele par son nom.
+
     Args:
-        name (str): Nom du modèle
-        
+        name (str): Nom du modele
+
     Returns:
-        type: Classe du modèle ou None
+        type: Classe du modele ou None
     """
     models = {
         'ProjectModel': ProjectModel,
@@ -369,10 +370,10 @@ def get_model_by_name(name: str):
 
 def get_all_models() -> List[type]:
     """
-    Récupère tous les modèles ORM.
-    
+    Recupere tous les modeles ORM.
+
     Returns:
-        List[type]: Liste des classes de modèles
+        List[type]: Liste des classes de modeles
     """
     return [
         ProjectModel,
@@ -387,8 +388,8 @@ def get_all_models() -> List[type]:
 
 def get_model_tablenames() -> List[str]:
     """
-    Récupère les noms de toutes les tables.
-    
+    Recupere les noms de toutes les tables.
+
     Returns:
         List[str]: Liste des noms de tables
     """
@@ -405,8 +406,8 @@ def get_model_tablenames() -> List[str]:
 
 def get_models_with_relations() -> Dict[str, List[str]]:
     """
-    Récupère les relations entre les modèles.
-    
+    Recupere les relations entre les modeles.
+
     Returns:
         Dict[str, List[str]]: Dictionnaire des relations
     """
@@ -417,7 +418,7 @@ def get_models_with_relations() -> Dict[str, List[str]]:
         'TaskResult': ['Sprint'],
         'ExecutionLogModel': ['TaskModel'],
         'Artifact': ['TaskModel'],
-        'SkillRecordModel': []  # Standalone
+        'SkillRecordModel': []
     }
 
 
@@ -426,10 +427,7 @@ def get_models_with_relations() -> Dict[str, List[str]]:
 # =============================================================================
 
 __all__ = [
-    # Base declarative (essentielle pour les migrations)
     "Base",
-    
-    # Modeles principaux du pipeline (Sprint 1)
     "ProjectModel",
     "ProjectStatus",
     "TaskModel",
@@ -440,15 +438,11 @@ __all__ = [
     "SkillRecordModel",
     "SkillStatus",
     "SkillScope",
-    
-    # Modeles supplementaires
     "Sprint",
     "SprintStatus",
     "TaskResult",
     "Artifact",
     "ArtifactType",
-    
-    # Fonctions utilitaires
     "get_model_by_name",
     "get_all_models",
     "get_model_tablenames",

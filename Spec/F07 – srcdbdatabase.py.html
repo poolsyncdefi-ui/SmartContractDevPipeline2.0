@@ -1,0 +1,70 @@
+<div class="spec-section" id="f07-database-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/db/database.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/db/database.py</code> orchestre l'accès asynchrone à la base de données PostgreSQL via SQLAlchemy 2.0 et AsyncPG. Il gère le cycle de vie des sessions, la tolérance aux pannes, le suivi des métriques et la maintenance autonome.</p>
+
+  <div class="model-group">
+    <h5>Classes &amp; Structures de Métriques</h5>
+    <ul>
+      <li><code>DatabaseMetrics</code> : Dataclass/Modèle assurant le suivi fin des performances (nombre total de requêtes, temps d'exécution moyen, compteur d'erreurs, requêtes actives et saturation du pool).</li>
+      <li><code>DatabaseManager</code> : Gestionnaire centralisé responsable de l'instanciation de l'engine asynchrone, du fabrique de sessions et des utilitaires d'administration.</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Connexion &amp; Context Managers</h5>
+    <ul>
+      <li><code>create_async_engine()</code> : Configuration du moteur de connexion asynchrone avec vérification préalable (<code>pool_pre_ping</code>) et recyclage automatique des connexions obsolètes.</li>
+      <li><code>get_session() -&gt; AsyncGenerator[AsyncSession, None]</code> : Context manager / générateur asynchrone garantissant la fermeture propre des sessions et le rollback automatique en cas d'erreur.</li>
+      <li><code>get_connection_pool_status() -&gt; Dict[str, Any]</code> : Inspection en temps réel du pool de connexions (connexions utilisées, libres, overflow, taille maximale).</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Exécution, Retries &amp; Traitements par Lots</h5>
+    <ul>
+      <li><code>with_retry(max_retries: int = 3, backoff_factor: float = 1.5)</code> : Décorateur de résilience appliquant un backoff exponentiel pour surmonter les déconnexions transitoires.</li>
+      <li><code>execute_raw_sql(query: str, params: dict = None) -&gt; Any</code> : Exécution sécurisée de requêtes SQL personnalisées avec injection de paramètres bindés.</li>
+      <li><code>execute_many(query: str, params_list: List[dict]) -&gt; int</code> : Traitement par lots (batch processing) pour optimiser les écritures de masse (logs, métriques, événements).</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Administration, Statistiques &amp; Maintenance</h5>
+    <ul>
+      <li><code>init_database(seed_data: bool = False) -&gt; None</code> : Création complète du schéma relationnel avec possibilité d'injection de données de démonstration/initiales (seed data).</li>
+      <li><code>get_db_stats() -&gt; Dict[str, Any]</code> : Récupération des métriques d'occupation disque, volume des tables et nombre total d'enregistrements.</li>
+      <li><code>vacuum_database(full: bool = False) -&gt; None</code> : Commande de maintenance pour nettoyer les lignes mortes et récupérer l'espace disque.</li>
+      <li><code>analyze_database() -&gt; None</code> : Réorientation et mise à jour des statistiques de l'optimiseur de requêtes PostgreSQL.</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Entrées/Sorties Non-Bloquantes (AsyncIO) :</strong> Utilisation stricte du pilote <code>asyncpg</code> et de <code>AsyncSession</code> garantissant qu'aucune requête BDD ne bloque la boucle d'événements des agents.</li>
+    <li><strong>Gestion Déclarative du Cycle de Vie (Context Managers) :</strong> Utilisation systématique de la syntaxe <code>async with</code> pour garantir la restitution systématique des connexions au pool.</li>
+    <li><strong>Résilience &amp; Tolérance aux Pannes :</strong> Encapsulation des requêtes sensibles dans le décorateur <code>with_retry</code> à backoff exponentiel.</li>
+    <li><strong>Isolation Stricte des Erreurs BDD :</strong> Capture des exceptions SQLAlchemy natives et conversion en exceptions applicatives typées (<code>StorageError</code>, <code>DatabaseConnectionError</code>).</li>
+    <li><strong>Prévention des Contraintes d'Espace &amp; Connexions Fantômes :</strong> Utilisation active de <code>pool_pre_ping=True</code> pour éliminer les sockets réseau coupés.</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Observabilité en Temps Réel (DatabaseMetrics) :</strong> Collecte transparente du temps de traitement des requêtes facilitant le diagnostic des goulets d'étranglement SQL.</li>
+    <li><strong>Maintenance PostgreSQL Autonome :</strong> Intégration directe des instructions de maintenance d'infrastructures (<code>VACUUM</code>, <code>ANALYZE</code>) sans dépendre de scripts externes Shell.</li>
+    <li><strong>Exécution Optimisée en Batch (execute_many) :</strong> Gain substantiel de débit I/O pour la sauvegarde d'artefacts volumineux et l'enregistrement télémétrique.</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/db/database.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Moteur de connexion asynchrone SQLAlchemy 2.0 / AsyncPG opérationnel</li>
+    <li>Context manager sécurisé pour l'injection et l'isolation des sessions <code>AsyncSession</code></li>
+    <li>Module de métriques de performance et monitoring du pool de connexions (<code>get_connection_pool_status</code>)</li>
+    <li>Décorateur de ré-essai dynamique avec backoff exponentiel (<code>with_retry</code>)</li>
+    <li>Prise en charge des requêtes SQL brutes et opérations par lots (<code>execute_many</code>)</li>
+    <li>Initialisation automatisée avec option de seeding et routines de maintenance (<code>VACUUM</code>, <code>ANALYZE</code>)</li>
+    <li>Documentation complète au format Docstrings et typage strict MyPy/Pyright</li>
+  </ul>
+</div>

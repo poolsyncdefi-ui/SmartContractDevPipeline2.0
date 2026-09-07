@@ -1,31 +1,14 @@
-# src/agents/base/best_practice.py
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Best Practice Validation Module
+# ==============================================================================
+# Fichier: src/agents/base/best_practice.py
+# Description: Fournit les directives de bonnes pratiques et de validation
+#              pour le code généré (Solidity, JavaScript, etc.).
+# ==============================================================================
 
-"""
-Base best practice validation module for the Smart Contract Dev Pipeline.
-F16 – src/agents/base/best_practice.py
-
-Rôle Fonctionnel : Fournit les directives de bonnes pratiques et validation.
-Ce module definit la classe de base pour la validation des bonnes pratiques
-dans le pipeline. Il permet de verifier que le code genere respecte les
-standards de qualite, de securite et de maintenabilite.
-
-Les validations couvrent:
-- Standards de codage Solidity (style, nommage)
-- Patrons de conception (Design Patterns)
-- Securite (OWASP, Smart Contract Security)
-- Performances (gas optimization)
-- Documentation et commentaires
-- Tests et couverture
-
-Les pratiques peuvent etre appliquees a differents niveaux:
-- Niveau 1: Syntaxe et style de base
-- Niveau 2: Patterns et architecture
-- Niveau 3: Securite avancee
-- Niveau 4: Performance et optimisation
-"""
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional, Tuple, Set, Union
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 import re
@@ -42,27 +25,27 @@ logger = logging.getLogger(__name__)
 
 class ValidationSeverity(str, Enum):
     """
-    Niveaux de severite pour les validations.
+    Niveaux de sévérité pour les validations.
     """
-    CRITICAL = "critical"      # Bloquant - doit etre corrige
-    HIGH = "high"              # Urgent - doit etre corrige rapidement
-    MEDIUM = "medium"          # Important - devrait etre corrige
-    LOW = "low"                # Mineur - peut etre ignore temporairement
+    CRITICAL = "critical"      # Bloquant - doit être corrigé
+    HIGH = "high"              # Urgent - doit être corrigé rapidement
+    MEDIUM = "medium"          # Important - devrait être corrigé
+    LOW = "low"                # Mineur - peut être ignoré temporairement
     INFO = "info"              # Information - recommandation
 
 
 class ValidationCategory(str, Enum):
     """
-    Categories de validation.
+    Catégories de validation.
     """
-    SECURITY = "security"           # Securite
+    SECURITY = "security"           # Sécurité
     STYLE = "style"                 # Style de code
     PERFORMANCE = "performance"     # Performance
     ARCHITECTURE = "architecture"   # Architecture
     DOCUMENTATION = "documentation" # Documentation
     TESTING = "testing"             # Tests
-    MAINTAINABILITY = "maintainability" # Maintenabilite
-    COMPLIANCE = "compliance"       # Conformite
+    MAINTAINABILITY = "maintainability" # Maintenabilité
+    COMPLIANCE = "compliance"       # Conformité
 
 
 class BestPracticeLevel(str, Enum):
@@ -71,23 +54,23 @@ class BestPracticeLevel(str, Enum):
     """
     BASIC = "basic"         # Pratiques de base
     STANDARD = "standard"   # Pratiques standard
-    ADVANCED = "advanced"   # Pratiques avancees
+    ADVANCED = "advanced"   # Pratiques avancées
     EXPERT = "expert"       # Pratiques expertes
 
 
 @dataclass
 class ValidationRule:
     """
-    Regle de validation individuelle.
+    Règle de validation individuelle.
     
     Attributes:
-        rule_id (str): Identifiant unique de la regle
-        name (str): Nom descriptif de la regle
-        description (str): Description detaillee
-        category (ValidationCategory): Categorie de la regle
-        severity (ValidationSeverity): Severite de la regle
-        pattern (Optional[str]): Pattern regex pour la detection
-        message (str): Message a afficher en cas de violation
+        rule_id (str): Identifiant unique de la règle
+        name (str): Nom descriptif de la règle
+        description (str): Description détaillée
+        category (ValidationCategory): Catégorie de la règle
+        severity (ValidationSeverity): Sévérité de la règle
+        pattern (Optional[str]): Pattern regex pour la détection
+        message (str): Message à afficher en cas de violation
         fix_suggestion (Optional[str]): Suggestion de correction
     """
     rule_id: str
@@ -103,16 +86,16 @@ class ValidationRule:
 @dataclass
 class ValidationResult:
     """
-    Resultat d'une validation.
+    Résultat d'une validation.
     
     Attributes:
-        passed (bool): Indique si la validation est reussie
-        severity (ValidationSeverity): Severite maximale des violations
-        violations (List[Dict]): Liste des violations trouvees
+        passed (bool): Indique si la validation est réussie
+        severity (ValidationSeverity): Sévérité maximale des violations
+        violations (List[Dict]): Liste des violations trouvées
         warnings (List[Dict]): Liste des avertissements
         suggestions (List[Dict]): Liste des suggestions
-        score (float): Score de qualite (0-100)
-        details (Dict): Details supplementaires
+        score (float): Score de qualité (0-100)
+        details (Dict): Détails supplémentaires
     """
     passed: bool = True
     severity: ValidationSeverity = ValidationSeverity.INFO
@@ -122,8 +105,8 @@ class ValidationResult:
     score: float = 100.0
     details: Dict[str, Any] = field(default_factory=dict)
     
-    def to_dict(self) -> Dict:
-        """Convertit le resultat en dictionnaire."""
+    def to_dict(self) -> Dict[str, Any]:
+        """Convertit le résultat en dictionnaire."""
         return {
             "passed": self.passed,
             "severity": self.severity.value,
@@ -134,7 +117,7 @@ class ValidationResult:
             "details": self.details
         }
     
-    def add_violation(self, rule: ValidationRule, context: Dict) -> None:
+    def add_violation(self, rule: ValidationRule, context: Dict[str, Any]) -> None:
         """Ajoute une violation."""
         self.violations.append({
             "rule_id": rule.rule_id,
@@ -147,9 +130,9 @@ class ValidationResult:
         self.passed = False
         if self._get_severity_order(rule.severity) < self._get_severity_order(self.severity):
             self.severity = rule.severity
-        self.score = max(0, self.score - 10)
+        self.score = max(0.0, self.score - 10.0)
     
-    def add_warning(self, rule: ValidationRule, context: Dict) -> None:
+    def add_warning(self, rule: ValidationRule, context: Dict[str, Any]) -> None:
         """Ajoute un avertissement."""
         self.warnings.append({
             "rule_id": rule.rule_id,
@@ -159,19 +142,21 @@ class ValidationResult:
             "context": context,
             "suggestion": rule.fix_suggestion
         })
-        self.score = max(0, self.score - 5)
+        if self._get_severity_order(rule.severity) < self._get_severity_order(self.severity):
+            self.severity = rule.severity
+        self.score = max(0.0, self.score - 5.0)
     
-    def add_suggestion(self, suggestion: str, context: Dict) -> None:
+    def add_suggestion(self, suggestion: str, context: Dict[str, Any]) -> None:
         """Ajoute une suggestion."""
         self.suggestions.append({
             "suggestion": suggestion,
             "context": context
         })
-        self.score = min(100, self.score + 2)
+        self.score = min(100.0, self.score + 2.0)
     
     @staticmethod
     def _get_severity_order(severity: ValidationSeverity) -> int:
-        """Retourne l'ordre de severite."""
+        """Retourne l'ordre de sévérité."""
         order = {
             ValidationSeverity.CRITICAL: 0,
             ValidationSeverity.HIGH: 1,
@@ -186,15 +171,11 @@ class BaseBestPractice(ABC):
     """
     Classe de base pour les bonnes pratiques.
     
-    Cette classe fournit l'infrastructure pour valider le code genere
-    contre un ensemble de bonnes pratiques. Elle peut etre etendue
-    pour des validations specifiques a un langage ou a un domaine.
-    
     Attributes:
         config (BestPracticeConfig): Configuration des bonnes pratiques
-        rules (List[ValidationRule]): Liste des regles de validation
+        rules (List[ValidationRule]): Liste des règles de validation
         level (BestPracticeLevel): Niveau d'application
-        enabled_categories (Set[ValidationCategory]): Categories activees
+        enabled_categories (Set[ValidationCategory]): Catégories activées
         strict_mode (bool): Mode strict (toutes les violations bloquent)
         auto_fix (bool): Tentative de correction automatique
     """
@@ -209,13 +190,6 @@ class BaseBestPractice(ABC):
     ):
         """
         Initialise le validateur de bonnes pratiques.
-        
-        Args:
-            config: Configuration des bonnes pratiques
-            level: Niveau d'application (defaut: STANDARD)
-            strict_mode: Mode strict (defaut: False)
-            auto_fix: Tentative de correction automatique (defaut: False)
-            enabled_categories: Categories activees (defaut: toutes)
         """
         self.config = config
         self.level = level
@@ -225,7 +199,7 @@ class BaseBestPractice(ABC):
         self.rules: List[ValidationRule] = []
         self._rule_registry: Dict[str, ValidationRule] = {}
         
-        # Chargement des regles par defaut
+        # Chargement des règles par défaut
         self._load_default_rules()
         
         logger.info(f"BestPractice initialized: {config.practice_id} (level={level.value})")
@@ -233,26 +207,7 @@ class BaseBestPractice(ABC):
     @abstractmethod
     async def validate(self, output: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Valide la sortie d'une competence.
-        
-        Cette methode doit etre implementee par chaque validateur specifique.
-        Elle analyse le contenu et retourne un rapport de validation detaille.
-        
-        Args:
-            output: Sortie de la competence a valider
-            
-        Returns:
-            Dict contenant les resultats de validation:
-            - passed: bool
-            - severity: str
-            - violations: List[Dict]
-            - warnings: List[Dict]
-            - suggestions: List[Dict]
-            - score: float
-            - details: Dict
-            
-        Raises:
-            PipelineError: Si la validation echoue de maniere critique
+        Valide la sortie d'une compétence.
         """
         pass
     
@@ -262,37 +217,29 @@ class BaseBestPractice(ABC):
         context: Optional[Dict[str, Any]] = None
     ) -> ValidationResult:
         """
-        Valide avec contexte supplementaire.
-        
-        Args:
-            output: Sortie a valider
-            context: Contexte additionnel pour la validation
-            
-        Returns:
-            ValidationResult: Resultat detaille de la validation
+        Valide avec contexte supplémentaire.
         """
         result = ValidationResult()
         
         try:
-            # Execution de la validation principale
             validation_result = await self.validate(output)
             
-            # Construction du resultat structure
             result.passed = validation_result.get("passed", True)
-            result.severity = ValidationSeverity(
-                validation_result.get("severity", "info")
-            )
+            severity_str = validation_result.get("severity", "info")
+            try:
+                result.severity = ValidationSeverity(severity_str)
+            except ValueError:
+                result.severity = ValidationSeverity.INFO
+            
             result.violations = validation_result.get("violations", [])
             result.warnings = validation_result.get("warnings", [])
             result.suggestions = validation_result.get("suggestions", [])
             result.score = validation_result.get("score", 100.0)
             result.details = validation_result.get("details", {})
             
-            # Ajout du contexte si fourni
             if context:
                 result.details["context"] = context
             
-            # Verification supplementaire en mode strict
             if self.strict_mode and not result.passed:
                 logger.warning("Strict mode: validation failed")
                 result.details["strict_mode"] = True
@@ -306,29 +253,13 @@ class BaseBestPractice(ABC):
         return result
     
     def get_rules(self, category: Optional[ValidationCategory] = None) -> List[ValidationRule]:
-        """
-        Retourne les regles de validation.
-        
-        Args:
-            category: Filtrer par categorie (optionnel)
-            
-        Returns:
-            List[ValidationRule]: Liste des regles
-        """
+        """Retourne les règles de validation."""
         if category:
             return [r for r in self.rules if r.category == category]
         return self.rules.copy()
     
     def add_rule(self, rule: ValidationRule) -> None:
-        """
-        Ajoute une regle de validation.
-        
-        Args:
-            rule: Regle a ajouter
-            
-        Raises:
-            ValueError: Si la regle est invalide
-        """
+        """Ajoute une règle de validation."""
         if not rule.rule_id:
             raise ValueError("Rule must have an ID")
         
@@ -340,15 +271,7 @@ class BaseBestPractice(ABC):
         logger.debug(f"Rule added: {rule.rule_id}")
     
     def remove_rule(self, rule_id: str) -> bool:
-        """
-        Supprime une regle de validation.
-        
-        Args:
-            rule_id: Identifiant de la regle
-            
-        Returns:
-            bool: True si supprime, False sinon
-        """
+        """Supprime une règle de validation."""
         if rule_id in self._rule_registry:
             self.rules = [r for r in self.rules if r.rule_id != rule_id]
             del self._rule_registry[rule_id]
@@ -357,39 +280,23 @@ class BaseBestPractice(ABC):
         return False
     
     def enable_category(self, category: ValidationCategory) -> None:
-        """Active une categorie de validation."""
+        """Active une catégorie de validation."""
         self.enabled_categories.add(category)
         logger.info(f"Category enabled: {category.value}")
     
     def disable_category(self, category: ValidationCategory) -> None:
-        """Desactive une categorie de validation."""
+        """Désactive une catégorie de validation."""
         self.enabled_categories.discard(category)
         logger.info(f"Category disabled: {category.value}")
     
     def is_category_enabled(self, category: ValidationCategory) -> bool:
-        """
-        Verifie si une categorie est activee.
-        
-        Args:
-            category: Categorie a verifier
-            
-        Returns:
-            bool: True si activee
-        """
+        """Vérifie si une catégorie est activée."""
         return category in self.enabled_categories
     
     def get_report(self, result: ValidationResult) -> Dict[str, Any]:
-        """
-        Genere un rapport detaille de validation.
-        
-        Args:
-            result: Resultat de validation
-            
-        Returns:
-            Dict: Rapport detaille
-        """
+        """Génère un rapport détaillé de validation."""
         return {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "practice_id": self.config.practice_id,
             "practice_name": self.config.title,
             "level": self.level.value,
@@ -410,13 +317,7 @@ class BaseBestPractice(ABC):
         }
     
     def _load_default_rules(self) -> None:
-        """
-        Charge les regles par defaut.
-        
-        Cette methode peut etre surchargee par les classes filles
-        pour fournir des regles specifiques.
-        """
-        # Regles de base communes a tous les validations
+        """Charge les règles par défaut communes."""
         default_rules = [
             ValidationRule(
                 rule_id="BP001",
@@ -464,7 +365,7 @@ class BaseBestPractice(ABC):
                 description="Use modifiers for access control",
                 category=ValidationCategory.SECURITY,
                 severity=ValidationSeverity.HIGH,
-                pattern=r"function\s+\w+\s*\([^)]*\)\s+public\s+{",
+                pattern=r"function\s+\w+\s*\([^)]*\)\s+public\s*{",
                 message="Function may need access control modifier",
                 fix_suggestion="Add 'onlyOwner' or custom modifier"
             )
@@ -475,16 +376,7 @@ class BaseBestPractice(ABC):
                 self.add_rule(rule)
     
     def _check_pattern(self, content: str, pattern: str) -> List[Tuple[int, str]]:
-        """
-        Verifie un pattern dans le contenu.
-        
-        Args:
-            content: Contenu a verifier
-            pattern: Pattern regex a chercher
-            
-        Returns:
-            List[Tuple[int, str]]: Liste des (position, match)
-        """
+        """Vérifie un pattern dans le contenu."""
         matches = []
         for match in re.finditer(pattern, content, re.MULTILINE):
             line_number = content[:match.start()].count('\n') + 1
@@ -492,46 +384,26 @@ class BaseBestPractice(ABC):
         return matches
     
     def _apply_auto_fix(self, content: str, violations: List[Dict]) -> str:
-        """
-        Applique des corrections automatiques.
-        
-        Args:
-            content: Contenu original
-            violations: Liste des violations
-            
-        Returns:
-            str: Contenu corrige
-        """
+        """Applique des corrections automatiques."""
         if not self.auto_fix or not violations:
             return content
         
         fixed_content = content
-        
-        # Application des corrections
         for violation in violations:
             rule_id = violation.get("rule_id")
             rule = self._rule_registry.get(rule_id)
             
             if rule and rule.fix_suggestion:
-                # Application de la correction specifique
-                if rule_id == "BP001":  # Trailing whitespace
+                if rule_id == "BP001":
                     fixed_content = re.sub(r"\s+$", "", fixed_content, flags=re.MULTILINE)
-                elif rule_id == "BP003":  # Hardcoded credentials
-                    # Marquer comme a remplacer (plus complexe)
-                    pass
         
         return fixed_content
     
     def __repr__(self) -> str:
         return f"<BaseBestPractice(practice_id='{self.config.practice_id}', level='{self.level.value}')>"
     
-    def to_dict(self) -> Dict:
-        """
-        Convertit le validateur en dictionnaire.
-        
-        Returns:
-            Dict: Representation dictionnaire
-        """
+    def to_dict(self) -> Dict[str, Any]:
+        """Convertit le validateur en dictionnaire."""
         return {
             "practice_id": self.config.practice_id,
             "title": self.config.title,
@@ -543,13 +415,9 @@ class BaseBestPractice(ABC):
         }
 
 
-# =============================================================================
-# CLASSES DE BASE SPECIFIQUES PAR DOMAINE
-# =============================================================================
-
 class SolidityBestPractice(BaseBestPractice):
     """
-    Bonnes pratiques specifiques au developpement Solidity.
+    Bonnes pratiques spécifiques au développement Solidity.
     """
     
     def __init__(self, config: BestPracticeConfig, **kwargs):
@@ -557,25 +425,15 @@ class SolidityBestPractice(BaseBestPractice):
         self._load_solidity_rules()
     
     async def validate(self, output: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Valide le code Solidity.
-        
-        Args:
-            output: Doit contenir 'code' ou 'contract' comme cle
-            
-        Returns:
-            Dict: Resultat de validation
-        """
+        """Valide le code Solidity."""
         result = ValidationResult()
         
-        # Extraction du code a valider
         code = output.get("code") or output.get("contract") or output.get("content")
         if not code:
             result.passed = False
             result.details["error"] = "No code found in output"
             return result.to_dict()
         
-        # Validation des regles
         for rule in self.rules:
             if not self.is_category_enabled(rule.category):
                 continue
@@ -590,7 +448,6 @@ class SolidityBestPractice(BaseBestPractice):
                         else:
                             result.add_warning(rule, context)
         
-        # Application des corrections si active
         if self.auto_fix and result.violations:
             code_fixed = self._apply_auto_fix(code, result.violations)
             result.details["fixed_code"] = code_fixed
@@ -599,9 +456,7 @@ class SolidityBestPractice(BaseBestPractice):
         return result.to_dict()
     
     def _load_solidity_rules(self) -> None:
-        """
-        Charge les regles specifiques Solidity.
-        """
+        """Charge les règles spécifiques Solidity."""
         solidity_rules = [
             ValidationRule(
                 rule_id="SOL001",
@@ -665,19 +520,15 @@ class SolidityBestPractice(BaseBestPractice):
 
 class JavaScriptBestPractice(BaseBestPractice):
     """
-    Bonnes pratiques specifiques au developpement JavaScript/TypeScript.
+    Bonnes pratiques spécifiques au développement JavaScript/TypeScript.
     """
     
+    def __init__(self, config: BestPracticeConfig, **kwargs):
+        super().__init__(config, **kwargs)
+        self._load_js_rules()
+    
     async def validate(self, output: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Valide le code JavaScript/TypeScript.
-        
-        Args:
-            output: Doit contenir 'code' comme cle
-            
-        Returns:
-            Dict: Resultat de validation
-        """
+        """Valide le code JavaScript/TypeScript."""
         result = ValidationResult()
         
         code = output.get("code") or output.get("content")
@@ -686,7 +537,6 @@ class JavaScriptBestPractice(BaseBestPractice):
             result.details["error"] = "No code found in output"
             return result.to_dict()
         
-        # Validation des regles
         for rule in self.rules:
             if not self.is_category_enabled(rule.category):
                 continue
@@ -703,10 +553,8 @@ class JavaScriptBestPractice(BaseBestPractice):
         
         return result.to_dict()
     
-    def _load_default_rules(self) -> None:
-        """Charge les regles par defaut pour JavaScript."""
-        super()._load_default_rules()
-        
+    def _load_js_rules(self) -> None:
+        """Charge les règles spécifiques JavaScript/TypeScript."""
         js_rules = [
             ValidationRule(
                 rule_id="JS001",
@@ -737,6 +585,26 @@ class JavaScriptBestPractice(BaseBestPractice):
                 pattern=r"async\s+function\s+\w+\s*\([^)]*\)\s*{",
                 message="Async function missing try/catch",
                 fix_suggestion="Add try/catch for error handling"
+            ),
+            ValidationRule(
+                rule_id="JS004",
+                name="Strict equality",
+                description="Use strict equality (===) instead of loose (==)",
+                category=ValidationCategory.STYLE,
+                severity=ValidationSeverity.MEDIUM,
+                pattern=r"==(?!=)",
+                message="Use strict equality (===) instead of loose equality (==)",
+                fix_suggestion="Replace '==' with '==='"
+            ),
+            ValidationRule(
+                rule_id="JS005",
+                name="No console.log in production",
+                description="Remove console.log statements in production code",
+                category=ValidationCategory.PERFORMANCE,
+                severity=ValidationSeverity.LOW,
+                pattern=r"console\.log\s*\(",
+                message="console.log should not be used in production code",
+                fix_suggestion="Remove or replace with proper logging"
             )
         ]
         
@@ -745,36 +613,23 @@ class JavaScriptBestPractice(BaseBestPractice):
                 self.add_rule(rule)
 
 
-# =============================================================================
-# VALIDATEUR COMPOSITE
-# =============================================================================
-
 class CompositeBestPractice(BaseBestPractice):
     """
     Validateur composite qui combine plusieurs validateurs.
     """
     
-    def __init__(self, config: BestPracticeConfig, validators: List[BaseBestPractice] = None):
+    def __init__(self, config: BestPracticeConfig, validators: Optional[List[BaseBestPractice]] = None):
         super().__init__(config)
         self.validators = validators or []
     
     async def validate(self, output: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute tous les validateurs et combine les resultats.
-        
-        Args:
-            output: Sortie a valider
-            
-        Returns:
-            Dict: Resultat combine des validations
-        """
+        """Exécute tous les validateurs et combine les résultats."""
         combined_result = ValidationResult()
         
         for validator in self.validators:
             try:
                 result_dict = await validator.validate(output)
                 
-                # Aggregation des resultats
                 combined_result.violations.extend(result_dict.get("violations", []))
                 combined_result.warnings.extend(result_dict.get("warnings", []))
                 combined_result.suggestions.extend(result_dict.get("suggestions", []))
@@ -783,18 +638,19 @@ class CompositeBestPractice(BaseBestPractice):
                     combined_result.passed = False
                 
                 severity_str = result_dict.get("severity", "info")
-                severity = ValidationSeverity(severity_str)
-                if ValidationResult._get_severity_order(severity) < ValidationResult._get_severity_order(combined_result.severity):
-                    combined_result.severity = severity
+                try:
+                    severity = ValidationSeverity(severity_str)
+                    if ValidationResult._get_severity_order(severity) < ValidationResult._get_severity_order(combined_result.severity):
+                        combined_result.severity = severity
+                except ValueError:
+                    pass
                 
-                combined_result.score = min(
-                    combined_result.score,
-                    result_dict.get("score", 100.0)
-                )
+                if result_dict.get("score", 100.0) < combined_result.score:
+                    combined_result.score = result_dict.get("score", 100.0)
                 
-                # Details
                 details = result_dict.get("details", {})
-                combined_result.details[f"validator_{validator.config.practice_id}"] = details
+                if details:
+                    combined_result.details[f"validator_{validator.config.practice_id}"] = details
                 
             except Exception as e:
                 logger.error(f"Validator {validator.config.practice_id} failed: {str(e)}")

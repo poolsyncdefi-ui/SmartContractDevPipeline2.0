@@ -1,0 +1,290 @@
+<div class="spec-section" id="f43-git-sync-manager">
+  <h3>F43 – Points Clés de l'Implémentation &amp; Code — <code>src/git/git_sync_manager.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Fonctions Implémentées</h4>
+  <p>Le module <code>src/git/git_sync_manager.py</code> centralise l'ensemble des interactions avec le système de contrôle de version Git local et les API REST de GitHub[cite: 15]. Il offre une abstraction complète pour la gestion des dépôts, la signature des commits, la résolution de conflits et la publication d'artefacts sous forme de Gists[cite: 15].</p>
+
+  <div class="model-group">
+    <h5>Énumérations</h5>
+    <ul>
+      <li><code>GitOperation(str, Enum)</code> : Typer les opérations Git supportées (<code>init</code>, <code>clone</code>, <code>commit</code>, <code>push</code>, <code>pull</code>, <code>fetch</code>, <code>merge</code>, <code>rebase</code>, <code>tag</code>, <code>branch</code>, <code>checkout</code>, <code>stash</code>)[cite: 15].</li>
+      <li><code>GitStatus(str, Enum)</code> : Représentation canonique des états de fichiers selon la sortie porcelain de Git (<code>UNTRACKED</code>, <code>MODIFIED</code>, <code>ADDED</code>, <code>DELETED</code>, <code>UNMERGED</code>, etc.)[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Classe Principale <code>GitSyncManager</code></h5>
+    <ul>
+      <li><code>__init__(...)</code> : Initialisation avec configuration du workspace, des tokens GitHub, des identifiants utilisateur et des clés GPG[cite: 15].</li>
+      <li><code>_ensure_github_client()</code> : Initialisation paresseuse (lazy loading) du client HTTP asynchrone <code>httpx.AsyncClient</code> pour GitHub API v3[cite: 15].</li>
+      <li><code>_update_stats(operation, success)</code> : Journalisation interne et suivi statistique des métriques d'opérations[cite: 15].</li>
+      <li><code>init_repo(repo_path, remote_url, default_branch)</code> : Initialisation d'un dépôt local avec branche par défaut et remote initial[cite: 15].</li>
+      <li><code>_configure_repo(repo_path)</code> : Application locale de la configuration Git (nom, email, clé de signature GPG)[cite: 15].</li>
+      <li><code>clone_repo(repo_url, target_path, branch, depth)</code> : Clonage de dépôts distants avec support du clonage superficiel (shallow clone)[cite: 15].</li>
+      <li><code>commit(repo_path, message, files, all_files, sign)</code> : Indexation des fichiers et création de commits signés GPG avec extraction du hash HEAD[cite: 15].</li>
+      <li><code>push(...)</code> &amp; <code>pull(...)</code> : Synchronisation avec les remotes distants (support <code>--force</code>, <code>--rebase</code> et <code>--set-upstream</code>)[cite: 15].</li>
+      <li><code>fetch(repo_path, remote, prune)</code> : Récupération des métadonnées distantes avec nettoyage des branches supprimées[cite: 15].</li>
+      <li><code>create_branch(...)</code>, <code>delete_branch(...)</code>, <code>list_branches(...)</code> : Saisie et gestion du cycle de vie des branches locales et distantes[cite: 15].</li>
+      <li><code>create_tag(...)</code> &amp; <code>push_tag(...)</code> : Création de tags annotés ou signés et publication sur le remote[cite: 15].</li>
+      <li><code>get_status(...)</code>, <code>has_conflicts(...)</code>, <code>resolve_conflict(...)</code> : Ingestion de l'état du dépôt et résolution programmatique des conflits de fusion (stratégies <code>ours</code> / <code>theirs</code>)[cite: 15].</li>
+      <li><code>create_gist(...)</code>, <code>update_gist(...)</code>, <code>get_gist(...)</code> : Gestion asynchrone des Gists GitHub pour le partage d'artefacts[cite: 15].</li>
+      <li><code>create_webhook(...)</code> : Configuration de webhooks sur les dépôts GitHub distants[cite: 15].</li>
+      <li><code>save_artifact_to_workspace(...)</code>, <code>read_artifact_from_workspace(...)</code>, <code>delete_artifact_from_workspace(...)</code>, <code>list_workspace_files(...)</code> : I/O de fichiers et gestion du workspace local[cite: 15].</li>
+      <li><code>get_stats()</code> &amp; <code>close()</code> : Extraction du rapport d'activité et libération des ressources réseau[cite: 15].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Architecture Hybride Sync/Async :</strong> Emploi de <code>subprocess</code> pour les opérations Git locales déterministes et de <code>httpx.AsyncClient</code> pour les appels I/O non-bloquants vers l'API GitHub[cite: 15].</li>
+    <li><strong>Sécurité et Traçabilité (GPG Signing) :</strong> Prise en charge native de la signature cryptographique des commits et des tags via GPG[cite: 15].</li>
+    <li><strong>Gestion Avancée des Erreurs :</strong> Levée d'exceptions métier explicites (<code>GitSyncError</code>, <code>GitAuthenticationError</code>, <code>GistPublishError</code>) encapsulant les sorties d'erreur standards (<code>stderr</code>)[cite: 15].</li>
+    <li><strong>Auditabilité &amp; Métriques Opérationnelles :</strong> Comptabilisation systématique des succès, échecs, décompte de commits et Gists créés via un dictionnaire de statistiques structuré[cite: 15].</li>
+    <li><strong>Résolution Programmatique des Conflits :</strong> Automatisation du traitement des conflits de fusion via vérification de l'état <code>UNMERGED</code> et application de stratégies automatiques[cite: 15].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Publication Automatisée d'Artefacts (Gists) :</strong> Capacité de publier directement des contrats intelligents ou rapports d'audit sur GitHub Gist sous forme privée ou publique[cite: 15].</li>
+    <li><strong>Contrôle Fin du Workspace :</strong> Fonctions utilitaires dédiées pour l'écriture, la lecture et la recherche par motifs (glob/rglob) dans l'arborescence de travail[cite: 15].</li>
+    <li><strong>Flexibilité des Identifiants :</strong> Utilisation des emails de redirection <code>noreply.github.com</code> pour préserver la confidentialité des contributeurs tout en maintenant les associations de commits[cite: 15].</li>
+  </ul>
+
+  <h4>4. Extrait du Code Source Implémenté &amp; Exemples d'Utilisation</h4>
+
+  <h5>Code Source : <code>src/git/git_sync_manager.py</code></h5>
+  <pre><code class="language-python"># src/git/git_sync_manager.py
+import os
+import subprocess
+import tempfile
+import json
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Union, Tuple
+from datetime import datetime
+import logging
+import httpx
+import asyncio
+from enum import Enum
+
+from src.config.settings import settings
+from src.core.exceptions import GitSyncError, GitAuthenticationError, GistPublishError
+
+logger = logging.getLogger(__name__)
+
+class GitOperation(str, Enum):
+    INIT = "init"
+    CLONE = "clone"
+    COMMIT = "commit"
+    PUSH = "push"
+    PULL = "pull"
+    FETCH = "fetch"
+    MERGE = "merge"
+    REBASE = "rebase"
+    TAG = "tag"
+    BRANCH = "branch"
+    CHECKOUT = "checkout"
+    STASH = "stash"
+
+class GitStatus(str, Enum):
+    UNTRACKED = "??"
+    MODIFIED = " M"
+    ADDED = "A "
+    DELETED = "D "
+    RENAMED = "R "
+    COPIED = "C "
+    UPDATED = "U "
+    UNMERGED = "UU"
+
+class GitSyncManager:
+    def __init__(
+        self,
+        workspace_path: Optional[Path] = None,
+        token: Optional[str] = None,
+        username: Optional[str] = None,
+        email: Optional[str] = None,
+        gpg_key: Optional[str] = None,
+        sign_commits: bool = False
+    ):
+        self.workspace_path = workspace_path or settings.pipeline.default_workspace
+        self.token = token or settings.github_token.get_secret_value()
+        self.username = username or settings.github_username
+        self.email = email or f"{self.username}@users.noreply.github.com"
+        self.gpg_key = gpg_key
+        self.sign_commits = sign_commits
+        
+        self._github_client: Optional[httpx.AsyncClient] = None
+        self._stats = {
+            "total_operations": 0,
+            "successful_operations": 0,
+            "failed_operations": 0,
+            "by_operation": {},
+            "commits_count": 0,
+            "pushes_count": 0,
+            "pulls_count": 0,
+            "gists_created": 0,
+            "last_operation": None,
+            "errors": 0
+        }
+
+    async def _ensure_github_client(self) -> None:
+        if not self._github_client:
+            self._github_client = httpx.AsyncClient(
+                base_url="https://api.github.com",
+                headers={
+                    "Authorization": f"token {self.token}",
+                    "Accept": "application/vnd.github.v3+json"
+                },
+                timeout=30.0
+            )
+
+    def init_repo(self, repo_path: Path, remote_url: Optional[str] = None, default_branch: str = "main") -> bool:
+        try:
+            subprocess.run(["git", "init", "-b", default_branch], cwd=repo_path, check=True, capture_output=True)
+            self._configure_repo(repo_path)
+            if remote_url:
+                subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=repo_path, check=True, capture_output=True)
+            self._update_stats(GitOperation.INIT, True)
+            return True
+        except subprocess.CalledProcessError as e:
+            self._update_stats(GitOperation.INIT, False)
+            raise GitSyncError(message=f"Failed to initialize repository: {e.stderr}", repo=str(repo_path), operation="init")
+
+    def _configure_repo(self, repo_path: Path) -> None:
+        subprocess.run(["git", "config", "user.name", self.username], cwd=repo_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", self.email], cwd=repo_path, capture_output=True)
+        if self.sign_commits and self.gpg_key:
+            subprocess.run(["git", "config", "user.signingkey", self.gpg_key], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "config", "commit.gpgsign", "true"], cwd=repo_path, capture_output=True)
+
+    def commit(self, repo_path: Path, message: str, files: Optional[List[str]] = None, all_files: bool = False, sign: Optional[bool] = None) -> str:
+        try:
+            if files:
+                subprocess.run(["git", "add"] + files, cwd=repo_path, check=True, capture_output=True)
+            elif all_files:
+                subprocess.run(["git", "add", "-A"], cwd=repo_path, check=True, capture_output=True)
+            
+            cmd = ["git", "commit", "-m", message]
+            if sign if sign is not None else self.sign_commits:
+                cmd.append("-S")
+            
+            subprocess.run(cmd, cwd=repo_path, check=True, capture_output=True, text=True)
+            hash_result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_path, check=True, capture_output=True, text=True)
+            
+            commit_hash = hash_result.stdout.strip()
+            self._stats["commits_count"] += 1
+            self._update_stats(GitOperation.COMMIT, True)
+            return commit_hash
+        except subprocess.CalledProcessError as e:
+            self._update_stats(GitOperation.COMMIT, False)
+            raise GitSyncError(message=f"Failed to commit: {e.stderr}", repo=str(repo_path), operation="commit")
+
+    async def create_gist(self, content: str, filename: str, description: Optional[str] = None, public: bool = False) -> Dict[str, Any]:
+        await self._ensure_github_client()
+        data = {
+            "description": description or f"Gist created at {datetime.utcnow().isoformat()}",
+            "public": public,
+            "files": {filename: {"content": content}}
+        }
+        try:
+            response = await self._github_client.post("/gists", json=data)
+            response.raise_for_status()
+            result = response.json()
+            self._stats["gists_created"] += 1
+            self._update_stats(GitOperation.COMMIT, True)
+            return {"id": result["id"], "url": result["html_url"], "raw_url": result["files"][filename]["raw_url"], "created_at": result["created_at"]}
+        except Exception as e:
+            self._update_stats(GitOperation.COMMIT, False)
+            raise GistPublishError(filename=filename, message=str(e))
+
+    def has_conflicts(self, repo_path: Path) -> bool:
+        status = self.get_status(repo_path)
+        return any(status.get(file) == GitStatus.UNMERGED.value for file in status)
+
+    def resolve_conflict(self, repo_path: Path, file_path: str, resolution: str = "theirs") -> bool:
+        try:
+            if resolution in ["theirs", "ours"]:
+                subprocess.run(["git", "checkout", f"--{resolution}", file_path], cwd=repo_path, check=True, capture_output=True)
+                subprocess.run(["git", "add", file_path], cwd=repo_path, check=True, capture_output=True)
+                self._update_stats(GitOperation.MERGE, True)
+                return True
+            return False
+        except subprocess.CalledProcessError:
+            self._update_stats(GitOperation.MERGE, False)
+            return False
+
+    def get_stats(self) -> Dict[str, Any]:
+        return {**self._stats, "workspace_path": str(self.workspace_path), "username": self.username}
+
+    async def close(self) -> None:
+        if self._github_client:
+            await self._github_client.aclose()
+            self._github_client = None
+</code></pre>
+
+  <h5>Exemple d'Utilisation</h5>
+  <pre><code class="language-python"># Initialisation
+git = GitSyncManager(
+    workspace_path=Path("./workspace"),
+    token="ghp_xxx",
+    username="myuser",
+    email="myuser@example.com",
+    gpg_key="ABCDEF123456",
+    sign_commits=True
+)
+
+# Initialisation d'un dépôt
+git.init_repo(
+    repo_path=Path("./workspace/myrepo"),
+    remote_url="https://github.com/myuser/myrepo.git",
+    default_branch="develop"
+)
+
+# Commit avec signature
+hash = git.commit(
+    repo_path=Path("./workspace/myrepo"),
+    message="Add smart contract",
+    files=["contracts/Vault.sol"],
+    sign=True
+)
+
+# Push
+git.push(
+    repo_path=Path("./workspace/myrepo"),
+    branch="develop",
+    set_upstream=True
+)
+
+# Création d'un Gist
+gist = await git.create_gist(
+    content="// SPDX-License-Identifier: MIT\ncontract Vault { ... }",
+    filename="Vault.sol",
+    description="Smart contract example",
+    public=False
+)
+
+# Gestion des conflits
+if git.has_conflicts(Path("./workspace/myrepo")):
+    git.resolve_conflict(
+        repo_path=Path("./workspace/myrepo"),
+        file_path="contracts/Vault.sol",
+        resolution="theirs"
+    )
+
+# Statistiques
+stats = git.get_stats()
+print(f"Total operations: {stats['total_operations']}")
+print(f"Commits: {stats['commits_count']}")
+print(f"Gists created: {stats['gists_created']}")
+</code></pre>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/git/git_sync_manager.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>✅ Gestion complète des opérations Git via <code>subprocess</code> (init, clone, commit, push, pull, fetch, branch, tag)[cite: 15]</li>
+    <li>✅ Intégration de la signature de commits et de tags via GPG[cite: 15]</li>
+    <li>✅ Client HTTP REST asynchrone pour l'interaction avec GitHub (Gists, webhooks)[cite: 15]</li>
+    <li>✅ Détection et résolution programmatique des conflits de fusion[cite: 15]</li>
+    <li>✅ Gestion native du workspace local et persistance des artefacts[cite: 15]</li>
+    <li>✅ Suivi statistique détaillé et traçabilité complète de l'historique d'opérations[cite: 15]</li>
+  </ul>
+</div>

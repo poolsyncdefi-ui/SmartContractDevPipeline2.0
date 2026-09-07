@@ -1,0 +1,84 @@
+<div class="spec-section" id="f13-models-orm-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/persistence/models_orm.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/persistence/models_orm.py</code> sert de point d'agrégation centralisé pour l'ensemble des modèles ORM SQLAlchemy du pipeline, évitant les dépendances circulaires et fournissant les extensions avancées pour la gestion des sprints, résultats et artefacts[cite: 12].</p>
+
+  <div class="model-group">
+    <h5>Agrégation Core &amp; Énumérations d'Extension</h5>
+    <ul>
+      <li><strong>Modèles Core Importés &amp; Re-publiés :</strong> <code>ProjectModel</code>, <code>TaskModel</code>, <code>ExecutionLogModel</code>, <code>SkillRecordModel</code> et la classe de base <code>Base</code>[cite: 12].</li>
+      <li><code>SprintStatus</code> : Énumération des états de sprint (<code>PLANNED</code>, <code>ACTIVE</code>, <code>COMPLETED</code>, <code>CANCELLED</code>, <code>BLOCKED</code>)[cite: 12].</li>
+      <li><code>ArtifactType</code> : Typologie d'artefacts (<code>SOLIDITY</code>, <code>TEST</code>, <code>DOCUMENTATION</code>, <code>ABI</code>, <code>BYTECODE</code>, <code>CONFIG</code>, <code>REPORT</code>, <code>OTHER</code>)[cite: 12].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Modèle <code>Sprint(Base)</code></h5>
+    <ul>
+      <li><strong>Colonnes &amp; Contraintes :</strong> Identifiant UUID, clé étrangère <code>project_id</code> (suppression en cascade), priorité (1-10), statuts, dates et métadonnées JSON[cite: 12].</li>
+      <li><strong>Contraintes SQL :</strong> <code>chk_sprint_priority</code> (borne 1 à 10) et <code>chk_sprint_status</code> (stricte validation des énumérations)[cite: 12].</li>
+      <li><strong>Propriétés Hybrides &amp; Helpers :</strong> <code>is_active</code>, <code>is_completed</code>, <code>get_tags()</code>, <code>set_tags(tags)</code> et sérialisation <code>to_dict()</code>[cite: 12].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Modèle <code>TaskResult(Base)</code></h5>
+    <ul>
+      <li><strong>Colonnes &amp; Métriques :</strong> Identifiant UUID, clé étrangère <code>sprint_id</code> (CASCADE), <code>task_id</code>, <code>agent_id</code>, métriques de performance système (<code>duration</code> en sec, <code>memory_usage</code> en MB, <code>cpu_usage</code> en %) et contenu JSON d'exécution/erreur[cite: 12].</li>
+      <li><strong>Contraintes SQL &amp; Propriétés Hybrides :</strong> Contrainte de statut <code>chk_task_result_status</code>, prédicats d'état <code>is_success</code>, <code>is_failure</code> et méthode <code>to_dict()</code>[cite: 12].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Modèle <code>Artifact(Base)</code></h5>
+    <ul>
+      <li><strong>Colonnes &amp; Stockage Vectoriel :</strong> Identifiant UUID, clé étrangère optionnelle <code>task_id</code> (remise à NULL sur suppression), type, nom, contenu textuel, versioning, et champ <code>vector</code> dédié aux intégrations RAG (Retrieval-Augmented Generation)[cite: 12].</li>
+      <li><strong>Contraintes &amp; Helpers :</strong> Contrainte <code>chk_artifact_type</code>, propriété hybride <code>is_code</code> (détection du code source Solidity/JS/TS/Python) et conversion <code>to_dict()</code>[cite: 12].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Extension Dynamique des Relations (Monkey-Patching Propre)</h5>
+    <ul>
+      <li><code>ProjectModel.sprints</code> : Injection dynamique de la relation un-à-plusieurs vers <code>Sprint</code> avec suppression en cascade et chargement réactif <code>lazy="selectin"</code>[cite: 12].</li>
+      <li><code>TaskModel.artifacts</code> : Injection de la relation vers <code>Artifact</code> avec cascade globale[cite: 12].</li>
+      <li><code>TaskModel.logs</code> : Injection de la relation bidirectionnelle vers <code>ExecutionLogModel</code> avec backref <code>task</code>[cite: 12].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Fonctions Utilitaires d'Introspection DB</h5>
+    <ul>
+      <li><code>get_model_by_name(name)</code> : Résolution dynamique d'une classe ORM à partir de son nom sous forme de chaîne[cite: 12].</li>
+      <li><code>get_all_models()</code> : Inspection et renvoi de la liste complète des classes de modèles de l'application[cite: 12].</li>
+      <li><code>get_model_tablenames()</code> : Liste exhaustive de toutes les tables de la base de données SQL[cite: 12].</li>
+      <li><code>get_models_with_relations()</code> : Cartographie complète des dépendances et relations entre entités de l'ORM[cite: 12].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Point d'Entrée Unique (Single Source of Truth) :</strong> Élimine complètement les imports circulaires entre modules SQLAlchemy en centralisant la déclaration des modèles et des exports <code>__all__</code>[cite: 12].</li>
+    <li><strong>Intégrité Référentielle Forte au Niveau Base :</strong> Utilisation explicite de contraintes SQL Check (<code>CheckConstraint</code>) et de règles de suppression en cascade (<code>CASCADE</code> / <code>SET NULL</code>) au niveau de la base[cite: 12].</li>
+    <li><strong>Optimisation des Requêtes (Eager Loading) :</strong> Configuration systématique du chargement <code>lazy="selectin"</code> sur les relations pour éviter le problème critique des requêtes $N+1$[cite: 12].</li>
+    <li><strong>Introspection et Extensibilité :</strong> Fonctions utilitaires d'inspection permettant le bootstrapping, les migrations Alembic automatiques et les tests dynamiques[cite: 12].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Support Natif RAG Vectoriel :</strong> Intégration de la colonne <code>vector</code> dans le modèle <code>Artifact</code> préparant l'indexation sémantique des documents et du code pour les agents LLM[cite: 12].</li>
+    <li><strong>Suivi Télémétrique Fin de la Performance :</strong> Modélisation granulaire de l'utilisation CPU, mémoire et durée dans <code>TaskResult</code> pour le profiling précis des exécutions d'agents[cite: 12].</li>
+    <li><strong>Liaison Réactive et Rétrocompatible :</strong> Injection dynamique sécurisée des relations (<code>hasattr</code> guard) permettant d'enrichir les modèles de base sans altérer directement leurs fichiers d'origine[cite: 12].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/persistence/models_orm.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Aggregation de 4 modèles core (<code>ProjectModel</code>, <code>TaskModel</code>, <code>ExecutionLogModel</code>, <code>SkillRecordModel</code>) et 3 modèles étendus (<code>Sprint</code>, <code>TaskResult</code>, <code>Artifact</code>)[cite: 12]</li>
+    <li>2 énumérations additionnelles (<code>SprintStatus</code>, <code>ArtifactType</code>)[cite: 12]</li>
+    <li>3 extensions dynamiques de relations SQLAlchemy sur les modèles principaux avec stratégie `lazy="selectin"`[cite: 12]</li>
+    <li>4 fonctions d'introspection et de métadonnées DB (<code>get_model_by_name</code>, <code>get_all_models</code>, <code>get_model_tablenames</code>, <code>get_models_with_relations</code>)[cite: 12]</li>
+    <li>Indexation composite, contraintes `CheckConstraint` strictes et support vectoriel nativement documentés[cite: 12]</li>
+  </ul>
+</div>

@@ -1,33 +1,21 @@
-# src/models/execution_log.py
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Modèle ExecutionLog
+# ==============================================================================
+# Fichier: src/models/execution_log.py
+# Description: Modèle SQLAlchemy pour la table execution_logs.
+#              Enregistre l'historique et les traces textuelles des actions des agents.
+# ==============================================================================
 
-"""
-Model for execution logs.
-F11 – src/models/execution_log.py
-
-Rôle Fonctionnel : Enregistre l'historique et les traces textuelles des actions des agents.
-Cette table est essentielle pour l'audit, le débogage et la transparence du pipeline.
-Elle capture le prompt envoyé à l'IA, la réponse brute, et la sortie des outils (compilation, tests, etc.).
-
-La table execution_logs permet de:
-- Tracer toutes les actions des agents
-- Auditer les décisions prises par l'IA
-- Déboguer les erreurs de compilation et d'exécution
-- Analyser les performances du pipeline
-- Rejouer les scénarios de test
-- Assurer la conformité et la traçabilité
-
-Chaque log est associé à une tâche et à un agent, avec un horodatage précis.
-"""
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Index, Enum
 from sqlalchemy.orm import relationship
 from src.db.database import Base
-import datetime
+from datetime import datetime, timezone
 import enum
 import json
+import logging
 from typing import Optional, Dict, Any, List
 
-# Import explicite de la base pour la déclaration du modèle
-# La Base est définie dans src/db/database.py
+logger = logging.getLogger(__name__)
 
 
 class LogLevel(str, enum.Enum):
@@ -63,31 +51,13 @@ class ExecutionLogModel(Base):
 
     Cette table stocke toutes les traces d'exécution du pipeline,
     permettant un audit complet et un débogage efficace.
-
-    Attributes:
-        id (int): Identifiant unique et auto-increment de l'entrée de log.
-        task_id (str): Identifiant de la tâche (TaskModel) associée à ce log.
-                       Clé étrangère vers 'tasks.id'.
-        agent_id (str): Identifiant de l'agent (e.g., 'developer_agent_001') qui a produit ce log.
-        level (LogLevel): Niveau de sévérité du log (debug, info, warning, error, critical).
-        category (LogCategory): Catégorie du log (agent, llm, compilation, test, security, etc.).
-        prompt_sent (str): Le prompt exact envoyé au LLM (si applicable).
-        raw_response (str): La réponse brute reçue du LLM (si applicable).
-        tool_output (str): La sortie de l'outil (e.g., le retour de la compilation forge,
-                           le rapport de Slither). Utile pour le debugging.
-        metadata (Text): Métadonnées supplémentaires au format JSON (stack trace, contexte, etc.).
-        tags (Text): Tags pour la catégorisation et la recherche (format JSON list).
-        created_at (datetime): Horodatage de la création de l'entrée (UTC).
-        duration_ms (int): Durée de l'opération en millisecondes (optionnel).
-        source_file (str): Fichier source de l'appel (optionnel).
-        source_line (int): Ligne source de l'appel (optionnel).
     """
     __tablename__ = "execution_logs"
 
     # Colonnes principales
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True)
-    agent_id = Column(String, nullable=False, index=True)
+    task_id = Column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True, index=True)
+    agent_id = Column(String(100), nullable=False, index=True)
     
     # Niveau et catégorie
     level = Column(Enum(LogLevel), default=LogLevel.INFO, nullable=False)
@@ -98,16 +68,28 @@ class ExecutionLogModel(Base):
     raw_response = Column(Text, nullable=True)
     tool_output = Column(Text, nullable=True)
     
-    # Métadonnées
-    metadata = Column(Text, nullable=True)  # JSON
+    # Métadonnées (renommé en extra_metadata pour éviter le conflit avec Base.metadata de SQLAlchemy)
+    extra_metadata = Column(
+        "metadata",
+        Text,
+        nullable=True,
+        doc="Métadonnées supplémentaires au format JSON"
+    )
+    
     tags = Column(Text, nullable=True)      # JSON list
     
-    # Horodatage et métriques
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False, index=True)
+    # Horodatage et métriques (UTC time-aware avec lambda)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+        doc="Horodatage de la création de l'entrée (UTC)"
+    )
     duration_ms = Column(Integer, nullable=True)
     
     # Informations de source
-    source_file = Column(String, nullable=True)
+    source_file = Column(String(255), nullable=True)
     source_line = Column(Integer, nullable=True)
 
     # Index pour les requêtes fréquentes
@@ -121,22 +103,15 @@ class ExecutionLogModel(Base):
         Index('idx_execution_logs_agent_category', 'agent_id', 'category'),
     )
 
-    # Relations (optionnelles, peuvent être définies dans models_orm.py)
-    # task = relationship("TaskModel", back_populates="logs")
+    # Relation vers la tâche
+    task = relationship("TaskModel", back_populates="execution_logs")
 
     def __repr__(self) -> str:
-        """
-        Représentation lisible de l'objet pour le débogage.
-        """
+        """Représentation lisible de l'objet pour le débogage."""
         return f"<ExecutionLogModel(id={self.id}, task_id='{self.task_id}', agent_id='{self.agent_id}', level='{self.level.value}', created_at={self.created_at})>"
 
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Convertit le log en dictionnaire.
-        
-        Returns:
-            Dict[str, Any]: Dictionnaire représentant le log
-        """
+        """Convertit le log en dictionnaire."""
         return {
             "id": self.id,
             "task_id": self.task_id,
@@ -155,12 +130,7 @@ class ExecutionLogModel(Base):
         }
 
     def to_short_dict(self) -> Dict[str, Any]:
-        """
-        Convertit le log en dictionnaire court (pour les listes).
-        
-        Returns:
-            Dict[str, Any]: Dictionnaire court
-        """
+        """Convertit le log en dictionnaire court (pour les listes)."""
         return {
             "id": self.id,
             "task_id": self.task_id,
@@ -172,85 +142,49 @@ class ExecutionLogModel(Base):
         }
 
     def get_metadata(self) -> Dict[str, Any]:
-        """
-        Récupère les métadonnées sous forme de dictionnaire.
-        
-        Returns:
-            Dict[str, Any]: Métadonnées
-        """
-        if not self.metadata:
+        """Récupère les métadonnées sous forme de dictionnaire."""
+        if not self.extra_metadata:
             return {}
         try:
-            return json.loads(self.metadata)
-        except json.JSONDecodeError:
-            return {"_raw": self.metadata}
+            return json.loads(self.extra_metadata)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse metadata JSON: {e}")
+            return {"_raw": self.extra_metadata}
 
     def set_metadata(self, metadata: Dict[str, Any]) -> None:
-        """
-        Définit les métadonnées à partir d'un dictionnaire.
-        
-        Args:
-            metadata (Dict[str, Any]): Métadonnées à stocker
-        """
-        self.metadata = json.dumps(metadata) if metadata else None
+        """Définit les métadonnées à partir d'un dictionnaire."""
+        self.extra_metadata = json.dumps(metadata) if metadata else None
 
     def get_tags(self) -> List[str]:
-        """
-        Récupère les tags sous forme de liste.
-        
-        Returns:
-            List[str]: Liste des tags
-        """
+        """Récupère les tags sous forme de liste."""
         if not self.tags:
             return []
         try:
             return json.loads(self.tags)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse tags JSON: {e}")
             return []
 
     def set_tags(self, tags: List[str]) -> None:
-        """
-        Définit les tags à partir d'une liste.
-        
-        Args:
-            tags (List[str]): Tags à stocker
-        """
+        """Définit les tags à partir d'une liste."""
         self.tags = json.dumps(tags) if tags else None
 
     def add_tag(self, tag: str) -> None:
-        """
-        Ajoute un tag.
-        
-        Args:
-            tag (str): Tag à ajouter
-        """
+        """Ajoute un tag."""
         current_tags = self.get_tags()
         if tag not in current_tags:
             current_tags.append(tag)
             self.set_tags(current_tags)
 
     def remove_tag(self, tag: str) -> None:
-        """
-        Supprime un tag.
-        
-        Args:
-            tag (str): Tag à supprimer
-        """
+        """Supprime un tag."""
         current_tags = self.get_tags()
         if tag in current_tags:
             current_tags.remove(tag)
             self.set_tags(current_tags)
 
     def has_tag(self, tag: str) -> bool:
-        """
-        Vérifie si un tag est présent.
-        
-        Args:
-            tag (str): Tag à vérifier
-            
-        Returns:
-            bool: True si le tag est présent
-        """
+        """Vérifie si un tag est présent."""
         return tag in self.get_tags()
 
     @classmethod
@@ -269,26 +203,7 @@ class ExecutionLogModel(Base):
         source_file: Optional[str] = None,
         source_line: Optional[int] = None
     ) -> "ExecutionLogModel":
-        """
-        Factory method pour créer un nouveau log.
-        
-        Args:
-            agent_id: Identifiant de l'agent
-            task_id: Identifiant de la tâche (optionnel)
-            level: Niveau de sévérité
-            category: Catégorie du log
-            prompt_sent: Prompt envoyé (optionnel)
-            raw_response: Réponse reçue (optionnel)
-            tool_output: Sortie de l'outil (optionnel)
-            metadata: Métadonnées (optionnel)
-            tags: Tags (optionnel)
-            duration_ms: Durée en millisecondes (optionnel)
-            source_file: Fichier source (optionnel)
-            source_line: Ligne source (optionnel)
-            
-        Returns:
-            ExecutionLogModel: Instance du log
-        """
+        """Factory method pour créer un nouveau log."""
         log = cls(
             agent_id=agent_id,
             task_id=task_id,
@@ -317,20 +232,7 @@ class ExecutionLogModel(Base):
         metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None
     ) -> "ExecutionLogModel":
-        """
-        Factory method pour créer un log d'erreur.
-        
-        Args:
-            agent_id: Identifiant de l'agent
-            error_message: Message d'erreur
-            task_id: Identifiant de la tâche (optionnel)
-            tool_output: Sortie de l'outil (optionnel)
-            metadata: Métadonnées (optionnel)
-            tags: Tags (optionnel)
-            
-        Returns:
-            ExecutionLogModel: Instance du log
-        """
+        """Factory method pour créer un log d'erreur."""
         return cls.create_log(
             agent_id=agent_id,
             task_id=task_id,
@@ -352,20 +254,7 @@ class ExecutionLogModel(Base):
         metadata: Optional[Dict[str, Any]] = None,
         duration_ms: Optional[int] = None
     ) -> "ExecutionLogModel":
-        """
-        Factory method pour créer un log d'appel LLM.
-        
-        Args:
-            agent_id: Identifiant de l'agent
-            prompt: Prompt envoyé
-            response: Réponse reçue
-            task_id: Identifiant de la tâche (optionnel)
-            metadata: Métadonnées (optionnel)
-            duration_ms: Durée en millisecondes (optionnel)
-            
-        Returns:
-            ExecutionLogModel: Instance du log
-        """
+        """Factory method pour créer un log d'appel LLM."""
         return cls.create_log(
             agent_id=agent_id,
             task_id=task_id,
@@ -388,20 +277,7 @@ class ExecutionLogModel(Base):
         metadata: Optional[Dict[str, Any]] = None,
         duration_ms: Optional[int] = None
     ) -> "ExecutionLogModel":
-        """
-        Factory method pour créer un log de compilation.
-        
-        Args:
-            agent_id: Identifiant de l'agent
-            tool_output: Sortie de la compilation
-            task_id: Identifiant de la tâche (optionnel)
-            success: Succès de la compilation
-            metadata: Métadonnées (optionnel)
-            duration_ms: Durée en millisecondes (optionnel)
-            
-        Returns:
-            ExecutionLogModel: Instance du log
-        """
+        """Factory method pour créer un log de compilation."""
         return cls.create_log(
             agent_id=agent_id,
             task_id=task_id,
@@ -423,20 +299,7 @@ class ExecutionLogModel(Base):
         metadata: Optional[Dict[str, Any]] = None,
         duration_ms: Optional[int] = None
     ) -> "ExecutionLogModel":
-        """
-        Factory method pour créer un log de sécurité.
-        
-        Args:
-            agent_id: Identifiant de l'agent
-            tool_output: Sortie de l'outil de sécurité
-            task_id: Identifiant de la tâche (optionnel)
-            vulnerabilities_found: Nombre de vulnérabilités trouvées
-            metadata: Métadonnées (optionnel)
-            duration_ms: Durée en millisecondes (optionnel)
-            
-        Returns:
-            ExecutionLogModel: Instance du log
-        """
+        """Factory method pour créer un log de sécurité."""
         level = LogLevel.ERROR if vulnerabilities_found > 0 else LogLevel.INFO
         return cls.create_log(
             agent_id=agent_id,
@@ -464,12 +327,7 @@ class LoggableMixin:
         self._log_callback = None
     
     def set_log_callback(self, callback):
-        """
-        Définit la fonction de callback pour les logs.
-        
-        Args:
-            callback: Fonction async appelée avec (log_model, session)
-        """
+        """Définit la fonction de callback pour les logs."""
         self._log_callback = callback
     
     async def log_info(
@@ -479,15 +337,7 @@ class LoggableMixin:
         metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None
     ) -> None:
-        """
-        Log un message d'information.
-        
-        Args:
-            message: Message à logger
-            task_id: ID de la tâche (optionnel)
-            metadata: Métadonnées (optionnel)
-            tags: Tags (optionnel)
-        """
+        """Log un message d'information."""
         await self._create_log(
             level=LogLevel.INFO,
             category=LogCategory.AGENT,
@@ -504,15 +354,7 @@ class LoggableMixin:
         tool_output: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
-        """
-        Log une erreur.
-        
-        Args:
-            error: Message d'erreur
-            task_id: ID de la tâche (optionnel)
-            tool_output: Sortie de l'outil (optionnel)
-            metadata: Métadonnées (optionnel)
-        """
+        """Log une erreur."""
         await self._create_log(
             level=LogLevel.ERROR,
             category=LogCategory.AGENT,
@@ -531,16 +373,7 @@ class LoggableMixin:
         duration_ms: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
-        """
-        Log un appel LLM.
-        
-        Args:
-            prompt: Prompt envoyé
-            response: Réponse reçue
-            task_id: ID de la tâche (optionnel)
-            duration_ms: Durée en millisecondes
-            metadata: Métadonnées (optionnel)
-        """
+        """Log un appel LLM."""
         await self._create_log(
             level=LogLevel.DEBUG,
             category=LogCategory.LLM,
@@ -564,26 +397,15 @@ class LoggableMixin:
         metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None
     ) -> None:
-        """
-        Crée et sauvegarde un log.
-        
-        Args:
-            level: Niveau de sévérité
-            category: Catégorie du log
-            prompt_sent: Prompt envoyé (optionnel)
-            raw_response: Réponse reçue (optionnel)
-            tool_output: Sortie de l'outil (optionnel)
-            task_id: ID de la tâche (optionnel)
-            duration_ms: Durée en millisecondes (optionnel)
-            metadata: Métadonnées (optionnel)
-            tags: Tags (optionnel)
-        """
+        """Crée et sauvegarde un log."""
         if not self._log_callback:
-            # Pas de callback, log uniquement en mémoire
+            logger.debug("Log callback not set, ignoring log")
             return
         
+        agent_id = getattr(self, 'agent_id', 'unknown_agent')
+        
         log = ExecutionLogModel.create_log(
-            agent_id=self.agent_id,
+            agent_id=agent_id,
             task_id=task_id,
             level=level,
             category=category,

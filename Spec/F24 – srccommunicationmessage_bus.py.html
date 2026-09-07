@@ -1,0 +1,57 @@
+<div class="spec-section" id="f24-message-bus-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/communication/message_bus.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/communication/message_bus.py</code> définit l'interface abstraite du bus de messages inter-agents, assurant le découplage, la communication asynchrone, le filtrage avancé ainsi que le suivi des statistiques du pipeline[cite: 17].</p>
+
+  <div class="model-group">
+    <h5>Énumérations &amp; Structures de Données</h5>
+    <ul>
+      <li><code>SubscriptionType(str, Enum)</code> : Énumération des modes d'abonnement (<code>EXACT</code>, <code>PATTERN</code>, <code>PREFIX</code>, <code>MULTI</code>)[cite: 17].</li>
+      <li><code>Subscription</code> : Dataclass représentant un abonnement avec gestion d'état, critères de filtrage, métriques de réception et méthode de correspondance de topic <code>matches(topic)</code>[cite: 17].</li>
+      <li><code>MessageBusStats</code> : Dataclass assurant le suivi agrégé des métriques du bus (messages publiés, délivrés, erreurs, abonnements actifs, répartition par type, priorité et statut)[cite: 17].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Interface Abstraite : <code>MessageBus(ABC)</code></h5>
+    <ul>
+      <li><strong>Méthodes abstraites obligatoires :</strong> <code>publish(topic, message)</code>, <code>subscribe(topic, callback, subscription_type, filter_criteria)</code>, <code>unsubscribe(subscription_id)</code> et <code>close()</code>[cite: 17].</li>
+      <li><strong>Gestion du cycle de vie :</strong> <code>start()</code> (initialisation de la file <code>asyncio.Queue</code> et démarrage du worker), <code>stop()</code> (arrêt propre et annulation du worker) et <code>_process_messages()</code> (boucle de consommation en arrière-plan)[cite: 17].</li>
+      <li><strong>Distribution et filtrage interne :</strong> <code>_deliver_message()</code> (délivrance aux callbacks abonnés) et <code>_matches_filter()</code> (validation des critères dynamiques sur attributs, métadonnées, priorités ou types)[cite: 17].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Patrons de Communication Avancés &amp; Utilitaires</h5>
+    <ul>
+      <li><code>request_response()</code> : Implémentation du pattern Requête/Réponse synchrone-asynchrone s'appuyant sur un identifiant de corrélation (<code>correlation_id</code>), un abonnement temporaire et <code>asyncio.Event</code> avec gestion du timeout[cite: 17].</li>
+      <li><code>broadcast()</code> : Diffusion globale de messages vers le topic spécial <code>"broadcast"</code>[cite: 17].</li>
+      <li><code>send_to_agent()</code> : Routage point-à-point vers un agent spécifique via le topic <code>"agent.{agent_id}"</code>[cite: 17].</li>
+      <li><strong>Utilitaires &amp; Inspection :</strong> <code>get_subscription_info()</code>, <code>get_stats()</code>, <code>clear_stats()</code>, <code>to_dict()</code>, ainsi que les fonctions internes de validation <code>_validate_message()</code> et <code>_validate_topic()</code>[cite: 17].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Découplage par Abstraction (Pattern Provider / Interface) :</strong> Emploi de la classe abstraite <code>ABC</code> et de <code>@abstractmethod</code> pour imposer un contrat strict autorisant plusieurs moteurs de transport réseau (ex: Redis, RabbitMQ, Kafka)[cite: 17].</li>
+    <li><strong>Architecture Asynchrone Non-Bloquante :</strong> Utilisation native d'<code>asyncio</code>, de files d'attente <code>asyncio.Queue</code> et de verrous <code>asyncio.Lock</code> garantissant la thread-safety et la réactivité[cite: 17].</li>
+    <li><strong>Validation Préalable des Entrées :</strong> Contraintes de cohérence sur les messages (présence de <code>sender</code>, <code>type</code>) et validation par expression régulière de la structure des topics via <code>_validate_topic()</code>[cite: 17].</li>
+    <li><strong>Gestion Propre du Cycle de Vie :</strong> Interruption contrôlée du worker asyncio en capturant <code>asyncio.CancelledError</code> sans pertes ni exceptions non gérées[cite: 17].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Pattern Request/Response Intégré :</strong> Orchestration native de requêtes à attente de réponse synchronisée par corrélation dynamique sans bloquer le thread principal[cite: 17].</li>
+    <li><strong>Flexibilité du Routage et Filtrage Multi-Niveaux :</strong> Support combiné du filtrage par topic (Exact, Prefix, Regex Pattern) et du filtrage dynamique basé sur le contenu des métadonnées du message[cite: 17].</li>
+    <li><strong>Observabilité et Métriques Télémetriques Intégrées :</strong> Collecte à chaud de statistiques détaillées (<code>MessageBusStats</code>) via <code>_update_stats()</code> interrogeables à tout moment[cite: 17].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/communication/message_bus.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 énumération (<code>SubscriptionType</code>) et 2 dataclasses de support (<code>Subscription</code>, <code>MessageBusStats</code>)[cite: 17]</li>
+    <li>1 classe abstraite majeure (<code>MessageBus</code>) comportant 4 méthodes abstraites et 13 méthodes concrètes d'infrastructure[cite: 17]</li>
+    <li>Prise en charge native des modes de communication Requête/Réponse, Broadcast et Direct Agent Messaging[cite: 17]</li>
+  </ul>
+</div>

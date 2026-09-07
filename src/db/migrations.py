@@ -10,10 +10,10 @@
 from src.db.database import engine, Base
 from src.core.exceptions import StorageError
 from src.config.settings import settings
-from sqlalchemy import inspect, text, MetaData, Table
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 import logging
-from typing import List, Optional, Dict, Any, Set, Tuple
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import asyncio
 
@@ -123,7 +123,6 @@ async def _create_migration_history_table(conn) -> None:
                 rollback_script TEXT
             )
         """))
-        await conn.commit()
         logger.debug(f"✅ Table {MIGRATION_HISTORY_TABLE} créée/vérifiée")
     except Exception as e:
         logger.warning(f"⚠️ Erreur lors de la création de {MIGRATION_HISTORY_TABLE}: {e}")
@@ -147,7 +146,8 @@ async def get_current_version() -> Optional[str]:
             if exists:
                 result = await conn.execute(text(f"SELECT version_num FROM {VERSION_TABLE} LIMIT 1"))
                 version = result.scalar()
-                return version
+                if version:
+                    return version
             
             # Vérifier si la table migration_history existe
             result = await conn.execute(text(
@@ -192,18 +192,16 @@ async def set_current_version(version: str, description: str = "", applied_by: s
                 "description": description,
                 "applied_by": applied_by
             })
-            await conn.commit()
             
-            # Mettre à jour la table alembic_version si elle existe
+            # Mettre à jour la table alembic_version si elle existe (en nettoyant les anciennes entrées)
             result = await conn.execute(text(
                 f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{VERSION_TABLE}')"
             ))
             if result.scalar():
+                await conn.execute(text(f"DELETE FROM {VERSION_TABLE}"))
                 await conn.execute(text(
-                    f"INSERT INTO {VERSION_TABLE} (version_num) VALUES (:version) "
-                    f"ON CONFLICT (version_num) DO UPDATE SET version_num = :version"
+                    f"INSERT INTO {VERSION_TABLE} (version_num) VALUES (:version)"
                 ), {"version": version})
-                await conn.commit()
             
             logger.info(f"✅ Version définie: {version}")
             
@@ -334,7 +332,6 @@ async def execute_migration(sql: str, params: Optional[Dict[str, Any]] = None) -
     try:
         async with engine.begin() as conn:
             await conn.execute(text(sql), params or {})
-            await conn.commit()
         logger.info(f"✅ Migration exécutée: {sql[:100]}...")
     except Exception as e:
         logger.error(f"❌ Erreur lors de l'exécution de la migration: {e}")
@@ -361,7 +358,6 @@ async def execute_migration_script(script_path: str) -> None:
             for stmt in statements:
                 if stmt.strip():
                     await conn.execute(text(stmt))
-            await conn.commit()
         
         logger.info(f"✅ Script de migration exécuté: {script_path}")
     except Exception as e:
@@ -664,6 +660,11 @@ async def rollback_v4_to_v3() -> None:
     await drop_index("task_results", "idx_task_results_timestamp")
     await drop_index("execution_logs", "idx_execution_logs_task_level")
     await drop_index("execution_logs", "idx_execution_logs_agent_category")
+    
+    # Supprimer la contrainte de priorité ajoutée en v4
+    if await table_exists("sprints"):
+        await execute_migration("ALTER TABLE sprints DROP CONSTRAINT IF EXISTS chk_sprint_priority")
+        
     logger.info("✅ Rollback v4 -> v3 terminé")
 
 
@@ -693,6 +694,36 @@ async def rollback_v2_to_v1() -> None:
     await drop_column("sprints", "priority")
     await drop_column("projects", "tags")
     logger.info("✅ Rollback v2 -> v1 terminé")
+
+
+# ==============================================================================
+# EXPORTS
+# ==============================================================================
+
+__all__ = [
+    "init_models",
+    "drop_models",
+    "reset_models",
+    "get_current_version",
+    "set_current_version",
+    "get_existing_tables",
+    "table_exists",
+    "get_table_info",
+    "column_exists",
+    "index_exists",
+    "execute_migration",
+    "execute_migration_script",
+    "add_column",
+    "drop_column",
+    "rename_column",
+    "add_index",
+    "drop_index",
+    "migration_v1_to_v2",
+    "migration_v2_to_v3",
+    "migration_v3_to_v4",
+    "run_migrations",
+    "rollback_to_version",
+]
 
 
 # ==============================================================================

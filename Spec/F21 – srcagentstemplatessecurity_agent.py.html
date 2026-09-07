@@ -1,0 +1,77 @@
+<div class="spec-section" id="f21-security-agent-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/agents/templates/security_agent.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/agents/templates/security_agent.py</code> implémente l'agent de sécurité auditant le code Solidity via un bouclier multi-couches (analyse statique Slither, fuzzing Foundry/Echidna, simulation d'attaques Anvil et vérification formelle Halmos), calculant un score de sécurité et générant des correctifs automatiques[cite: 20].</p>
+
+  <div class="model-group">
+    <h5>Énumérations &amp; Structures de Données</h5>
+    <ul>
+      <li><code>VulnerabilitySeverity</code> : Énumération des niveaux de sévérité (<code>CRITICAL</code>, <code>HIGH</code>, <code>MEDIUM</code>, <code>LOW</code>, <code>INFO</code>)[cite: 20].</li>
+      <li><code>VulnerabilityType</code> : Énumération exhaustives des typologies de vulnérabilités (<code>REENTRANCY</code>, <code>ACCESS_CONTROL</code>, <code>ARITHMETIC</code>, <code>UNCHECKED_CALL</code>, <code>FRONT_RUNNING</code>, <code>DOS</code>, <code>LOGIC_ERROR</code>, <code>FORMAL_VERIFICATION</code>, etc.)[cite: 20].</li>
+      <li><code>AuditLevel</code> : Niveaux d'audit de sécurité configurables (<code>LEVEL_1</code>, <code>LEVEL_2</code>, <code>LEVEL_3</code>, <code>LEVEL_4</code>, <code>FULL</code>)[cite: 20].</li>
+      <li><code>Vulnerability</code> &amp; <code>AuditReport</code> : DataClasses encapsulant les détails d'une faille (titre, extrait de code, impact, remédiation) et la synthèse globale de l'audit (nombre de failles par sévérité, score global 0-100, méthode <code>to_dict()</code>)[cite: 20].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Agent Sécurité Principal : <code>SecurityAgent</code> (Cycle de Vie &amp; Orchestration)</h5>
+    <ul>
+      <li><code>__init__()</code> : Initialisation avec injection du LLM, du RAG, des règles de bonnes pratiques, des chemins d'accès aux outils (Slither, Halmos, Foundry, Anvil RPC), du score minimal requis (<code>min_security_score</code>) et du drapeau <code>auto_fix</code>[cite: 20].</li>
+      <li><code>execute_task()</code> : Point d'entrée exécutant le cycle d'audit complet, enrichissant les résultats via RAG, appliquant les bonnes pratiques, générant les correctifs LLM, calculant le score et retournant le rapport final[cite: 20].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Moteur d'Audit Multi-Niveaux &amp; Intégrations Outils</h5>
+    <ul>
+      <li><code>_run_audit()</code> : Orchestrateur central exécutant séquentiellement les 4 niveaux d'audit demandés et effectuant la déduplication des vulnérabilités[cite: 20].</li>
+      <li><code>parse_slither_json()</code> &amp; <code>run_slither_analysis()</code> : Niveau 1 — Analyse statique exécutant Slither via sous-processus et traduisant les résultats JSON dans la structure interne[cite: 20].</li>
+      <li><code>run_fuzzing_analysis()</code> : Niveau 2 — Fuzzing générant dynamiquement un projet Foundry temporaire pour exécuter des tests d'invariants (Forge)[cite: 20].</li>
+      <li><code>run_threat_simulation()</code> : Niveau 3 — Simulation d'attaques dynamiques sur Anvil avec méthodes dédiées de détection (<code>_detect_reentrancy</code>, <code>_detect_front_running</code>, <code>_detect_access_control_issues</code>, <code>_detect_arithmetic_issues</code>) et fabriques de vulnérabilités[cite: 20].</li>
+      <li><code>parse_halmos_json()</code> &amp; <code>run_halmos_verification()</code> : Niveau 4 — Vérification formelle par preuves symboliques via Halmos[cite: 20].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Enrichissement, Correctifs &amp; Scoring</h5>
+    <ul>
+      <li><code>_enrich_with_rag()</code> : Interroge la base de connaissances (RAG) pour ajouter du contexte et des références aux remédiations proposées[cite: 20].</li>
+      <li><code>_apply_best_practices()</code> : Valide le code par rapport aux <code>BaseBestPractice</code> et injecte les violations de conformité comme vulnérabilités <code>COMPLIANCE</code>[cite: 20].</li>
+      <li><code>_generate_fixes()</code> &amp; <code>_extract_code_from_response()</code> : Génère automatiquement des patchs de code Solidity via le LLM pour chaque vulnérabilité détectée[cite: 20].</li>
+      <li><code>_classify_vulnerabilities()</code>, <code>_calculate_security_score()</code> &amp; <code>_deduplicate_vulnerabilities()</code> : Recompte par niveau de sévérité, déduplication par clé unique et calcul d'un score de sécurité pondéré de 0 à 100[cite: 20].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Rapports &amp; Monitoring</h5>
+    <ul>
+      <li><code>format_remediation_guide()</code> : Génère un guide de remédiation textuel clair et structuré par niveau de sévérité, incluant les extraits de code et correctifs Solidity[cite: 20].</li>
+      <li><code>get_statistics()</code>, <code>get_last_audit()</code> &amp; <code>to_dict()</code> : Agrégation des métriques globales d'exécution (taux de succès, score moyen/min/max, total des vulnérabilités)[cite: 20].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Défense en Profondeur (Defense-in-Depth) :</strong> Approche d'audit multi-couches combinant l'analyse statique, le fuzzing, la simulation dynamique et la vérification formelle pour maximiser le taux de détection[cite: 20].</li>
+    <li><strong>Scoring Strict et Rédhibitoire :</strong> Évaluation pondérée du risque qui refuse automatiquement tout contrat présentant une vulnérabilité critique ou un score inférieur au seuil <code>min_security_score</code>[cite: 20].</li>
+    <li><strong>Enrichissement Contextuel RAG &amp; Auto-Fix LLM :</strong> Association systématique d'une explication théorique issue de la base de connaissances et d'un correctif de code Solidity directement utilisable[cite: 20].</li>
+    <li><strong>Gestion Sécurisée de l'Environnement de Test :</strong> Exécution du fuzzing et des vérifications dans des répertoires temporaires isolés avec nettoyage garanti des ressources système[cite: 20].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Intégration Nativity Multi-Outils Web3 :</strong> Abstraction unifiée pilotant Slither, Foundry/Forge, Anvil et Halmos au sein d'une même API standardisée[cite: 20].</li>
+    <li><strong>Moteur Anti-Doublon Inter-Outils :</strong> Filtrage intelligent (<code>_deduplicate_vulnerabilities</code>) évitant la redondance des alertes entre Slither, les tests d'invariants et les simulations[cite: 20].</li>
+    <li><strong>Génération Automatique de Guide de Réparation :</strong> Formatage prêt pour la production incluant la localisation précise des lignes impactées et le snippet Solidity de correction[cite: 20].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/agents/templates/security_agent.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 classe Agent Sécurité complète (<code>SecurityAgent</code>)[cite: 20]</li>
+    <li>2 DataClasses de rapport/vulnérabilité (<code>Vulnerability</code>, <code>AuditReport</code>) et 3 énumérations (<code>VulnerabilitySeverity</code>, <code>VulnerabilityType</code>, <code>AuditLevel</code>)[cite: 20]</li>
+    <li>Prise en charge intégrale des 4 niveaux d'audit de sécurité Web3[cite: 20]</li>
+    <li>Enrichissement RAG, génération automatique de patchs Solidity et rapport de remédiation structuré[cite: 20]</li>
+  </ul>
+</div>

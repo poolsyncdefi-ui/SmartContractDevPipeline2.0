@@ -4,7 +4,7 @@
 Workflow engine for the Smart Contract Dev Pipeline.
 F28 – src/orchestration/workflow_engine.py
 
-Rôle Fonctionnel : Moteur d'execution asynchrone des taches (DAG).
+Role Fonctionnel : Moteur d'execution asynchrone des taches (DAG).
 Ce module implemente le moteur d'orchestration du pipeline, responsable de:
 - L'execution des taches selon un ordre topologique (DAG)
 - La gestion des dependances entre taches
@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 
 # Import des modules du pipeline
 from src.core.exceptions import TaskExecutionError, CircuitBreakerOpenError
-from src.core.models import TaskState
+from src.core.models import TaskResult
 from src.persistence.project_state import ProjectState
 from src.communication.message_bus import MessageBus
 from src.orchestration.circuit_breaker import CircuitBreaker
@@ -67,7 +67,7 @@ class TaskExecutionStatus(str, Enum):
 class TaskExecution:
     """
     Etat d'execution d'une tache.
-    
+
     Attributes:
         task_id (str): Identifiant de la tache
         task_data (Dict): Donnees de la tache
@@ -92,7 +92,7 @@ class TaskExecution:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     attempts: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict:
         """Convertit l'execution en dictionnaire."""
         return {
@@ -113,7 +113,7 @@ class TaskExecution:
 class WorkflowExecution:
     """
     Etat d'execution d'un workflow.
-    
+
     Attributes:
         workflow_id (str): Identifiant du workflow
         status (WorkflowStatus): Statut du workflow
@@ -136,7 +136,7 @@ class WorkflowExecution:
     total_count: int = 0
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         """Convertit l'execution en dictionnaire."""
         return {
@@ -156,11 +156,11 @@ class WorkflowExecution:
 class WorkflowEngine:
     """
     Moteur d'execution de DAG de taches.
-    
+
     Ce moteur orchestre l'execution des taches selon un ordre
     topologique, avec support de la paralellisation, des retries
     et de la persistance.
-    
+
     Attributes:
         bus (Optional[MessageBus]): Bus de messages pour les notifications
         agents (Dict[str, Any]): Agents disponibles
@@ -172,7 +172,7 @@ class WorkflowEngine:
         _listeners (List[Callable]): Listeners d'evenements
         _running (bool): Indique si le moteur est en cours d'execution
     """
-    
+
     def __init__(
         self,
         bus: Optional[MessageBus] = None,
@@ -184,7 +184,7 @@ class WorkflowEngine:
     ):
         """
         Initialise le moteur de workflow.
-        
+
         Args:
             bus: Bus de messages pour les notifications
             agents: Agents disponibles
@@ -199,23 +199,24 @@ class WorkflowEngine:
         self.circuit_breaker = circuit_breaker
         self.max_parallel = max_parallel
         self.default_max_retries = default_max_retries
-        
+
         self.execution: Optional[WorkflowExecution] = None
         self._execution_history: List[WorkflowExecution] = []
         self._listeners: List[Callable[[str, Dict], Awaitable[None]]] = []
         self._running = False
         self._stop_requested = False
-        
-        # Verrous
+
+        # Verrous et files
         self._task_lock = asyncio.Lock()
         self._execution_lock = asyncio.Lock()
-        
+        self._ready_queue: Optional[asyncio.Queue] = None
+
         logger.info("WorkflowEngine initialized")
-    
+
     # =========================================================================
     # GESTION DES TACHES
     # =========================================================================
-    
+
     def add_task(
         self,
         task_id: str,
@@ -229,7 +230,7 @@ class WorkflowEngine:
     ) -> None:
         """
         Ajoute une tache au workflow.
-        
+
         Args:
             task_id: Identifiant de la tache
             agent_id: ID de l'agent qui executera la tache
@@ -241,11 +242,15 @@ class WorkflowEngine:
             metadata: Metadonnees supplementaires
         """
         if not self.execution:
-            raise ValueError("No execution context. Call start() first.")
-        
+            self.execution = WorkflowExecution(
+                workflow_id="default_workflow",
+                status=WorkflowStatus.PENDING,
+                metadata={}
+            )
+
         if task_id in self.execution.tasks:
             raise ValueError(f"Task {task_id} already exists")
-        
+
         # Creation de la tache
         task_data = {
             "id": task_id,
@@ -255,23 +260,23 @@ class WorkflowEngine:
             "priority": priority,
             "metadata": metadata or {}
         }
-        
+
         task_exec = TaskExecution(
             task_id=task_id,
             task_data=task_data,
             dependencies=set(dependencies or []),
             max_retries=max_retries or self.default_max_retries
         )
-        
+
         self.execution.tasks[task_id] = task_exec
         self.execution.total_count += 1
-        
+
         logger.debug(f"Task added: {task_id} (agent={agent_id}, action={action})")
-    
+
     def add_tasks(self, tasks: List[Dict]) -> None:
         """
         Ajoute plusieurs taches.
-        
+
         Args:
             tasks: Liste des taches a ajouter
         """
@@ -286,28 +291,28 @@ class WorkflowEngine:
                 priority=task.get("priority", 5),
                 metadata=task.get("metadata")
             )
-    
+
     def get_task(self, task_id: str) -> Optional[TaskExecution]:
         """
         Recupere une tache.
-        
+
         Args:
             task_id: ID de la tache
-            
+
         Returns:
             Optional[TaskExecution]: Tache ou None
         """
         if not self.execution:
             return None
         return self.execution.tasks.get(task_id)
-    
+
     def get_tasks_by_status(self, status: TaskExecutionStatus) -> List[TaskExecution]:
         """
         Recupere les taches par statut.
-        
+
         Args:
             status: Statut a filtrer
-            
+
         Returns:
             List[TaskExecution]: Taches avec le statut
         """
@@ -317,11 +322,11 @@ class WorkflowEngine:
             t for t in self.execution.tasks.values()
             if t.status == status
         ]
-    
+
     # =========================================================================
     # EXECUTION
     # =========================================================================
-    
+
     async def start(
         self,
         workflow_id: str,
@@ -329,61 +334,73 @@ class WorkflowEngine:
     ) -> str:
         """
         Demarre l'execution du workflow.
-        
+
         Args:
             workflow_id: Identifiant du workflow
             metadata: Metadonnees du workflow
-            
+
         Returns:
             str: ID du workflow
-            
+
         Raises:
             ValueError: Si le workflow est deja en cours
         """
         if self._running:
             raise ValueError("Workflow already running")
-        
+
         self._running = True
         self._stop_requested = False
-        
-        # Initialisation de l'execution
-        self.execution = WorkflowExecution(
-            workflow_id=workflow_id,
-            status=WorkflowStatus.RUNNING,
-            metadata=metadata or {}
-        )
-        
+
+        # Initialisation de l'execution si non definie
+        if not self.execution:
+            self.execution = WorkflowExecution(
+                workflow_id=workflow_id,
+                status=WorkflowStatus.RUNNING,
+                metadata=metadata or {}
+            )
+        else:
+            self.execution.workflow_id = workflow_id
+            self.execution.status = WorkflowStatus.RUNNING
+            if metadata:
+                self.execution.metadata.update(metadata)
+
+        self.execution.start_time = datetime.utcnow()
+
         logger.info(f"Workflow started: {workflow_id}")
-        
+
         # Notification de demarrage
         await self._notify("workflow_started", {
             "workflow_id": workflow_id,
             "total_tasks": self.execution.total_count
         })
-        
+
         # Execution du pipeline
         try:
             await self._run_pipeline()
-            
+
             # Mise a jour du statut
             if self._stop_requested:
                 self.execution.status = WorkflowStatus.CANCELLED
             elif all(t.status == TaskExecutionStatus.COMPLETED for t in self.execution.tasks.values()):
                 self.execution.status = WorkflowStatus.COMPLETED
             else:
-                self.execution.status = WorkflowStatus.FAILED
-            
+                failed_count = len(self.get_tasks_by_status(TaskExecutionStatus.FAILED))
+                if failed_count > 0:
+                    self.execution.status = WorkflowStatus.FAILED
+                else:
+                    self.execution.status = WorkflowStatus.COMPLETED
+
         except Exception as e:
             self.execution.status = WorkflowStatus.FAILED
             self.execution.error = str(e)
             logger.error(f"Workflow failed: {str(e)}")
             raise
-        
+
         finally:
             self.execution.end_time = datetime.utcnow()
             self._running = False
             self._execution_history.append(self.execution)
-            
+
             # Notification de fin
             await self._notify("workflow_completed", {
                 "workflow_id": workflow_id,
@@ -391,106 +408,118 @@ class WorkflowEngine:
                 "completed_tasks": self.execution.completed_count,
                 "total_tasks": self.execution.total_count
             })
-            
+
             logger.info(f"Workflow completed: {workflow_id} (status={self.execution.status.value})")
-        
+
         return workflow_id
-    
+
     async def stop(self) -> None:
         """
         Demande l'arret du workflow.
         """
         self._stop_requested = True
         logger.info("Stop requested for workflow")
-    
+
     async def _run_pipeline(self) -> None:
         """
-        Execute le pipeline complet.
+        Execute le pipeline complet via un DAG asynchrone avec file d'attente et workers concurrents.
         """
         if not self.execution:
             raise ValueError("No execution context")
-        
-        # Resolution de l'ordre topologique
+
+        # Resolution de l'ordre topologique (detection de cycles)
         order = self._resolve_order()
-        
         if not order:
             logger.warning("No tasks to execute")
             return
-        
+
         logger.info(f"Executing {len(order)} tasks in topological order")
-        
-        # Execution des taches en parallele
+
         semaphore = asyncio.Semaphore(self.max_parallel)
-        
-        # File d'attente des taches pretes
-        ready_queue = deque()
-        
-        # Fonction pour executer une tache
-        async def execute_task_wrapper(task_id: str):
-            async with semaphore:
-                if self._stop_requested:
-                    return
-                await self._execute_task(task_id)
-        
-        # Tant qu'il reste des taches a executer
+        self._ready_queue = asyncio.Queue()
+
+        # Initialisation de la file avec les taches sans dependances
+        for task_id, task in self.execution.tasks.items():
+            if not task.dependencies:
+                task.status = TaskExecutionStatus.READY
+                await self._ready_queue.put(task_id)
+
+        active_tasks: Set[str] = set()
+
+        async def worker():
+            while not self._stop_requested:
+                try:
+                    try:
+                        task_id = await asyncio.wait_for(self._ready_queue.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        if self.execution.completed_count >= self.execution.total_count:
+                            break
+                        failed_tasks = self.get_tasks_by_status(TaskExecutionStatus.FAILED)
+                        completed_count = len(self.get_tasks_by_status(TaskExecutionStatus.COMPLETED))
+                        if completed_count + len(failed_tasks) >= self.execution.total_count and not active_tasks:
+                            break
+                        continue
+
+                    async with semaphore:
+                        if self._stop_requested:
+                            self._ready_queue.task_done()
+                            break
+
+                        active_tasks.add(task_id)
+                        try:
+                            await self._execute_task(task_id)
+                        finally:
+                            active_tasks.remove(task_id)
+                            self._ready_queue.task_done()
+
+                        # Verifier et ajouter les taches pretes suite a cette execution
+                        async with self._task_lock:
+                            for tid, t in self.execution.tasks.items():
+                                if t.status in [TaskExecutionStatus.PENDING, TaskExecutionStatus.BLOCKED]:
+                                    if self._is_ready(t):
+                                        t.status = TaskExecutionStatus.READY
+                                        await self._ready_queue.put(tid)
+
+                except Exception as e:
+                    logger.error(f"Worker error: {str(e)}")
+                    break
+
+        # Lancer les workers concurrents
+        num_workers = min(self.max_parallel, len(self.execution.tasks))
+        workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
+
+        # Attendre la fin de l'execution de toutes les taches ou un blocage
         while self.execution.completed_count < self.execution.total_count and not self._stop_requested:
-            # Trouver les taches pretes
-            pending_tasks = self.get_tasks_by_status(TaskExecutionStatus.PENDING)
-            ready_tasks = []
-            
-            for task in pending_tasks:
-                if self._is_ready(task):
-                    task.status = TaskExecutionStatus.READY
-                    ready_tasks.append(task.task_id)
-            
-            # Si aucune tache prete, verifier les bloquees
-            if not ready_tasks:
-                blocked_tasks = self.get_tasks_by_status(TaskExecutionStatus.BLOCKED)
-                if blocked_tasks:
-                    # Verifier si les dependances sont resolues
-                    for task in blocked_tasks:
-                        if self._is_ready(task):
-                            task.status = TaskExecutionStatus.READY
-                            ready_tasks.append(task.task_id)
-                
-                # Si toujours aucune tache prete, verifier les echecs
-                if not ready_tasks:
-                    failed_tasks = self.get_tasks_by_status(TaskExecutionStatus.FAILED)
-                    if failed_tasks:
-                        # Gestion des echecs
-                        for task in failed_tasks:
-                            if task.retry_count < task.max_retries:
-                                task.status = TaskExecutionStatus.RETRYING
-                                ready_tasks.append(task.task_id)
-                            else:
-                                # Tache en echec definitif
-                                pass
-                    
-                    # Si toujours aucune tache, il y a un blocage
-                    if not ready_tasks:
-                        logger.error("Pipeline blocked: no tasks ready")
+            failed_tasks = self.get_tasks_by_status(TaskExecutionStatus.FAILED)
+            completed_count = len(self.get_tasks_by_status(TaskExecutionStatus.COMPLETED))
+
+            if not active_tasks and self._ready_queue.empty():
+                pending_or_blocked = self.get_tasks_by_status(TaskExecutionStatus.PENDING) + self.get_tasks_by_status(TaskExecutionStatus.BLOCKED)
+                if pending_or_blocked:
+                    progress_possible = False
+                    async with self._task_lock:
+                        for t in pending_or_blocked:
+                            if all(self.get_task(d) and self.get_task(d).status == TaskExecutionStatus.COMPLETED for d in t.dependencies):
+                                progress_possible = True
+                                t.status = TaskExecutionStatus.READY
+                                await self._ready_queue.put(t.task_id)
+                    if not progress_possible:
+                        logger.error("Pipeline deadlocked: pending/blocked tasks have unsatisfied or failed dependencies")
                         break
-            
-            # Execution des taches pretes
-            if ready_tasks:
-                tasks_to_execute = ready_tasks[:self.max_parallel]
-                await asyncio.gather(*[
-                    execute_task_wrapper(task_id)
-                    for task_id in tasks_to_execute
-                ])
-            else:
-                # Petit delai pour eviter une boucle vide
-                await asyncio.sleep(0.1)
-        
-        # Verification finale
-        failed_tasks = self.get_tasks_by_status(TaskExecutionStatus.FAILED)
-        if failed_tasks and not self._stop_requested:
-            logger.warning(f"Workflow completed with {len(failed_tasks)} failed tasks")
-    
+                else:
+                    break
+            await asyncio.sleep(0.1)
+
+        # Nettoyage des workers
+        for w in workers:
+            w.cancel()
+
+        await asyncio.gather(*workers, return_exceptions=True)
+
     async def _execute_task(self, task_id: str) -> None:
         """
         Execute une tache individuelle.
-        
+
         Args:
             task_id: ID de la tache
         """
@@ -498,153 +527,161 @@ class WorkflowEngine:
         if not task:
             logger.error(f"Task {task_id} not found")
             return
-        
+
         # Verification du circuit breaker
         if self.circuit_breaker and self.circuit_breaker.is_open():
             raise CircuitBreakerOpenError(f"Circuit breaker open for task {task_id}")
-        
+
         # Mise a jour du statut
-        task.status = TaskExecutionStatus.RUNNING
-        task.start_time = datetime.utcnow()
-        self.execution.current_task = task_id
-        
+        async with self._task_lock:
+            task.status = TaskExecutionStatus.RUNNING
+            task.start_time = datetime.utcnow()
+            self.execution.current_task = task_id
+
         logger.info(f"Executing task: {task_id} (attempt {task.retry_count + 1})")
-        
+
         # Notification de debut de tache
         await self._notify("task_started", {
             "task_id": task_id,
             "attempt": task.retry_count + 1
         })
-        
+
         try:
             # Recuperation de l'agent
             agent_id = task.task_data.get("agent_id")
             agent = self.agents.get(agent_id)
-            
+
             if not agent:
                 raise ValueError(f"Agent '{agent_id}' not found")
-            
+
             # Execution de la tache
             result = await agent.execute_task(task.task_data)
-            
+
             # Enregistrement du resultat
-            task.result = result
-            task.status = TaskExecutionStatus.COMPLETED
-            task.end_time = datetime.utcnow()
-            self.execution.completed_count += 1
-            
+            async with self._task_lock:
+                task.result = result
+                task.status = TaskExecutionStatus.COMPLETED
+                task.end_time = datetime.utcnow()
+                self.execution.completed_count += 1
+
             # Sauvegarde si state_manager disponible
             if self.state_manager:
                 await self._save_task_result(task)
-            
+
             logger.info(f"Task completed: {task_id}")
-            
+
             # Notification de fin de tache
             await self._notify("task_completed", {
                 "task_id": task_id,
                 "status": "SUCCESS",
-                "duration": (task.end_time - task.start_time).total_seconds()
+                "duration": (task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else 0.0
             })
-            
+
         except Exception as e:
-            task.error = str(e)
-            task.retry_count += 1
-            
-            # Enregistrement de la tentative
-            task.attempts.append({
-                "timestamp": datetime.utcnow().isoformat(),
-                "error": str(e),
-                "retry_count": task.retry_count
-            })
-            
+            async with self._task_lock:
+                task.error = str(e)
+                task.retry_count += 1
+                task.end_time = datetime.utcnow()
+
+                # Enregistrement de la tentative
+                task.attempts.append({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "error": str(e),
+                    "retry_count": task.retry_count
+                })
+
             # Verifier si on peut reessayer
             if task.retry_count < task.max_retries:
                 task.status = TaskExecutionStatus.RETRYING
                 logger.warning(f"Task {task_id} failed, retrying ({task.retry_count}/{task.max_retries})")
-                
+
                 # Notification de retry
                 await self._notify("task_retry", {
                     "task_id": task_id,
                     "attempt": task.retry_count,
                     "error": str(e)
                 })
-                
+
                 # Delai avant retry (backoff exponentiel)
                 delay = 2 ** task.retry_count
                 await asyncio.sleep(delay)
-                
-                # Remettre en attente pour reessai
-                task.status = TaskExecutionStatus.PENDING
+
+                async with self._task_lock:
+                    task.status = TaskExecutionStatus.READY
+
+                if self._ready_queue:
+                    await self._ready_queue.put(task_id)
             else:
-                task.status = TaskExecutionStatus.FAILED
+                async with self._task_lock:
+                    task.status = TaskExecutionStatus.FAILED
                 logger.error(f"Task {task_id} failed after {task.max_retries} attempts: {str(e)}")
-                
+
                 # Notification d'echec
                 await self._notify("task_failed", {
                     "task_id": task_id,
                     "error": str(e),
                     "attempts": task.retry_count
                 })
-                
+
                 # Sauvegarde de l'erreur
                 if self.state_manager:
                     await self._save_task_error(task)
-    
+
     def _resolve_order(self) -> List[str]:
         """
         Tri topologique des taches (algorithme de Kahn).
-        
+
         Returns:
             List[str]: IDs des taches dans l'ordre d'execution
-            
+
         Raises:
             ValueError: Si un cycle est detecte
         """
         if not self.execution:
             return []
-        
+
         # Construction du graphe
         graph = {}
         in_degree = {}
-        
+
         for task_id, task in self.execution.tasks.items():
             graph[task_id] = set(task.dependencies)
             in_degree[task_id] = len(task.dependencies)
-        
+
         # File des taches sans dependances
         queue = deque([t for t, deg in in_degree.items() if deg == 0])
         result = []
-        
+
         while queue:
             task_id = queue.popleft()
             result.append(task_id)
-            
+
             # Mise a jour des dependances
             for other_id, deps in graph.items():
                 if task_id in deps:
                     in_degree[other_id] -= 1
                     if in_degree[other_id] == 0:
                         queue.append(other_id)
-        
+
         # Verification de cycle
         if len(result) != len(self.execution.tasks):
             raise ValueError("Cycle detected in DAG")
-        
+
         return result
-    
+
     def _is_ready(self, task: TaskExecution) -> bool:
         """
         Verifie si les dependances d'une tache sont satisfaites.
-        
+
         Args:
             task: Tache a verifier
-            
+
         Returns:
             bool: True si la tache est prete
         """
-        if task.status not in [TaskExecutionStatus.PENDING, TaskExecutionStatus.BLOCKED]:
+        if task.status not in [TaskExecutionStatus.PENDING, TaskExecutionStatus.BLOCKED, TaskExecutionStatus.RETRYING]:
             return False
-        
+
         # Verifier que toutes les dependances sont terminees
         for dep_id in task.dependencies:
             dep = self.get_task(dep_id)
@@ -652,110 +689,106 @@ class WorkflowEngine:
                 return False
             if dep.status != TaskExecutionStatus.COMPLETED:
                 return False
-        
+
         return True
-    
+
     # =========================================================================
     # PERSISTANCE
     # =========================================================================
-    
+
     async def _save_task_result(self, task: TaskExecution) -> None:
         """
         Sauvegarde le resultat d'une tache.
-        
+
         Args:
             task: Tache terminee
         """
         if not self.state_manager:
             return
-        
+
         try:
-            from src.core.models import TaskResultModel
-            
-            result = TaskResultModel(
+            result_data = TaskResult(
                 task_id=task.task_id,
-                sprint_id=self.execution.workflow_id,
                 agent_id=task.task_data.get("agent_id"),
                 status="SUCCESS",
                 output=task.result,
-                duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else None
+                error=None,
+                duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else None,
+                timestamp=datetime.utcnow()
             )
-            
-            await self.state_manager.save_task_result(result)
-            
+
+            await self.state_manager.save_task_result(result_data)
+
         except Exception as e:
             logger.error(f"Failed to save task result: {str(e)}")
-    
+
     async def _save_task_error(self, task: TaskExecution) -> None:
         """
         Sauvegarde l'erreur d'une tache.
-        
+
         Args:
             task: Tache en echec
         """
         if not self.state_manager:
             return
-        
+
         try:
-            from src.core.models import TaskResultModel
-            
-            result = TaskResultModel(
+            result_data = TaskResult(
                 task_id=task.task_id,
-                sprint_id=self.execution.workflow_id,
                 agent_id=task.task_data.get("agent_id"),
                 status="FAILED",
+                output=None,
                 error=task.error,
-                duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else None
+                duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else None,
+                timestamp=datetime.utcnow()
             )
-            
-            await self.state_manager.save_task_result(result)
-            
+
+            await self.state_manager.save_task_result(result_data)
+
         except Exception as e:
             logger.error(f"Failed to save task error: {str(e)}")
-    
+
     # =========================================================================
     # EVENEMENTS ET NOTIFICATIONS
     # =========================================================================
-    
+
     def add_listener(self, listener: Callable[[str, Dict], Awaitable[None]]) -> None:
         """
         Ajoute un listener d'evenements.
-        
+
         Args:
             listener: Fonction de callback
         """
         self._listeners.append(listener)
-    
+
     def remove_listener(self, listener: Callable[[str, Dict], Awaitable[None]]) -> None:
         """
         Supprime un listener d'evenements.
-        
+
         Args:
             listener: Fonction de callback
         """
         if listener in self._listeners:
             self._listeners.remove(listener)
-    
+
     async def _notify(self, event_type: str, data: Dict) -> None:
         """
         Notifie les listeners et le bus de messages.
-        
+
         Args:
             event_type: Type d'evenement
             data: Donnees de l'evenement
         """
-        # Notification des listeners
         for listener in self._listeners:
             try:
                 await listener(event_type, data)
             except Exception as e:
                 logger.error(f"Listener error: {str(e)}")
-        
-        # Notification via le bus
+
         if self.bus:
             try:
                 from src.communication.message_models import EventMessage
-                
+
                 event_msg = EventMessage(
                     sender="workflow_engine",
                     recipient=None,
@@ -765,24 +798,24 @@ class WorkflowEngine:
                         "workflow_id": self.execution.workflow_id if self.execution else None
                     }
                 )
-                await self.bus.publish(f"workflow.events", event_msg)
+                await self.bus.publish("workflow.events", event_msg)
             except Exception as e:
                 logger.error(f"Failed to send event via bus: {str(e)}")
-    
+
     # =========================================================================
     # STATISTIQUES
     # =========================================================================
-    
+
     def get_status(self) -> Dict[str, Any]:
         """
         Retourne le statut du workflow.
-        
+
         Returns:
             Dict: Statut detaille
         """
         if not self.execution:
             return {"status": "idle"}
-        
+
         return {
             "workflow_id": self.execution.workflow_id,
             "status": self.execution.status.value,
@@ -795,21 +828,21 @@ class WorkflowEngine:
             "end_time": self.execution.end_time.isoformat() if self.execution.end_time else None,
             "error": self.execution.error
         }
-    
+
     def get_task_status(self, task_id: str) -> Optional[Dict]:
         """
         Retourne le statut d'une tache.
-        
+
         Args:
             task_id: ID de la tache
-            
+
         Returns:
             Optional[Dict]: Statut de la tache
         """
         task = self.get_task(task_id)
         if not task:
             return None
-        
+
         return {
             "task_id": task.task_id,
             "status": task.status.value,
@@ -820,32 +853,32 @@ class WorkflowEngine:
             "has_result": task.result is not None,
             "has_error": task.error is not None
         }
-    
+
     def get_execution_history(self, limit: int = 10) -> List[Dict]:
         """
         Recupere l'historique des executions.
-        
+
         Args:
             limit: Nombre maximum d'executions
-            
+
         Returns:
             List[Dict]: Historique des executions
         """
         return [e.to_dict() for e in self._execution_history[-limit:]]
-    
+
     # =========================================================================
     # REPRESENTATION
     # =========================================================================
-    
+
     def __repr__(self) -> str:
         if self.execution:
             return f"<WorkflowEngine(status={self.execution.status.value}, tasks={self.execution.completed_count}/{self.execution.total_count})>"
         return "<WorkflowEngine(idle)>"
-    
+
     def to_dict(self) -> Dict:
         """
         Convertit le moteur en dictionnaire.
-        
+
         Returns:
             Dict: Representation
         """

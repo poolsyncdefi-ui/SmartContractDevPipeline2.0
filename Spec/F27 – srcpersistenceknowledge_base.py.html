@@ -1,0 +1,80 @@
+<div class="spec-section" id="f27-knowledge-base-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/persistence/knowledge_base.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/persistence/knowledge_base.py</code> implémente une interface client haut niveau autour de la base vectorielle ChromaDB, assurant l'indexation, la recherche par similarité sémantique (RAG), la mise en cache des embeddings et l'enrichissement contextuel pour les agents du pipeline[cite: 16].</p>
+
+  <div class="model-group">
+    <h5>Structures de Données &amp; Modèles</h5>
+    <ul>
+      <li><code>DocumentType(str, Enum)</code> : Énumération typée des catégories de documents supportées (<code>CONTRACT</code>, <code>DOCUMENTATION</code>, <code>BEST_PRACTICE</code>, <code>SECURITY</code>, <code>AUDIT</code>, <code>CODE_SNIPPET</code>, etc.)[cite: 16].</li>
+      <li><code>Document(dataclass)</code> : Modèle de données représentant un document avec son identifiant, son contenu, ses métadonnées, son embedding, son type, sa version, ses tags et sa méthode de conversion <code>to_dict()</code>[cite: 16].</li>
+      <li><code>SearchResult(dataclass)</code> : Conteneur pour les résultats de recherche associant le document trouvé, son score de similarité cosinus et son rang (`to_dict()`)[cite: 16].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Classe Principale : <code>KnowledgeBase</code></h5>
+    <ul>
+      <li><strong>Initialisation &amp; Connexion :</strong>
+        <ul>
+          <li><code>__init__()</code> : Connexion via <code>chromadb.HttpClient</code>, récupération/création de la collection avec métrique cosinus (<code>hnsw:space</code>), initialisation des fonctions d'embedding et du cache mémoire[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Gestion des Documents &amp; Artefacts :</strong>
+        <ul>
+          <li><code>add_document()</code> &amp; <code>add_documents()</code> : Prépare les métadonnées, génère l'embedding et insère un ou plusieurs documents dans ChromaDB[cite: 16].</li>
+          <li><code>add_artifact()</code> : Transforme un dictionnaire d'artefact produit par le pipeline en une instance de <code>Document</code> et l'indexe dans la base vectorielle[cite: 16].</li>
+          <li><code>get_document()</code>, <code>delete_document()</code> &amp; <code>update_document()</code> : Récupération, suppression et mise à jour dynamique avec re-vectorisation du contenu[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Recherche Vectorielle &amp; Support RAG :</strong>
+        <ul>
+          <li><code>query()</code> : Génère l'embedding de la requête et effectue une recherche HNSW filtrée par type, source et tags, en convertissant les distances en score $[0, 1]$[cite: 16].</li>
+          <li><code>query_by_content()</code> : Alias pratique pour exécuter des requêtes directement sur un contenu textuel[cite: 16].</li>
+          <li><code>query_context()</code> : Extrait directement les contenus des documents pertinents (score $\ge 0.5$) sous forme de liste de chaînes pour alimenter le prompt RAG des agents[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Gestion des Collections &amp; Maintenance :</strong>
+        <ul>
+          <li><code>list_collections()</code>, <code>switch_collection()</code> &amp; <code>delete_collection()</code> : Permet de basculer dynamiquement entre collections ou de gérer leur cycle de vie[cite: 16].</li>
+          <li><code>clear_cache()</code>, <code>clear_collection()</code> &amp; <code>optimize()</code> : Nettoyage du cache d'embeddings, vidage de la collection active et opérations d'optimisation[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Vectorisation &amp; Fallback d'Embedding :</strong>
+        <ul>
+          <li><code>_get_embedding()</code> : Génération d'embeddings avec contrôle du cache mémoire MD5 pour éviter les ré-exécutions inutiles[cite: 16].</li>
+          <li><code>_get_embedding_fallback()</code> : Stratégie de secours utilisant <code>DefaultEmbeddingFunction</code> de ChromaDB ou une transformation d'empreinte SHA-256[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Télémétrie &amp; Diagnostics :</strong>
+        <ul>
+          <li><code>get_stats()</code>, <code>to_dict()</code> &amp; <code>__repr__()</code> : Exposition du volume de documents, de la taille du cache, du nombre de requêtes et du taux de succès du cache (<code>cache_hit_rate</code>)[cite: 16].</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Mise en Cache MD5 des Embeddings :</strong> Réduction des coûts d'API LLM et de la latence de traitement grâce au stockage mémoire des vecteurs indexés par hash MD5 du texte[cite: 16].</li>
+    <li><strong>Architecture d'Embedding Failsafe (Fallback 3 Niveaux) :</strong> Résilience de la vectorisation via une bascule automatique : Client LLM $\rightarrow$ <code>DefaultEmbeddingFunction</code> ChromaDB $\rightarrow$ Dégradation élégante SHA-256[cite: 16].</li>
+    <li><strong>Filtrage Métadonnées Avancé :</strong> Possibilité de combiner la similarité sémantique avec des contraintes strictes sur les métadonnées (types de documents, tags, source)[cite: 16].</li>
+    <li><strong>Typage Fort &amp; Abstraction Métier :</strong> Encapsulation des résultats bruts de ChromaDB dans des dataclasses typées (<code>Document</code>, <code>SearchResult</code>) facilitant la manipulation par les agents[cite: 16].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Indexation Directe des Artefacts du Pipeline :</strong> Intégration native via <code>add_artifact()</code> permettant aux agents d'indexer automatiquement le code, les spécifications ou les rapports d'audit produits[cite: 16].</li>
+    <li><strong>Interface Optimisée pour le RAG Agent (<code>query_context</code>) :</strong> Méthode sur-mesure retournant directement les fragments de contexte textuel qualifiés pour une injection immédiate dans le contexte de l'agent[cite: 16].</li>
+    <li><strong>Gestion Multi-Collections Dynamique :</strong> Possibilité d'isoler la connaissance par projet ou domaine grâce au changement de collection à chaud (<code>switch_collection</code>)[cite: 16].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/persistence/knowledge_base.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 énumération typée (<code>DocumentType</code>) et 2 dataclasses (<code>Document</code>, <code>SearchResult</code>)[cite: 16]</li>
+    <li>1 classe <code>KnowledgeBase</code> intégrant 19 méthodes couvrant l'indexation, la recherche RAG, la gestion des collections et les stratégies de fallback[cite: 16]</li>
+    <li>Support complet du client ChromaDB avec métrique de similarité cosinus et gestion de cache mémoire[cite: 16]</li>
+  </ul>
+</div>

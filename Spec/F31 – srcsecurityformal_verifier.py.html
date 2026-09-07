@@ -1,0 +1,79 @@
+<div class="spec-section" id="f31-formal-verifier-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/security/formal_verifier.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/security/formal_verifier.py</code> constitue le Niveau 4 du bouclier de sécurité multi-couches en fournissant un wrapper asynchrone autour d'Halmos (moteur Z3) pour effectuer des preuves formelles et symboliques sur les smart contracts[cite: 15].</p>
+
+  <div class="model-group">
+    <h5>Structures de Données &amp; Modèles</h5>
+    <ul>
+      <li><code>VerificationResult(str, Enum)</code> : Énumération des résultats de vérification (<code>PASSED</code>, <code>FAILED</code>, <code>TIMEOUT</code>, <code>ERROR</code>, <code>UNKNOWN</code>, <code>SKIPPED</code>)[cite: 15].</li>
+      <li><code>PropertyType(str, Enum)</code> : Classification des propriétés vérifiables (<code>INVARIANT</code>, <code>SAFETY</code>, <code>LIVENESS</code>, <code>FAIRNESS</code>, <code>CUSTOM</code>)[cite: 15].</li>
+      <li><code>VerificationProperty(dataclass)</code> : Modèle de propriété logique (nom, description, type, expression, fonction/contrat cible, paramètres) avec conversion en arguments CLI <code>to_halmos_arg()</code>[cite: 15].</li>
+      <li><code>VerificationReport(dataclass)</code> : Rapport complet de vérification incluant le bilan des propriétés, la carte des contre-exemples détectés, le temps d'exécution et les logs bruts (avec méthode <code>to_dict()</code>)[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Classe Principale : <code>FormalVerifier</code></h5>
+    <ul>
+      <li><strong>Initialisation &amp; Configuration :</strong>
+        <ul>
+          <li><code>ERC20_PROPERTIES</code> : Liste de propriétés symboliques préconfigurées pour la validation d'invariants standard ERC20 (<code>totalSupply</code>, <code>balance</code>, non-dépassement <code>transfer</code>)[cite: 15].</li>
+          <li><code>__init__()</code> : Définition des chemins d'exécution (<code>halmos</code>, <code>solc</code>), du timeout global, du système de cache et des métriques statistiques[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Vérification d'Invariants &amp; Contrats :</strong>
+        <ul>
+          <li><code>verify_invariants()</code> : Méthode pivot d'exécution avec gestion du cache, passage des arguments à Halmos, chronométrage et agrégation des statistiques[cite: 15].</li>
+          <li><code>verify_contract()</code> : Wrapper pratique pour lancer la vérification sur l'intégralité d'un contrat cible[cite: 15].</li>
+          <li><code>verify_property()</code> : Ciblage d'une propriété ou fonction spécifique du contrat[cite: 15].</li>
+          <li><code>verify_erc20_contract()</code> : Raccourci d'exécution appliquant automatiquement le jeu d'invariants <code>ERC20_PROPERTIES</code>[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Moteur d'Exécution Asynchrone Halmos :</strong>
+        <ul>
+          <li><code>_run_halmos()</code> : Lancement non-bloquant du sous-processus via <code>asyncio.create_subprocess_exec</code> sous contrôle de délai d'attente (<code>asyncio.wait_for</code>)[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Parsing, Diagnostics &amp; Extraction :</strong>
+        <ul>
+          <li><code>_parse_halmos_output()</code> : Analyse synoptique de la sortie d'Halmos pour construire le <code>VerificationReport</code>[cite: 15].</li>
+          <li><code>_determine_result()</code> : Évaluation du statut d'une propriété par inspection des marqueurs de la sortie (ex: <code>PASSED</code>, <code>FAILED</code>, <code>Violated</code>)[cite: 15].</li>
+          <li><code>_extract_counterexample()</code> : Extraction automatique par expressions régulières du contre-exemple produit par le solveur Z3 en cas de violation[cite: 15].</li>
+          <li><code>_extract_details()</code> : Parsing des statistiques complémentaires (nombre de propriétés analysées, durée)[cite: 15].</li>
+        </ul>
+      </li>
+      <li><strong>Rapports &amp; Utilitaires :</strong>
+        <ul>
+          <li><code>generate_report_summary()</code> : Génération d'un rapport textuel lisible formaté avec émoticônes et recommandations de correction[cite: 15].</li>
+          <li><code>get_stats()</code> &amp; <code>clear_cache()</code> : Consultation du bilan des vérifications et vidage de la mémoire cache[cite: 15].</li>
+          <li><code>to_dict()</code> &amp; <code>__repr__()</code> : Sérialisation et représentation textuelle de l'instance[cite: 15].</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Gestion Asynchrone Améliorée avec Timeout Strict :</strong> Utilisation de <code>asyncio.wait_for()</code> garantissant le meurtre propre du sous-processus (<code>proc.kill()</code>) en cas de dépassement de la limite de temps du solveur SMT[cite: 15].</li>
+    <li><strong>Optimisation par Mise en Cache (Memoization) :</strong> Évite la ré-exécution coûteuse de preuves formelles identiques grâce au dictionnaire <code>_cache</code> indexé par contrat et fonctions[cite: 15].</li>
+    <li><strong>Parsing Robuste à Expressions Régulières :</strong> Extraction multi-pattern des contre-exemples permettant d'isoler la séquence de transactions exacte invalidant un invariant[cite: 15].</li>
+    <li><strong>Découplage Modulaire &amp; Typage Stricte :</strong> Modélisation explicite des propriétés via la dataclass <code>VerificationProperty</code> isolant la définition de la propriété de la logique d'appel Halmos[cite: 15].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Niveau 4 du Bouclier Sécurité (Preuves Mathématiques Symboliques) :</strong> Fournit la garantie formelle ultime par exploration mathématique de tous les états possibles, au-delà des simples tests unitaires ou fuzzer[cite: 15].</li>
+    <li><strong>Propriétés Invariants ERC20 Intégrées :</strong> Intégration out-of-the-box des règles universelles des jetons (conservation des balances, immunité aux dépassements de capacité)[cite: 15].</li>
+    <li><strong>Rapports Pédagogiques avec Recommandations :</strong> Restitution explicite des scénarios d'échec (contre-exemples) sous forme de diagnostics exploitables pour la correction automatique par l'agent[cite: 15].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/security/formal_verifier.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>2 énumérations (<code>VerificationResult</code>, <code>PropertyType</code>) et 2 dataclasses (<code>VerificationProperty</code>, <code>VerificationReport</code>)[cite: 15]</li>
+    <li>1 classe <code>FormalVerifier</code> regroupant 15 méthodes couvrant le contrôle Halmos, l'exécution asynchrone, la mise en cache, le parsing SMT et la génération de synthèses[cite: 15]</li>
+    <li>Support complet des invariants ERC20 et capture robuste des contre-exemples Z3[cite: 15]</li>
+  </ul>
+</div>

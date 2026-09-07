@@ -1,0 +1,68 @@
+<div class="spec-section" id="f15-skill-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/agents/base/skill.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/agents/base/skill.py</code> fournit la structure modulaire des compétences (Skills) injectables dans les agents du pipeline[cite: 14]. Il associe de manière indissociable des règles métier (prompt), un wrapper d'exécution et un contrat de données Pydantic[cite: 14].</p>
+
+  <div class="model-group">
+    <h5>Énumération de Statuts &amp; Classe Abstraite <code>BaseSkill(ABC)</code></h5>
+    <ul>
+      <li><code>SkillStatus</code> : Énumération des états du cycle de vie d'une compétence (<code>INITIALIZED</code>, <code>VALIDATED</code>, <code>EXECUTING</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>CACHED</code>)[cite: 14].</li>
+      <li><code>execute(params)</code> : Méthode abstraite imposant le contrat d'exécution spécifique de chaque compétence[cite: 14].</li>
+      <li><code>get_system_prompt_rules()</code> : Méthode abstraite/surchargée retournant les directives et contraintes métier injectées dans le prompt système de l'agent[cite: 14].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Moteur d'Exécution Résilient &amp; Pipeline de Validation</h5>
+    <ul>
+      <li><code>execute_with_validation(params, validate_output)</code> : Pipeline d'exécution complet avec validation des entrées, consultation du cache, retries à backoff exponentiel ($2^{\text{attempt}+1}$ sec), validation de sortie et injection de métriques[cite: 14].</li>
+      <li><code>validate_parameters(params)</code> &amp; <code>_validate_output(output)</code> : Contrôles stricts de conformité des paramètres d'entrée et du dictionnaire de sortie par rapport aux schémas Pydantic[cite: 14].</li>
+      <li><code>_create_dynamic_schema(config)</code> : Création dynamique à la volée d'un schéma Pydantic (<code>create_model</code>) si aucun schéma statique n'est défini dans la classe fille[cite: 14].</li>
+      <li><code>_prepare_execution_context(params)</code> : Enrichissement du contexte d'exécution avec les documents pertinents issus du RAG (<code>_rag_context</code>)[cite: 14].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Mise en Cache Déterministe &amp; Télémétrie</h5>
+    <ul>
+      <li><code>_generate_cache_key(params)</code> : Génération d'une clé d'empreinte unique par hachage SHA-256 de la sérialisation stable JSON des paramètres[cite: 14].</li>
+      <li><code>enable_cache()</code>, <code>disable_cache()</code>, <code>clear_cache()</code> : Fonctions de contrôle et de vidange du cache mémoire interne (<code>_cache</code>)[cite: 14].</li>
+      <li><code>get_statistics()</code>, <code>to_dict()</code>, <code>_log_execution(...)</code> : Calcul du taux de succès/échec, sérialisation et journalisation avec limitation automatique de l'historique à 1000 entrées[cite: 14].</li>
+      <li><code>set_llm_client(client)</code>, <code>set_knowledge_base(kb)</code> : Injection dynamique du client LLM et de la base de connaissances[cite: 14].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Spécialisation pour l'IA : <code>BaseLLMSkill(BaseSkill)</code></h5>
+    <ul>
+      <li><code>execute(params)</code> : Implémentation concrète d'appel au client LLM avec intégration du prompt système, du prompt formaté et du contrôle de la température[cite: 14].</li>
+      <li><code>_format_prompt(params)</code> : Construction structurée du prompt transmis au modèle à partir des paramètres d'entrée[cite: 14].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Structure Tripartite d'Expertise Modulaire :</strong> Encapsulation indissociable de la règle métier (prompt rules), du tooling Python et du schéma de données Pydantic au sein d'un seul module[cite: 14].</li>
+    <li><strong>Optimisation des Coûts par Cache SHA-256 :</strong> Prévention des appels redondants aux LLM ou outils système en réutilisant les résultats mis en cache basés sur l'empreinte exacte des paramètres[cite: 14].</li>
+    <li><strong>Exécution Autonome Résiliente :</strong> Gestion robuste des erreurs avec reprise automatique par backoff exponentiel pour mitiger les défaillances temporaires d'API LLM[cite: 14].</li>
+    <li><strong>Création Dynamique de Schémas (Dynamic Pydantic Models) :</strong> Capacité de générer à la volée des modèles de validation via <code>create_model</code> pour supporter les compétences générées dynamiquement par l'Agent Architecte[cite: 14].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Injection Transparente du Contexte RAG :</strong> Interrogation automatique de la base de connaissances avant l'exécution pour injecter les extraits pertinents dans <code>_rag_context</code>[cite: 14].</li>
+    <li><strong>Contrôle de la Mémoire d'Historique :</strong> Bornage automatique de l'historique d'exécution (max 1000 entrées) évitant les fuites mémoire lors d'exécutions prolongées du pipeline[cite: 14].</li>
+    <li><strong>Héritage Spécialisé LLM (<code>BaseLLMSkill</code>) :</strong> Abstraction haut niveau dédiée aux compétences génératives simplifiant le paramétrage de température et l'assemblage des prompts[cite: 14].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/agents/base/skill.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 classe abstraite de base (<code>BaseSkill</code>) et 1 sous-classe spécialisée LLM (<code>BaseLLMSkill</code>)[cite: 14]</li>
+    <li>1 énumération formelle de statuts (<code>SkillStatus</code>)[cite: 14]</li>
+    <li>Génération dynamique de schémas Pydantic (<code>create_model</code>)[cite: 14]</li>
+    <li>Gestionnaire de cache déterministe SHA-256 et boucle de retry avec backoff exponentiel[cite: 14]</li>
+    <li>Intégration RAG transparente et fonctions complètes de télémétrie/statistiques[cite: 14]</li>
+  </ul>
+</div>

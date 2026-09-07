@@ -1,0 +1,87 @@
+<div class="spec-section" id="f06-settings-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/config/settings.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/config/settings.py</code> centralise la configuration du pipeline à l'aide de <code>pydantic-settings</code>, offrant un chargement automatique depuis les fichiers <code>.env</code> et une validation stricte du typage.</p>
+
+  <div class="model-group">
+    <h5>Énumérations &amp; Sous-Modèles de Configuration</h5>
+    <ul>
+      <li><code>Environment</code> : Énumération des profils d'exécution (<code>DEVELOPMENT</code>, <code>PRODUCTION</code>, <code>TESTING</code>, <code>STAGING</code>).</li>
+      <li><code>LogFormat</code> : Formats d'affichage des journaux (<code>JSON</code>, <code>TEXT</code>, <code>COLORED</code>).</li>
+      <li><code>DatabaseConfig</code> : Configuration AsyncPG / PostgreSQL (pool, overflow, timeouts, mode SSL).</li>
+      <li><code>RedisConfig</code> : Paramètres de connexion au cache Redis, retries et timeouts socket.</li>
+      <li><code>LLMConfig</code> : Configuration des modèles Ollama (<code>deepseek-coder</code>, <code>nomic-embed-text</code>, fenêtre contextuelle, température).</li>
+      <li><code>ChromaConfig</code> : Connexion et paramètres de requêtage à la base vectorielle ChromaDB.</li>
+      <li><code>APIConfig</code> : Configuration du serveur Web API FastAPI (CORS, workers, limites de corps HTTP).</li>
+      <li><code>SecurityConfig</code> : Paramètres JWT, rate-limiting, HTTPS et listes d'IPs (allowed/blocked).</li>
+      <li><code>LoggingConfig</code> : Niveau de sévérité, chemin de fichier journal, rotation de logs et indentation JSON.</li>
+      <li><code>CircuitBreakerConfig</code> : Seuils d'échec/succès et timeouts pour le coupe-circuit.</li>
+      <li><code>PipelineConfig</code> : Timeouts d'outils Web3 (Slither, Foundry, Halmos) et parallélisme des tâches.</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Classe Principale <code>Settings(BaseSettings)</code></h5>
+    <ul>
+      <li>
+        <strong>Validateurs de Configuration :</strong>
+        <ul>
+          <li><code>validate_storage_path(v)</code> (<code>@field_validator</code>) : Convertit le chemin en objet <code>Path</code> et crée automatiquement le répertoire s'il n'existe pas.</li>
+          <li><code>validate_environment(self)</code> (<code>@model_validator</code>) : Valide la cohérence globale (ex: lève une erreur si <code>debug=True</code> ou <code>test_mode=True</code> en profil <code>PRODUCTION</code>).</li>
+          <li><code>validate_supported_chains(v)</code> (<code>@field_validator</code>) : Vérifie que la liste des chaînes supportées appartient au périmètre autorisé (Ethereum, Polygon, Arbitrum, Solana, etc.).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>Méthodes Utilitaires &amp; Getters :</strong>
+        <ul>
+          <li><code>get_workspace_path(subpath) -&gt; Path</code> &amp; <code>get_storage_path(subpath) -&gt; Path</code> : Génération de chemins absolus sécurisés dans le workspace ou le stockage.</li>
+          <li><code>get_chain_rpc_url(chain) -&gt; Optional[str]</code> : Résolution dynamique de l'URL RPC selon la blockchain demandée.</li>
+          <li><code>get_github_auth() -&gt; Dict[str, str]</code> &amp; <code>get_github_token() -&gt; str</code> : Extraction sécurisée du token SecretStr GitHub et du nom d'utilisateur.</li>
+          <li><code>get_database_url()</code>, <code>get_redis_url()</code>, <code>get_ollama_url()</code>, <code>get_chroma_host()</code>, <code>get_chroma_port()</code>, <code>get_api_url()</code>, <code>get_log_level()</code>, <code>get_env_prefix()</code>, <code>get_max_retries()</code>, <code>get_verification_timeout()</code> : Métriques et accesseurs de sous-configurations.</li>
+          <li><code>is_production()</code>, <code>is_development()</code>, <code>is_testing()</code>, <code>is_debug() -&gt; bool</code> : Prédicats de contrôle de l'environnement d'exécution.</li>
+          <li><code>to_dict(show_secrets=False) -&gt; Dict[str, Any]</code> : Export de la configuration en dictionnaire avec masquage automatique des secrets (<code>***HIDDEN***</code>).</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Fonctions Globales &amp; Initialisation</h5>
+    <ul>
+      <li><code>load_settings(env_file, env_prefix) -&gt; Settings</code> : Charge un fichier <code>.env</code> spécifique et instancie la configuration.</li>
+      <li><code>reload_settings() -&gt; None</code> : Recharge l'instance singleton globale <code>settings</code> à chaud.</li>
+      <li><code>get_settings_for_env(env) -&gt; Settings</code> : Bascule temporairement sur un profil donné et retourne sa configuration.</li>
+      <li><code>setup_logging(settings) -&gt; None</code> : Initialise les handlers de logs (console colorée, formateur JSON, rotation de fichier journal) selon la configuration.</li>
+      <li><code>settings</code> : Instance globale unique (Singleton) initialisée à l'importation.</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Masquage des Secrets (SecretStr) :</strong> Utilisation de <code>SecretStr</code> pour tous les jetons d'accès, mots de passe et clés API (GitHub, Sentry, Infura, S3), empêchant toute fuite accidentelle dans les logs.</li>
+    <li><strong>Validation Cohérente à Froid &amp; à Chaud :</strong> Combinaison de validation de champ (<code>@field_validator</code>) et de validation globale (<code>@model_validator</code>) garantissant l'impossibilité de lancer l'application dans un état incohérent (ex. mode Debug en Production).</li>
+    <li><strong>Isolation par Profils :</strong> Support de préfixes de variables d'environnement et basculement à chaud via des profils dédiés (Dev, Staging, Prod, Test).</li>
+    <li><strong>Création Automatique de l'Arborescence :</strong> Création automatique et transparente des répertoires systèmes requis (workspace, storage, logs) au moment de la validation.</li>
+    <li><strong>Conformité Twelve-Factor App :</strong> Strict respect du stockage de la configuration dans l'environnement via <code>pydantic-settings</code>.</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Support Multi-Storage &amp; Observabilité Native :</strong> Prise en charge native du stockage local, S3 et GCS, couplée au support de Prometheus, Sentry et OpenTelemetry.</li>
+    <li><strong>Gestion Intelligente du Format de Logging :</strong> Intégration d'un formateur structuré JSON pour la production et coloré (<code>colorlog</code>) pour le développement local.</li>
+    <li><strong>Modularité via Sub-Models :</strong> Découpage propre de la configuration globale en 9 sous-modèles thématiques (Database, Redis, LLM, Security, API, etc.).</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/config/settings.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>9 sous-modèles de configuration Pydantic et 2 énumérations typées</li>
+    <li>Classe <code>Settings</code> complète intégrant 40+ paramètres configurables</li>
+    <li>Validateurs d'environnement, de chaînes Web3 et de dossiers système</li>
+    <li>Méthodes d'accès sécurisées et fonction de masquage des données sensibles (<code>to_dict</code>)</li>
+    <li>Module de configuration dynamique du logging (<code>setup_logging</code>) avec support JSON/Colorlog</li>
+    <li>Fonctions utilitaires de chargement/rechargement dynamique (<code>load_settings</code>, <code>reload_settings</code>)</li>
+    <li>Documentation complète au format Docstrings et bloc de test exécutable en CLI</li>
+  </ul>
+</div>

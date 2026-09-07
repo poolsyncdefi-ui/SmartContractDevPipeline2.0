@@ -1,0 +1,152 @@
+<div class="spec-section" id="f34-api-responses-impl">
+  <h3>F34 – Points Clés de l'Implémentation &amp; Code — <code>src/api/schemas/responses.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/api/schemas/responses.py</code> définit les modèles Pydantic v2 assurant la standardisation, le typage strict et la sérialisation cohérente de toutes les réponses API REST (Outbound Data) renvoyées par le pipeline[cite: 18].</p>
+
+  <div class="model-group">
+    <h5>Types Génériques &amp; Socle Commun de Réponse</h5>
+    <ul>
+      <li><code>ResponseStatus(str, Enum)</code> : Énumération des statuts de réponse (<code>SUCCESS</code>, <code>ERROR</code>, <code>WARNING</code>, <code>INFO</code>)[cite: 18].</li>
+      <li><code>BaseResponse(BaseModel)</code> : Socle de réponse avec horodatage automatique et surcharge de <code>model_dump()</code> pour sérialiser les dates en format ISO-8601[cite: 18].</li>
+      <li><code>SuccessResponse(BaseResponse)</code> &amp; <code>CreatedResponse(SuccessResponse)</code> : Réponses génériques de succès (200 OK / 201 Created)[cite: 18].</li>
+      <li><code>ErrorResponse(BaseResponse)</code> : Structure standardisée d'erreur avec code métier, détails, chemin (path), méthode HTTP et <code>request_id</code> pour le traçage[cite: 18].</li>
+      <li><code>PaginatedResponse(BaseModel, Generic[T])</code> : Modèle générique supportant le fenêtrage de données typées avec calculs de pages (<code>has_next</code>, <code>has_previous</code>, <code>total_pages</code>)[cite: 18].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Schémas de Domaine Projets, Tâches &amp; Sprints</h5>
+    <ul>
+      <li><code>ProjectSummaryResponse</code> &amp; <code>ProjectDetailResponse</code> : Représentation synthétique ou détaillée d'un projet (taux de complétion, scores de sécurité/qualité, tags, configurations)[cite: 18].</li>
+      <li><code>TaskSummaryResponse</code> &amp; <code>TaskDetailResponse</code> : Représentation des tâches incluant métriques de performance (CPU, mémoire, durée), validation humaine et prévisualisation des logs[cite: 18].</li>
+      <li><code>SprintSummaryResponse</code> &amp; <code>SprintDetailResponse</code> : Suivi du cycle de vie des sprints, progression des tâches associées et métriques de complétion[cite: 18].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Schémas Sécurité, Artefacts &amp; Workflows</h5>
+    <ul>
+      <li><code>VulnerabilityResponse</code> &amp; <code>SecurityAuditResponse</code> : Bilan consolidé des audits de sécurité incluant le score globale, le décompte par sévérité (Critical, High, Medium, Low) et les codes de remédiation[cite: 18].</li>
+      <li><code>ThreatSimulationResponse</code> &amp; <code>FormalVerificationResponse</code> : Résultats détaillés des simulations d'attaques dynamiques (Flash Loan, MEV) et des preuves d'invariants symboliques (Halmos)[cite: 18].</li>
+      <li><code>ArtifactSummaryResponse</code> &amp; <code>ArtifactDetailResponse</code> : DTOs pour la restitution des artefacts générés (Solidity, ABI, Bytecode, Rapports)[cite: 18].</li>
+      <li><code>WorkflowStatusResponse</code> &amp; <code>WorkflowResultResponse</code> : Suivi en temps réel de la progression (0-100%) et état final des workflows d'exécution[cite: 18].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Schémas Systèmes, Télémétrie &amp; Webhooks</h5>
+    <ul>
+      <li><code>MetricsSummaryResponse</code>, <code>MetricSeriesResponse</code> &amp; <code>MetricPointResponse</code> : Reporting des métriques système (temps de réponse moyen, taux d'erreur, disponiblité)[cite: 18].</li>
+      <li><code>StatusResponse</code> &amp; <code>HealthCheckResponse</code> : Sondes de santé vérifiant la connectivité des composants tiers (Base de données, Redis, Ollama, ChromaDB)[cite: 18].</li>
+      <li><code>FeedbackResponse</code>, <code>NotificationResponse</code>, <code>WebhookResponse</code> &amp; <code>EventResponse</code> : Gestion des interactions utilisateur, alertes internes, webhooks et événements système[cite: 18].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Design Générique &amp; Strong Typing :</strong> Utilisation de <code>Generic[T]</code> pour <code>PaginatedResponse</code> garantissant un typage strict des éléments contenus dans les collections paginées[cite: 18].</li>
+    <li><strong>Standardisation de la Sérialisation Temporelle :</strong> Normalisation de la conversion <code>datetime</code> vers la norme ISO via la surcharge contrôlée de la méthode <code>model_dump()</code> dans <code>BaseResponse</code>[cite: 18].</li>
+    <li><strong>Séparation Synthèse / Détail (Summary vs Detail DTO Pattern) :</strong> Dualité d'exposition pour optimiser le transfert réseau (listes légères via <code>SummaryResponse</code>, consultations complètes via <code>DetailResponse</code>)[cite: 18].</li>
+    <li><strong>Observabilité &amp; Traçabilité des Réponses :</strong> Inclusion explicite de métadonnées de corrélation (<code>request_id</code>, <code>timestamp</code>, <code>path</code>, <code>method</code>) dans les réponses d'erreur pour faciliter le débogage inter-services[cite: 18].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Supervision Système Complète (Health Checks Multi-Services) :</strong> Le schéma <code>HealthCheckResponse</code> surveille l'état d'intégrité de toute l'infrastructure (PostgreSQL/SQLite, Redis, Ollama, ChromaDB)[cite: 18].</li>
+    <li><strong>Inclusion des Métriques d'Exécution en Temps Réel :</strong> <code>TaskDetailResponse</code> expose directement la consommation de ressources (<code>memory_usage_mb</code>, <code>cpu_usage_percent</code>) et le temps restant avant timeout[cite: 18].</li>
+    <li><strong>Rapports de Sécurité Multi-Sévérités :</strong> Modélisation fine des vulnérabilités avec extraits de code, impacts, références et correctifs suggérés (<code>remediation_code</code>)[cite: 18].</li>
+  </ul>
+
+  <h4>4. Extrait du Code Source Implémenté &amp; Exemples d'Utilisation</h4>
+
+  <h5>Code Source : <code>src/api/schemas/responses.py</code></h5>
+  <pre><code class="language-python"># src/api/schemas/responses.py
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+class ProjectResponse(BaseModel):
+    """Réponse pour un projet."""
+    id: str
+    name: str
+    status: str
+    created_at: datetime
+
+class TaskStatusResponse(BaseModel):
+    """Réponse pour le statut d'une tâche."""
+    task_id: str
+    status: str
+    gist_url: Optional[str] = None
+    error: Optional[str] = None
+
+class AuditReportResponse(BaseModel):
+    """Réponse pour un rapport d'audit."""
+    secure: bool
+    slither: dict
+    foundry: dict
+    halmos: dict
+    vulnerabilities: list = []
+</code></pre>
+
+  <h5>Exemples d'Utilisation</h5>
+  <pre><code class="language-python"># Réponse de succès avec données
+response = SuccessResponse(
+    message="Project created successfully",
+    data=ProjectDetailResponse(
+        id="proj_123",
+        name="SecureVault",
+        status="CREATED",
+        priority="high",
+        category="defi",
+        chain="ethereum",
+        task_count=0,
+        completed_task_count=0,
+        failed_task_count=0,
+        completion_rate=0.0,
+        security_score=0,
+        quality_score=0,
+        created_at=datetime.utcnow().isoformat(),
+        tags=["security", "vault"],
+        is_active=True,
+        description="A secure token vault",
+        version="1.0.0",
+        config={},
+        metadata={},
+        sprint_count=0,
+        updated_at=datetime.utcnow().isoformat(),
+        is_template=False,
+        is_public=False
+    )
+)
+
+# Réponse d'erreur
+error = ErrorResponse(
+    code="TASK_NOT_FOUND",
+    message="Task T001 not found",
+    details={"task_id": "T001"},
+    path="/api/tasks/T001",
+    method="GET",
+    request_id="req_123"
+)
+
+# Réponse paginée
+paged = PaginatedResponse[TaskSummaryResponse](
+    items=[task_summary],
+    total=100,
+    page=1,
+    page_size=20,
+    total_pages=5,
+    has_next=True,
+    has_previous=False
+)
+</code></pre>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/api/schemas/responses.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 Énumération de statut (<code>ResponseStatus</code>) et 1 TypeVar générique (<code>T</code>)[cite: 18]</li>
+    <li>5 Schémas de socle de réponse (Base, Success, Created, Error, Paginated)[cite: 18]</li>
+    <li>25+ Schémas DTO de sortie couvrant tous les domaines fonctionnels (Projets, Tâches, Sprints, Artefacts, Sécurité, Workflows, Télémétrie et Santé Système)[cite: 18]</li>
+  </ul>
+</div>

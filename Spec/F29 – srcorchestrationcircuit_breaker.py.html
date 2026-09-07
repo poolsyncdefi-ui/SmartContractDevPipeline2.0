@@ -1,0 +1,75 @@
+<div class="spec-section" id="f29-circuit-breaker-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/orchestration/circuit_breaker.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/orchestration/circuit_breaker.py</code> implémente le pattern Circuit Breaker afin de protéger le pipeline contre les échecs répétitifs et d'éviter les boucles d'auto-correction infinies des agents[cite: 16].</p>
+
+  <div class="model-group">
+    <h5>Structures de Données &amp; Modèles</h5>
+    <ul>
+      <li><code>CircuitBreakerState(str, Enum)</code> : Énumération des trois états du circuit (<code>CLOSED</code>, <code>OPEN</code>, <code>HALF_OPEN</code>)[cite: 16].</li>
+      <li><code>CircuitBreakerEvent(str, Enum)</code> : Énumération des événements émis lors des transitions d'état ou d'actions (<code>OPENED</code>, <code>CLOSED</code>, <code>HALF_OPEN</code>, <code>RESET</code>, <code>TIMEOUT</code>, <code>FAILURE</code>, <code>SUCCESS</code>)[cite: 16].</li>
+      <li><code>CircuitBreakerStats(dataclass)</code> : Conteneur des métriques et statistiques d'exécution par tâche (échecs, succès, ouvertures/fermetures, horodatages, retries) avec conversion <code>to_dict()</code>[cite: 16].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Classe Principale : <code>CircuitBreaker</code></h5>
+    <ul>
+      <li><strong>Initialisation &amp; Configuration :</strong>
+        <ul>
+          <li><code>__init__()</code> : Configuration du nombre max de tentatives (<code>max_retries</code>), des temporisations (<code>timeout</code>, <code>half_open_timeout</code>), de la persistance et de la gestion d'état par tâche[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Opérations Principales :</strong>
+        <ul>
+          <li><code>can_retry()</code> : Vérifie si une tentative est autorisée selon l'état actuel et opère la transition automatique de <code>OPEN</code> vers <code>HALF_OPEN</code> après expiration du délai de cooldown[cite: 16].</li>
+          <li><code>record_failure()</code> &amp; <code>_record_failure_sync()</code> : Comptabilise les échecs, met à jour les métriques et fait basculer le circuit en état <code>OPEN</code> si le seuil max est atteint[cite: 16].</li>
+          <li><code>record_success()</code> &amp; <code>_record_success_sync()</code> : Enregistre un succès, réinitialise les compteurs ou referme le circuit (état <code>CLOSED</code>) après validation en mode <code>HALF_OPEN</code> ou suite à une série de succès consécutifs[cite: 16].</li>
+          <li><code>reset()</code> &amp; <code>_reset_sync()</code> : Réinitialise manuellement l'état et les compteurs d'échecs pour une tâche donnée[cite: 16].</li>
+          <li><code>is_open()</code>, <code>get_status()</code> &amp; <code>get_failure_count()</code> : Directives d'inspection pour évaluer si le circuit est ouvert pour une tâche ou au niveau global[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Gestion des États &amp; Persistance :</strong>
+        <ul>
+          <li><code>_get_state()</code> &amp; <code>_set_state()</code> : Lecture et mise à jour thread-safe de l'état d'une tâche avec suivi des statistiques de transition[cite: 16].</li>
+          <li><code>_persist_state()</code> : Sauvegarde asynchrone des états et statistiques du circuit via le <code>ProjectState</code>[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Événements &amp; Notifications :</strong>
+        <ul>
+          <li><code>add_listener()</code>, <code>remove_listener()</code> &amp; <code>_emit_event()</code> : Gestion des abonnements et émission d'événements synchrones/asynchrones vers les observateurs enregistrés[cite: 16].</li>
+        </ul>
+      </li>
+      <li><strong>Maintenance &amp; Diagnostics :</strong>
+        <ul>
+          <li><code>cleanup()</code> : Purge les enregistrements des tâches expirées ou inactives pour libérer la mémoire[cite: 16].</li>
+          <li><code>get_stats()</code>, <code>get_all_tasks()</code>, <code>to_dict()</code> &amp; <code>__repr__()</code> : Récupération des rapports statistiques granulaires ou globaux et sérialisation complète[cite: 16].</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Transition Automatique &amp; Cooldown Amélioré :</strong> Basculement fluide entre <code>OPEN</code> et <code>HALF_OPEN</code> sur base d'un chronomètre (<code>timeout</code>) permettant des tentatives de rétablissement sécurisées[cite: 16].</li>
+    <li><strong>Double Interface Synchrone / Asynchrone :</strong> Méthodes synchrones sous-jacentes (<code>*_sync</code>) garantissant la compatibilité immédiate avec les flux d'agents tout en supportant les verrous <code>asyncio.Lock</code>[cite: 16].</li>
+    <li><strong>Isolation Granulaire par Tâche :</strong> Le suivi du circuit breaker n'est pas uniquement global mais partitionné par <code>task_id</code>, évitant de bloquer inutilement les tâches saines du pipeline[cite: 16].</li>
+    <li><strong>Réinitialisation par Séries de Succès :</strong> Confirmation de la réhabilitation d'un composant exigeant des succès consécutifs (streak) avant remise à zéro complète[cite: 16].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Prévention des Boucles d'Auto-Correction Infinies :</strong> Intégration native avec <code>settings.max_auto_debug_retries</code> pour stopper directement les agents bloqués dans des retries systématiques[cite: 16].</li>
+    <li><strong>Système d'Événements Découplé :</strong> Envoi en temps réel des changements d'état (ex: <code>OPENED</code>, <code>HALF_OPEN</code>) aux listeners pour alimenter le monitoring du pipeline[cite: 16].</li>
+    <li><strong>Maintenance Automatique de la Mémoire :</strong> Méthode <code>cleanup()</code> permettant d'expurger les données de suivi obsolètes pour prévenir les fuites mémoire sur de longs traitements[cite: 16].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/orchestration/circuit_breaker.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>2 énumérations typées (<code>CircuitBreakerState</code>, <code>CircuitBreakerEvent</code>) et 1 dataclass (<code>CircuitBreakerStats</code>)[cite: 16]</li>
+    <li>1 classe <code>CircuitBreaker</code> regroupant 21 méthodes gérant la tolérance aux pannes, les transitions d'état et l'émission d'événements[cite: 16]</li>
+    <li>Gestion fine du cooldown, verrouillage thread/async-safe et persistance d'état optionnelle[cite: 16]</li>
+  </ul>
+</div>

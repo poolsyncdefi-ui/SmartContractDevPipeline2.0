@@ -1,0 +1,69 @@
+<div class="spec-section" id="f26-project-state-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/persistence/project_state.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/persistence/project_state.py</code> fournit une couche d'accès aux données (DAO/Repository) asynchrone pour la persistance des projets, des sprints, des résultats de tâches et des artefacts, intégrant un cache mémoire à TTL et une gestion robuste des transactions BDD[cite: 15].</p>
+
+  <div class="model-group">
+    <h5>Décorateurs &amp; Gestion des Erreurs BDD</h5>
+    <ul>
+      <li><code>handle_db_errors</code> : Décorateur qui intercepte les exceptions <code>SQLAlchemyError</code> et génériques, effectue un <code>session.rollback()</code> automatique si nécessaire et encapsule les erreurs dans <code>PipelineError</code>[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Gestion du Cache In-Memory</h5>
+    <ul>
+      <li><code>_get_cache_key()</code>, <code>_is_cache_valid()</code>, <code>_get_from_cache()</code>, <code>_set_cache()</code> et <code>_invalidate_cache()</code> : Système de mise en cache interne basé sur des clés composées, une durée de vie configurable (TTL) et un mécanisme d'invalidation sélective par préfixe[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Gestion des Sprints &amp; Projets (CRUD)</h5>
+    <ul>
+      <li><strong>Projets :</strong> <code>create_project()</code>, <code>get_project()</code>, <code>update_project()</code>, <code>list_projects()</code> pour la création, la lecture, la mise à jour et la pagination des projets[cite: 15].</li>
+      <li><strong>Sprints :</strong> <code>create_sprint()</code>, <code>get_sprint()</code>, <code>update_sprint()</code>, <code>delete_sprint()</code>, <code>list_sprints()</code>, <code>get_project_sprints()</code> pour la gestion complète du cycle de vie des sprints[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Persistance des Résultats de Tâches &amp; Artefacts</h5>
+    <ul>
+      <li><strong>Résultats de Tâches :</strong> <code>save_task_result()</code>, <code>get_task_result()</code>, <code>get_task_results()</code>, <code>get_latest_task_result()</code>, <code>get_task_results_by_status()</code> permettant d'enregistrer et de filtrer l'historique d'exécution des agents[cite: 15].</li>
+      <li><strong>Artefacts :</strong> <code>save_artifact()</code>, <code>get_artifacts()</code> pour le stockage et la recherche des livrables (code, documents, métadonnées)[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Statistiques, Mappers &amp; Diagnostics</h5>
+    <ul>
+      <li><code>get_project_stats()</code> : Calcule les métriques globales d'un projet (volume de tâches, répartition par statut, durée totale, taux de succès)[cite: 15].</li>
+      <li><code>get_stats()</code> : Retourne les performances du repository (nombre de requêtes, <i>cache hits</i>, <i>misses</i> et taux d'efficacité)[cite: 15].</li>
+      <li><code>_to_sprint_model()</code> &amp; <code>_to_task_result_model()</code> : Méthodes de conversion convertissant les modèles ORM SQLAlchemy vers les modèles de domaine Pydantic/dataclass[cite: 15].</li>
+      <li><code>to_dict()</code> : Exporte l'état d'activation et la configuration du cache pour l'inspection système[cite: 15].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Rollback Automatique et Robustesse Transactionnelle :</strong> Emploi du décorateur <code>handle_db_errors</code> pour garantir l'annulation immédiate de la transaction en cas d'échec SQL et empêcher la pollution de la session[cite: 15].</li>
+    <li><strong>Pipelining Asynchrone SQLAlchemy 2.0 :</strong> Utilisation des requêtes modernes <code>select()</code>, <code>update()</code>, <code>delete()</code> avec exécution asynchrone (<code>AsyncSession</code>)[cite: 15].</li>
+    <li><strong>Invalidation Réactive du Cache :</strong> Purge explicite par préfixe de clé lors de toute écriture ou modification (<code>_invalidate_cache</code>) afin de supprimer les données obsolètes[cite: 15].</li>
+    <li><strong>Découplage ORM / Modèles Domaine :</strong> Transformation explicite des objets ORM (<code>Sprint</code>, <code>TaskResult</code>) en modèles métier découplés (<code>SprintModel</code>, <code>TaskResultModel</code>)[cite: 15].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Télémétrie et Efficacité du Cache Intégrées :</strong> Suivi statistique en temps réel permettant de mesurer le ratio d'efficacité du cache (<code>cache_hit_rate</code>)[cite: 15].</li>
+    <li><strong>Calcul d'Agrégation Analytique en Temps Réel :</strong> Évaluation automatisée du taux de réussite d'un projet (<code>success_rate</code>) et de la durée cumulée des tâches via <code>get_project_stats()</code>[cite: 15].</li>
+    <li><strong>Gestion Flexible des Artefacts :</strong> Capacité à associer tout type de livrable ou de métadonnées JSON à une tâche spécifique via la table <code>Artifact</code>[cite: 15].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/persistence/project_state.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 décorateur de gestion d'erreurs transactionnelles (<code>handle_db_errors</code>)[cite: 15]</li>
+    <li>1 classe <code>ProjectState</code> comportant 22 méthodes opérationnelles (CRUD, cache, statistiques et mappers)[cite: 15]</li>
+    <li>Intégration complète de la couche de persistance asynchrone SQLAlchemy et de la mise en cache mémoire à TTL[cite: 15]</li>
+  </ul>
+</div>

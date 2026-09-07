@@ -7,7 +7,7 @@
 #              Supporte les migrations, les retries, le monitoring et le cache.
 # ==============================================================================
 
-from typing import AsyncGenerator, Optional, Dict, Any, List, Callable, TypeVar, Union
+from typing import AsyncGenerator, Optional, Dict, Any, List, Callable, TypeVar
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     AsyncEngine
 )
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base
 from sqlalchemy import event, inspect, text, func
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 from src.config.settings import settings
@@ -24,7 +24,7 @@ import logging
 import time
 import asyncio
 from functools import wraps
-from typing import TypeVar, ParamSpec
+from typing import ParamSpec
 
 # ==============================================================================
 # LOGGING
@@ -607,10 +607,10 @@ async def init_database(
             await init_models()
             logger.info("✅ Tables créées avec succès")
         
-        # Exécuter les migrations Alembic
+        # Exécuter les migrations Alembic (en évitant le shadowing de variable)
         if run_migrations:
-            from src.db.migrations import run_migrations
-            await run_migrations()
+            from src.db.migrations import run_migrations as run_migrations_func
+            await run_migrations_func()
             logger.info("✅ Migrations exécutées avec succès")
         
         # Charger les données initiales
@@ -654,11 +654,11 @@ async def seed_initial_data() -> None:
 async def vacuum_database() -> None:
     """
     Exécute VACUUM sur la base de données.
+    Note: VACUUM ne peut pas s'exécuter à l'intérieur d'un bloc de transaction (autocommit requis).
     """
     try:
-        async with get_async_session() as session:
-            await session.execute(text("VACUUM ANALYZE"))
-            await session.commit()
+        async with engine.connect() as conn:
+            await conn.execution_options(isolation_level="AUTOCOMMIT").execute(text("VACUUM ANALYZE"))
             logger.info("✅ VACUUM exécuté avec succès")
     except Exception as e:
         logger.error(f"❌ Erreur lors de l'exécution de VACUUM: {e}")
@@ -720,8 +720,35 @@ async def get_connection_pool_status() -> Dict[str, Any]:
         "size": pool.size(),
         "checked_in": pool.checkedin(),
         "overflow": pool.overflow(),
-        "total": pool.total(),
+        "checked_out": pool.checkedout(),
     }
+
+
+# ==============================================================================
+# EXPORTS
+# ==============================================================================
+
+__all__ = [
+    "Base",
+    "engine",
+    "AsyncSessionLocal",
+    "get_async_db",
+    "get_async_session",
+    "get_session",
+    "check_db_connection",
+    "close_db_connection",
+    "get_db_version",
+    "get_db_stats",
+    "execute_in_transaction",
+    "execute_raw_sql",
+    "execute_many",
+    "init_database",
+    "vacuum_database",
+    "analyze_database",
+    "get_db_metrics",
+    "reset_db_metrics",
+    "get_connection_pool_status",
+]
 
 
 # ==============================================================================

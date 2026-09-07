@@ -1,0 +1,78 @@
+<div class="spec-section" id="f11-execution-log-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/models/execution_log.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/models/execution_log.py</code> définit le modèle ORM SQLAlchemy pour la table <code>execution_logs</code>, assurant la traçabilité complète, l'audit, le débogage et l'analyse de performance des actions d'agents, appels LLM et sorties d'outils[cite: 10].</p>
+
+  <div class="model-group">
+    <h5>Énumérations Typées</h5>
+    <ul>
+      <li><code>LogLevel</code> : Niveaux de sévérité du journal (<code>DEBUG</code>, <code>INFO</code>, <code>WARNING</code>, <code>ERROR</code>, <code>CRITICAL</code>)[cite: 10].</li>
+      <li><code>LogCategory</code> : Domaines métier du log (<code>AGENT</code>, <code>LLM</code>, <code>COMPILATION</code>, <code>TEST</code>, <code>SECURITY</code>, <code>DEPLOYMENT</code>, <code>WORKFLOW</code>, <code>SYSTEM</code>, <code>USER</code>, <code>CUSTOM</code>)[cite: 10].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Modèle Principal <code>ExecutionLogModel(Base)</code></h5>
+    <ul>
+      <li><strong>Colonnes &amp; Indexation :</strong> Identifiant auto-incrémenté, clé étrangère optionnelle <code>task_id</code> (avec suppression en cascade), <code>agent_id</code>, niveaux/catégories Enum, prompts LLM (<code>prompt_sent</code>, <code>raw_response</code>), sorties d'outils (<code>tool_output</code>), horodatages UTC, durées en ms et métadonnées de code source (<code>source_file</code>, <code>source_line</code>)[cite: 10].</li>
+      <li><strong>Indexation Composite :</strong> Index simples et composites ciblés (<code>task_id + level</code>, <code>agent_id + category</code>) optimisant les requêtes de recherche et de filtrage fréquentes[cite: 10].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Gestionnaires de Contenus JSON &amp; Tags</h5>
+    <ul>
+      <li><code>get_metadata()</code> / <code>set_metadata(metadata)</code> : Desérialisation et sérialisation sécurisées des métadonnées JSON avec gestion de repli en cas d'erreur[cite: 10].</li>
+      <li><code>get_tags()</code> / <code>set_tags(tags)</code> : Manipulation de la liste des étiquettes sérialisées en JSON[cite: 10].</li>
+      <li><code>add_tag(tag)</code>, <code>remove_tag(tag)</code>, <code>has_tag(tag)</code> : Utilitaires dynamiques d'ajout, suppression et vérification de tags[cite: 10].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Méthodes Usines (Factories <code>@classmethod</code>)</h5>
+    <ul>
+      <li><code>create_log(...)</code> : Usine générique d'instanciation de logs avec initialisation automatique des métadonnées et tags[cite: 10].</li>
+      <li><code>create_error_log(...)</code> : Constructeur spécialisé pour les erreurs système avec marquage automatique au niveau <code>ERROR</code>[cite: 10].</li>
+      <li><code>create_llm_log(...)</code> : Constructeur dédié à la traçabilité des échanges LLM (prompts et réponses brutes) au niveau <code>DEBUG</code>[cite: 10].</li>
+      <li><code>create_compilation_log(...)</code> : Usine pour la captation du retour d'outils de compilation (ex: Forge) ajustant le niveau selon le succès[cite: 10].</li>
+      <li><code>create_security_log(...)</code> : Usine pour les résultats de scanners de sécurité (ex: Slither) basculant en <code>ERROR</code> si des vulnérabilités sont détectées[cite: 10].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Mixin d'Intégration Agent <code>LoggableMixin</code></h5>
+    <ul>
+      <li><code>set_log_callback(callback)</code> : Configuration d'un callback asynchrone pour la persistance externe du log[cite: 10].</li>
+      <li><code>log_info(...)</code>, <code>log_error(...)</code>, <code>log_llm_call(...)</code> : Interface haut niveau simplifiée permettant aux agents d'émettre des logs sans manipuler directement le modèle ORM[cite: 10].</li>
+      <li><code>_create_log(...)</code> : Méthode interne acheminant le log vers le callback s'il est configuré[cite: 10].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Patron de Conception Usine (Factory Pattern) :</strong> Utilisation de méthodes de classe spécialisées (<code>create_*_log</code>) garantissant une création homogène et typée des journaux d'erreurs, d'appels LLM et de compilations[cite: 10].</li>
+    <li><strong>Résilience à la Désérialisation JSON :</strong> Gestion explicite des exceptions <code>json.JSONDecodeError</code> dans la lecture des métadonnées et tags, évitant les interruptions en cas de données corrompues[cite: 10].</li>
+    <li><strong>Optimisation des Modèles de Transfert (DTO) :</strong> Distinction entre <code>to_dict()</code> (complet) et <code>to_short_dict()</code> (allégé) pour optimiser l'empreinte mémoire lors du rendu de listes de logs[cite: 10].</li>
+    <li><strong>Découplage des Agents via Mixin :</strong> Le pattern <code>LoggableMixin</code> permet d'injecter la capacité de journalisation dans n'importe quelle classe d'agent sans coupler directement la logique métier à la base de données[cite: 10].</li>
+    <li><strong>Indexation Multi-Critères :</strong> Index composites optimisés sur les paires de colonnes fréquemment interrogées conjointement (ex: <code>task_id</code> + <code>level</code>)[cite: 10].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Auditabilité Intégrale des Échanges LLM :</strong> Sauvegarde dédiée des prompts exacts transmis et des réponses brutes reçues pour permettre l'audit de conformité et l'analyse de prompt engineering[cite: 10].</li>
+    <li><strong>Architecture Pub/Sub via Callbacks Asynchrones :</strong> <code>LoggableMixin</code> permet une transmission asynchrone non-bloquante des logs vers la couche de persistance[cite: 10].</li>
+    <li><strong>Traçabilité Contextuelle de Code :</strong> Présence des colonnes <code>source_file</code> et <code>source_line</code> pour faire correspondre un événement de log au code source exact qui l'a émis[cite: 10].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/models/execution_log.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Modèle ORM <code>ExecutionLogModel</code> avec 14 colonnes et 7 indexations simples/composites[cite: 10]</li>
+    <li>2 énumérations typées (<code>LogLevel</code>, <code>LogCategory</code>)[cite: 10]</li>
+    <li>5 méthodes usines statiques (<code>create_log</code>, <code>create_error_log</code>, <code>create_llm_log</code>, <code>create_compilation_log</code>, <code>create_security_log</code>)[cite: 10]</li>
+    <li>7 helpers de manipulation et de conversion (JSON metadata, tags, DTOs)[cite: 10]</li>
+    <li>Mixin d'agent réutilisable <code>LoggableMixin</code> facilitant l'émission asynchrone de logs[cite: 10]</li>
+    <li>Docstrings exhaustives au format standard Python[cite: 10]</li>
+  </ul>
+</div>

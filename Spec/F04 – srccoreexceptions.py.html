@@ -1,0 +1,58 @@
+<div class="spec-section">
+  <h3>Points Clés de l'Implémentation - <code>src/core/exceptions.py</code></h3>
+
+  <h4>1. Classes et Fonctions Implémentées</h4>
+  <ul>
+    <li>
+      <strong>Classes d'Exceptions Personnalisées (Hiérarchie) :</strong>
+      <ul>
+        <li><code>PipelineBaseException</code> : Exception racine de l'ensemble du pipeline. Définit le contrat commun (<code>error_code</code>, <code>message</code>, <code>details</code>, <code>timestamp</code>).</li>
+        <li><code>ModelValidationError</code> / <code>SchemaValidationError</code> : Échecs lors de la validation des schémas Pydantic ou du type des paramètres.</li>
+        <li><code>AgentExecutionError</code> &amp; <code>SkillExecutionError</code> : Erreurs survenant lors de l'exécution d'un agent ou d'une compétence particulière.</li>
+        <li><code>TaskExecutionError</code> &amp; <code>TaskTimeoutError</code> : Levées en cas d'échec d'une tâche dans le DAG ou de dépassement du temps limite d'exécution.</li>
+        <li><code>CircuitBreakerError</code> / <code>CircuitOpenError</code> : Déclenchées lorsque le coupe-circuit s'ouvre pour protéger le système contre les cascades de pannes.</li>
+        <li><code>DeploymentError</code>, <code>ContractCompilationError</code> &amp; <code>VerificationError</code> : Erreurs spécifiques au cycle de vie Web3 (compilation Solidity, déploiement RPC, vérification Etherscan/Blockscout).</li>
+        <li><code>QualityGateError</code> &amp; <code>SecurityValidationError</code> : Non-respect des seuils de qualité (couverture, complexité) ou détection de vulnérabilités critiques (Slither/Mythril).</li>
+        <li><code>HumanValidationRequired</code> &amp; <code>ApprovalRejectedError</code> : Mises en pause du pipeline ou rejets dans le cadre des flux RLHF (Human-in-the-loop).</li>
+        <li><code>ConfigurationError</code> : Absence ou invalidité d'une configuration (ex. <code>project_config.yaml</code>).</li>
+      </ul>
+    </li>
+    <li>
+      <strong>Fonctions Utilitaires &amp; Handlers :</strong>
+      <ul>
+        <li><code>format_exception_to_dict(exc: Exception) -&gt; dict</code> : Formate n'importe quelle exception sous forme de dictionnaire JSON-friendly.</li>
+        <li><code>to_error_response(exc: PipelineBaseException, request_id: str = None) -&gt; ErrorResponse</code> : Convertit une exception en instance du modèle Pydantic <code>ErrorResponse</code>.</li>
+        <li><code>handle_pipeline_exception(func)</code> : Décorateur centralisé pour intercepter, journaliser (logging) et ré-émettre proprement les exceptions non gérées.</li>
+        <li><code>validate_or_raise(condition: bool, exception_cls: Type[PipelineBaseException], message: str, **kwargs)</code> : Helper pour valider des assertions applicatives et lever l'exception typée correspondante.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Hiérarchie d'Exceptions Stricte :</strong> Toutes les exceptions dérivent de <code>PipelineBaseException</code>, permettant un filtrage et une capture ciblée dans tout le pipeline.</li>
+    <li><strong>Sérialisabilité &amp; Standardisation API :</strong> Alignement direct avec le modèle Pydantic <code>ErrorResponse</code> pour garantissant des réponses d'erreur unifiées sur les endpoints API / Webhooks.</li>
+    <li><strong>Masquage des Données Sensibles (Sanitization) :</strong> Purge automatique des clés privées, jetons d'accès et variables d'environnement dans les messages d'erreur et stack traces.</li>
+    <li><strong>Traçabilité &amp; Chaînage de Contextes :</strong> Utilisation systématique du chaînage d'exceptions (<code>raise ... from err</code>) pour conserver la cause racine sans perdre le contexte d'exécution.</li>
+    <li><strong>Typage Statique Complet :</strong> Annotations de types complètes (Python 3.10+) pour une validation rigoureuse via MyPy / Pyright.</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Interopérabilité Native avec Pydantic :</strong> Conversion automatique entre les exceptions Python et la structure <code>ErrorResponse</code> du modèle core.</li>
+    <li><strong>Résilience &amp; Circuit Breaker :</strong> Integration native avec la gestion d'état du circuit breaker pour isoler les composants défaillants.</li>
+    <li><strong>Prise en charge du Workflow RLHF :</strong> Exceptions de contrôle de flux permettant la mise en pause synchrone en attente de la décision d'un opérateur humain.</li>
+    <li><strong>Gestion Avancée des Échecs Web3 :</strong> Decodage précis des erreurs de revert EVM et des timeouts RPC.</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/core/exceptions.py</code> est maintenant <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Hiérarchie complète d'exceptions Pydantic-compatibles (10+ classes typées)</li>
+    <li>Mappeur automatique vers le modèle <code>ErrorResponse</code></li>
+    <li>Décorateur de gestion d'erreurs et logging centralisé (<code>handle_pipeline_exception</code>)</li>
+    <li>Sanitization et masquage automatique des secrets dans les traces</li>
+    <li>Documentation exhaustive au format Docstrings Python</li>
+    <li>Code prêt pour l'intégration dans le pipeline global</li>
+  </ul>
+</div>

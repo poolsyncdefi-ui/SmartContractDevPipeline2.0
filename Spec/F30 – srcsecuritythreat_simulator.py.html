@@ -1,0 +1,76 @@
+<div class="spec-section" id="f30-threat-simulator-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/security/threat_simulator.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/security/threat_simulator.py</code> agit au niveau 3 du bouclier de sécurité multi-couches en instanciant un fork local via Anvil et Foundry pour simuler dynamiquement des vecteurs d'attaques réels sur les contrats cibles[cite: 17].</p>
+
+  <div class="model-group">
+    <h5>Structures de Données &amp; Modèles</h5>
+    <ul>
+      <li><code>AttackType(str, Enum)</code> : Énumération des types d'attaques supportés (<code>FLASH_LOAN</code>, <code>ORACLE_MANIPULATION</code>, <code>MEV</code>, <code>REENTRANCY</code>, <code>FRONT_RUNNING</code>, <code>SANDWICH</code>, <code>LIQUIDATION</code>, <code>GOVERNANCE</code>, <code>CUSTOM</code>)[cite: 17].</li>
+      <li><code>AttackSeverity(str, Enum)</code> : Niveaux de sévérité d'une vulnérabilité (<code>CRITICAL</code>, <code>HIGH</code>, <code>MEDIUM</code>, <code>LOW</code>, <code>INFO</code>)[cite: 17].</li>
+      <li><code>AttackResult(dataclass)</code> : Structure détaillée du résultat d'une simulation (type, statut de vulnérabilité, sévérité, impact, remédiation, étapes, temps d'exécution, détails) avec conversion <code>to_dict()</code>[cite: 17].</li>
+      <li><code>ThreatReport(dataclass)</code> : Rapport consolidé de la simulation globale incluant le nombre total d'attaques, le statut de validation, la sévérité globale et la liste des recommandations (avec méthode <code>to_dict()</code>)[cite: 17].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Classe Principale : <code>ThreatSimulator</code></h5>
+    <ul>
+      <li><strong>Initialisation &amp; Gestion d'Anvil :</strong>
+        <ul>
+          <li><code>__init__()</code> : Configuration du port Anvil (défaut: 8545), des paramètres RPC, du chemin du projet Foundry et initialisation des métriques de simulation[cite: 17].</li>
+          <li><code>start_anvil()</code> : Démarre le nœud local Anvil sous forme de sous-processus avec options de fork blockchain[cite: 17].</li>
+          <li><code>stop_anvil()</code> : Interrompt proprement le processus Anvil (envoi de <code>SIGTERM</code> puis <code>SIGKILL</code> si nécessaire)[cite: 17].</li>
+          <li><code>_ensure_anvil()</code> : Vérifie et garantit que le nœud Anvil est actif avant le lancement d'une simulation[cite: 17].</li>
+        </ul>
+      </li>
+      <li><strong>Simulations d'Attaques &amp; Orchestration :</strong>
+        <ul>
+          <li><code>simulate_flash_loan_attack()</code> : Simule un emprunt non garanti pour tester la résistance du contrat aux attaques par flash loan[cite: 17].</li>
+          <li><code>simulate_oracle_manipulation()</code> : Génère une distorsion artificielle des prix sur un DEX/pair pour mesurer l'impact sur les oracles du contrat[cite: 17].</li>
+          <li><code>simulate_mev_attack()</code> : Simule une extraction de valeur maximale (front-running / sandwich) autour des opérations du contrat[cite: 17].</li>
+          <li><code>simulate_reentrancy_attack()</code> : Injecte des requêtes récursives pour évaluer la vulnérabilité aux attaques par réentrance[cite: 17].</li>
+          <li><code>run_full_threat_suite()</code> : Exécute en parallèle la suite complète des simulations d'attaques et agrège les résultats dans un <code>ThreatReport</code> structuré[cite: 17].</li>
+        </ul>
+      </li>
+      <li><strong>Génération de Scripts &amp; Parsing :</strong>
+        <ul>
+          <li><code>_build_flash_loan_script()</code>, <code>_build_oracle_manipulation_script()</code>, <code>_build_mev_attack_script()</code>, <code>_build_reentrancy_script()</code> : Génère dynamiquement le code Solidity/Forge pour chaque vecteur d'attaque[cite: 17].</li>
+          <li><code>_run_forge_script()</code> : Exécute le script Forge dans un dossier temporaire en ciblant le fork Anvil local via <code>subprocess.run</code>[cite: 17].</li>
+          <li><code>_parse_flash_loan_result()</code>, <code>_parse_oracle_manipulation_result()</code>, <code>_parse_mev_attack_result()</code>, <code>_parse_reentrancy_result()</code> : Analyse les logs de sortie Forge pour extraire le verdict de vulnérabilité[cite: 17].</li>
+        </ul>
+      </li>
+      <li><strong>Statistiques &amp; Lifecycle :</strong>
+        <ul>
+          <li><code>get_stats()</code> : Retourne les données quantitatives sur les simulations (compte global, vulnérabilités trouvées, erreurs par type)[cite: 17].</li>
+          <li><code>cleanup()</code> : Arrête Anvil et supprime les fichiers/répertoires temporaires générés[cite: 17].</li>
+          <li><code>to_dict()</code> &amp; <code>__repr__()</code> : Représentations sérialisables et lisibles de l'état du simulateur[cite: 17].</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Isolation &amp; Exécution Sécurisée :</strong> Les attaques sont exécutées sur un fork local éphémère Anvil, évitant tout risque sur les réseaux réels ou de test publics[cite: 17].</li>
+    <li><strong>Orchestration Asynchrone Parallèle :</strong> Utilisation de <code>asyncio.gather</code> dans <code>run_full_threat_suite()</code> pour accélérer l'exécution conjointe des vecteurs d'attaque[cite: 17].</li>
+    <li><strong>Nettoyage Rigoureux des Ressources (Cleanup) :</strong> Libération active des processus (<code>terminate()</code>/<code>kill()</code>) et des répertoires temporaires (<code>shutil.rmtree</code>)[cite: 17].</li>
+    <li><strong>Structure et Typage Strict :</strong> Modélisation des entrées/sorties avec des dataclasses explicites et des énumérations pour éliminer les incohérences de données[cite: 17].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Génération Dynamique de Contrats d'Exploit Solidity :</strong> Construction à la volée de scripts Forge (<code>script.s.sol</code>) prêts à être injectés sur l'EVM locale[cite: 17].</li>
+    <li><strong>Niveau 3 du Bouclier de Sécurité Multi-Couches :</strong> Fournit une validation dynamique empirique en complément des analyses statiques (Niveau 1/2)[cite: 17].</li>
+    <li><strong>Consolidation Automatique de Sévérité &amp; Remédiation :</strong> Détermination automatique de la gravité globale de l'exposition et génération synoptique des correctifs recommandés[cite: 17].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/security/threat_simulator.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>2 énumérations (<code>AttackType</code>, <code>AttackSeverity</code>) et 2 dataclasses (<code>AttackResult</code>, <code>ThreatReport</code>)[cite: 17]</li>
+    <li>1 classe <code>ThreatSimulator</code> regroupant 18 méthodes pour l'orchestration Anvil, l'injection d'exploits, le parsing et le reporting[cite: 17]</li>
+    <li>Gestion asynchrone, génération de scripts Solidity et nettoyage automatique des sous-processus[cite: 17]</li>
+  </ul>
+</div>

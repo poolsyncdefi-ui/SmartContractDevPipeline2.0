@@ -4,7 +4,7 @@
 Security agent for the Smart Contract Dev Pipeline.
 F21 – src/agents/templates/security_agent.py
 
-Rôle Fonctionnel : Agent de securite auditant le code et generant des correctifs.
+Role Fonctionnel : Agent de securite auditant le code et generant des correctifs.
 L'Agent Securite est responsable de:
 - L'audit de code Solidity via Slither (analyse statique)
 - La verification formelle via Halmos (preuves symboliques)
@@ -29,7 +29,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 
 # Import des modules du pipeline
-from src.core.exceptions import PipelineError, ShieldVerificationError
+from src.core.exceptions import PipelineError
 from src.agents.base.best_practice import BaseBestPractice
 from src.llm.llm_client import LLMClient
 from src.persistence.knowledge_base import KnowledgeBase
@@ -86,7 +86,7 @@ class AuditLevel(str, Enum):
 class Vulnerability:
     """
     Represente une vulnerabilite detectee.
-    
+
     Attributes:
         id (str): Identifiant unique de la vulnerabilite
         type (VulnerabilityType): Type de vulnerabilite
@@ -117,7 +117,7 @@ class Vulnerability:
     remediation_code: Optional[str] = None
     references: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         """Convertit la vulnerabilite en dictionnaire."""
         return {
@@ -142,7 +142,7 @@ class Vulnerability:
 class AuditReport:
     """
     Rapport d'audit de securite.
-    
+
     Attributes:
         audited_at (datetime): Date de l'audit
         contract_name (str): Nom du contrat audite
@@ -167,7 +167,7 @@ class AuditReport:
     low_count: int = 0
     score: float = 100.0
     details: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         """Convertit le rapport en dictionnaire."""
         return {
@@ -188,10 +188,10 @@ class AuditReport:
 class SecurityAgent(AbstractAgent):
     """
     Agent specialise dans l'audit de securite.
-    
+
     Cet agent implemente le bouclier de securite multi-couches du pipeline,
     combinant analyse statique, fuzzing, simulation d'attaques et verification formelle.
-    
+
     Attributes:
         llm_client (Optional[LLMClient]): Client LLM pour les suggestions
         knowledge_base (Optional[KnowledgeBase]): Base de connaissances RAG
@@ -202,8 +202,9 @@ class SecurityAgent(AbstractAgent):
         min_security_score (float): Score minimum requis (0-100)
         auto_fix (bool): Generer automatiquement des correctifs
         _audit_history (List[AuditReport]): Historique des audits
+        _vuln_counter (int): Compteur pour les IDs de vulnerabilites
     """
-    
+
     # Mapping des types de vulnerabilites Slither vers le systeme
     SLITHER_MAPPING = {
         "reentrancy": VulnerabilityType.REENTRANCY,
@@ -224,7 +225,7 @@ class SecurityAgent(AbstractAgent):
         "denial-of-service": VulnerabilityType.DOS,
         "front-running": VulnerabilityType.FRONT_RUNNING,
     }
-    
+
     # Severite par defaut selon le type
     DEFAULT_SEVERITY = {
         VulnerabilityType.REENTRANCY: VulnerabilitySeverity.CRITICAL,
@@ -244,7 +245,7 @@ class SecurityAgent(AbstractAgent):
         VulnerabilityType.DEPENDENCY: VulnerabilitySeverity.HIGH,
         VulnerabilityType.CUSTOM: VulnerabilitySeverity.MEDIUM,
     }
-    
+
     def __init__(
         self,
         agent_id: str,
@@ -262,7 +263,7 @@ class SecurityAgent(AbstractAgent):
     ):
         """
         Initialise l'Agent Securite.
-        
+
         Args:
             agent_id: Identifiant unique de l'agent
             name: Nom de l'agent (defaut: "SecurityAgent")
@@ -277,7 +278,8 @@ class SecurityAgent(AbstractAgent):
             min_security_score: Score minimum requis (defaut: 80.0)
             auto_fix: Generer automatiquement des correctifs (defaut: False)
         """
-        super().__init__(agent_id=agent_id, name=name, skills=skills, llm_client=llm_client)
+        super().__init__(agent_id=agent_id, name=name, skills=skills)
+        self.llm_client = llm_client
         self.knowledge_base = knowledge_base
         self.best_practices = best_practices or []
         self.slither_path = slither_path
@@ -288,13 +290,14 @@ class SecurityAgent(AbstractAgent):
         self.auto_fix = auto_fix
         self._audit_history: List[AuditReport] = []
         self._compilation_cache: Dict[str, Dict] = {}
-        
+        self._vuln_counter = 0  # Compteur pour IDs uniques
+
         logger.info(f"SecurityAgent initialized: {agent_id}")
-    
+
     async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyse le code et detecte les vulnerabilites.
-        
+
         Args:
             task_data: Doit contenir:
                 - 'code': Code a auditer
@@ -302,7 +305,7 @@ class SecurityAgent(AbstractAgent):
                 - 'contract_name': Nom du contrat (optionnel)
                 - 'slither_report': Rapport Slither (optionnel)
                 - 'halmos_report': Rapport Halmos (optionnel)
-                
+
         Returns:
             Dict contenant:
             - 'status': SUCCESS ou FAILED
@@ -313,7 +316,7 @@ class SecurityAgent(AbstractAgent):
             - 'score': Score de securite (0-100)
         """
         start_time = datetime.utcnow()
-        
+
         try:
             # 1. Extraction des parametres
             code = task_data.get("code", "")
@@ -321,17 +324,17 @@ class SecurityAgent(AbstractAgent):
             level_str = task_data.get("level", "full")
             slither_report = task_data.get("slither_report", {})
             halmos_report = task_data.get("halmos_report", {})
-            
+
             if not code:
                 raise ValueError("No code provided for security audit")
-            
+
             # 2. Determination du niveau d'audit
             try:
                 level = AuditLevel(level_str.lower())
             except ValueError:
                 level = AuditLevel.FULL
                 logger.warning(f"Invalid audit level '{level_str}', using FULL")
-            
+
             # 3. Execution de l'audit
             report = await self._run_audit(
                 code=code,
@@ -340,30 +343,30 @@ class SecurityAgent(AbstractAgent):
                 slither_report=slither_report,
                 halmos_report=halmos_report
             )
-            
+
             # 4. Enrichissement via RAG
             if self.knowledge_base and report.vulnerabilities:
                 report = await self._enrich_with_rag(report)
-            
-            # 5. Application des bonnes pratiques
+
+            # 5. Application des bonnes pratiques (Correction : transmission du code source réel)
             if self.best_practices:
-                report = await self._apply_best_practices(report)
-            
+                report = await self._apply_best_practices(report, code)
+
             # 6. Generation des correctifs
             if self.auto_fix and report.vulnerabilities:
                 report = await self._generate_fixes(report)
-            
+
             # 7. Classification et scoring
             self._classify_vulnerabilities(report)
             report.score = self._calculate_security_score(report)
             report.passed = report.score >= self.min_security_score and report.critical_count == 0
-            
+
             # 8. Persistance de l'audit
             self._audit_history.append(report)
-            
+
             # 9. Generation du guide de remediation
             guide = self.format_remediation_guide(report.vulnerabilities)
-            
+
             # 10. Logging de l'execution
             await self.log_execution(
                 task_id=task_data.get("task_id", "unknown"),
@@ -371,9 +374,9 @@ class SecurityAgent(AbstractAgent):
                 response=f"Found {len(report.vulnerabilities)} vulnerabilities, score={report.score:.1f}",
                 tool_output=json.dumps(report.to_dict(), indent=2)[:500]
             )
-            
+
             logger.info(f"Security audit completed: {contract_name}, score={report.score:.1f}, passed={report.passed}")
-            
+
             return {
                 "status": "SUCCESS",
                 "report": report.to_dict(),
@@ -390,7 +393,7 @@ class SecurityAgent(AbstractAgent):
                     "high_count": report.high_count
                 }
             }
-            
+
         except Exception as e:
             logger.error(f"SecurityAgent execution failed: {str(e)}")
             return {
@@ -398,11 +401,11 @@ class SecurityAgent(AbstractAgent):
                 "error": str(e),
                 "execution_time": (datetime.utcnow() - start_time).total_seconds()
             }
-    
+
     # =========================================================================
     # AUDIT PRINCIPAL
     # =========================================================================
-    
+
     async def _run_audit(
         self,
         code: str,
@@ -413,20 +416,20 @@ class SecurityAgent(AbstractAgent):
     ) -> AuditReport:
         """
         Execute l'audit de securite complet.
-        
+
         Args:
             code: Code a auditer
             contract_name: Nom du contrat
             level: Niveau d'audit
             slither_report: Rapport Slither pre-existant
             halmos_report: Rapport Halmos pre-existant
-            
+
         Returns:
             AuditReport: Rapport d'audit
         """
         vulnerabilities = []
         details = {}
-        
+
         # Niveau 1: Analyse statique (Slither)
         if level in [AuditLevel.LEVEL_1, AuditLevel.FULL]:
             if slither_report:
@@ -436,7 +439,7 @@ class SecurityAgent(AbstractAgent):
             vulnerabilities.extend(slither_vulns)
             details["slither"] = {"vulnerabilities_found": len(slither_vulns)}
             logger.info(f"Level 1 (Slither): {len(slither_vulns)} vulnerabilities found")
-        
+
         # Niveau 2: Fuzzing (Foundry/Echidna)
         if level in [AuditLevel.LEVEL_2, AuditLevel.FULL]:
             fuzzing_results = await self.run_fuzzing_analysis(code, contract_name)
@@ -444,7 +447,7 @@ class SecurityAgent(AbstractAgent):
                 vulnerabilities.extend(fuzzing_results)
                 details["fuzzing"] = {"vulnerabilities_found": len(fuzzing_results)}
                 logger.info(f"Level 2 (Fuzzing): {len(fuzzing_results)} vulnerabilities found")
-        
+
         # Niveau 3: Simulation d'attaques (Anvil)
         if level in [AuditLevel.LEVEL_3, AuditLevel.FULL]:
             attack_results = await self.run_threat_simulation(code, contract_name)
@@ -452,7 +455,7 @@ class SecurityAgent(AbstractAgent):
                 vulnerabilities.extend(attack_results)
                 details["threat_simulation"] = {"vulnerabilities_found": len(attack_results)}
                 logger.info(f"Level 3 (Threat Simulation): {len(attack_results)} vulnerabilities found")
-        
+
         # Niveau 4: Verification formelle (Halmos)
         if level in [AuditLevel.LEVEL_4, AuditLevel.FULL]:
             if halmos_report:
@@ -463,56 +466,57 @@ class SecurityAgent(AbstractAgent):
                 vulnerabilities.extend(formal_results)
                 details["formal_verification"] = {"vulnerabilities_found": len(formal_results)}
                 logger.info(f"Level 4 (Halmos): {len(formal_results)} vulnerabilities found")
-        
+
         # Deduplication des vulnerabilites
         vulnerabilities = self._deduplicate_vulnerabilities(vulnerabilities)
-        
+
         return AuditReport(
             contract_name=contract_name,
             level=level,
             vulnerabilities=vulnerabilities,
             details=details
         )
-    
+
     # =========================================================================
     # NIVEAU 1: ANALYSE STATIQUE (SLITHER)
     # =========================================================================
-    
+
     def parse_slither_json(self, raw_json: Dict) -> List[Vulnerability]:
         """
         Extrait les vulnerabilites du rapport Slither.
-        
+
         Args:
             raw_json: Rapport JSON de Slither
-            
+
         Returns:
             List[Vulnerability]: Vulnerabilites extraites
         """
         vulnerabilities = []
         detectors = raw_json.get("results", {}).get("detectors", [])
-        
+
         for detector in detectors:
             # Filtrage par impact
             impact = detector.get("impact", "Low")
             if impact not in ["High", "Medium"]:
                 continue
-            
+
             # Mapping du type
             check_name = detector.get("check", "custom")
             vuln_type = self.SLITHER_MAPPING.get(check_name, VulnerabilityType.CUSTOM)
-            
+
             # Severite par defaut
             severity = self.DEFAULT_SEVERITY.get(vuln_type, VulnerabilitySeverity.MEDIUM)
             if impact == "High":
                 severity = VulnerabilitySeverity.HIGH
             elif impact == "Critical":
                 severity = VulnerabilitySeverity.CRITICAL
-            
+
             # Extraction des elements
             elements = detector.get("elements", [])
             for element in elements:
+                self._vuln_counter += 1
                 vulnerability = Vulnerability(
-                    id=f"SLITHER_{check_name}_{len(vulnerabilities)}",
+                    id=f"SLITHER_{self._vuln_counter}",
                     type=vuln_type,
                     severity=severity,
                     title=detector.get("name", check_name),
@@ -526,95 +530,105 @@ class SecurityAgent(AbstractAgent):
                     references=[f"Slither: {detector.get('check', '')}"]
                 )
                 vulnerabilities.append(vulnerability)
-        
+
         logger.debug(f"Parsed {len(vulnerabilities)} vulnerabilities from Slither")
         return vulnerabilities
-    
+
     async def run_slither_analysis(self, code: str, contract_name: str) -> List[Vulnerability]:
         """
-        Execute Slither sur le code.
-        
+        Execute Slither sur le code de facon asynchrone.
+
         Args:
             code: Code a analyser
             contract_name: Nom du contrat
-            
+
         Returns:
             List[Vulnerability]: Vulnerabilites detectees
         """
         try:
-            # Sauvegarde temporaire du code
             import tempfile
             import os
-            
+
             with tempfile.NamedTemporaryFile(mode='w', suffix='.sol', delete=False) as f:
                 f.write(code)
                 filepath = f.name
-            
+
             try:
-                # Execution de Slither
+                # Execution de Slither dans un thread separe
                 cmd = [self.slither_path, filepath, "--json", "-"]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                
-                if result.returncode != 0:
-                    logger.error(f"Slither execution failed: {result.stderr}")
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=10 * 1024 * 1024  # 10 MB
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(),
+                        timeout=60
+                    )
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+                    logger.error("Slither analysis timed out (60s)")
                     return []
-                
+
+                if process.returncode != 0:
+                    logger.error(f"Slither execution failed: {stderr.decode('utf-8', errors='ignore')}")
+                    return []
+
                 # Parsing du resultat
                 try:
-                    slither_json = json.loads(result.stdout)
+                    slither_json = json.loads(stdout.decode('utf-8'))
                     return self.parse_slither_json(slither_json)
                 except json.JSONDecodeError as e:
                     logger.error(f"Failed to parse Slither JSON: {str(e)}")
                     return []
-                    
+
             finally:
                 # Nettoyage
                 os.unlink(filepath)
-                
-        except subprocess.TimeoutExpired:
-            logger.error("Slither analysis timed out (60s)")
-            return []
+
         except Exception as e:
             logger.error(f"Slither analysis failed: {str(e)}")
             return []
-    
+
     # =========================================================================
     # NIVEAU 2: FUZZING
     # =========================================================================
-    
+
     async def run_fuzzing_analysis(self, code: str, contract_name: str) -> List[Vulnerability]:
         """
-        Execute le fuzzing via Foundry/Echidna.
-        
+        Execute le fuzzing via Foundry/Echidna de facon asynchrone.
+
         Args:
             code: Code a tester
             contract_name: Nom du contrat
-            
+
         Returns:
             List[Vulnerability]: Vulnerabilites detectees
         """
         vulnerabilities = []
-        
+
         try:
-            # Construction du projet temporaire
             import tempfile
             import os
             import shutil
-            
+
             temp_dir = tempfile.mkdtemp()
-            
+
             try:
                 # Creation de la structure Foundry
                 contracts_dir = os.path.join(temp_dir, "contracts")
                 test_dir = os.path.join(temp_dir, "test")
                 os.makedirs(contracts_dir, exist_ok=True)
                 os.makedirs(test_dir, exist_ok=True)
-                
+
                 # Ecriture du contrat
                 contract_path = os.path.join(contracts_dir, f"{contract_name}.sol")
                 with open(contract_path, 'w') as f:
                     f.write(code)
-                
+
                 # Creation d'un test basique
                 test_path = os.path.join(test_dir, f"{contract_name}.t.sol")
                 test_code = f"""
@@ -626,11 +640,11 @@ import "../contracts/{contract_name}.sol";
 
 contract {contract_name}Test is Test {{
     {contract_name} public contractInstance;
-    
+
     function setUp() public {{
         contractInstance = new {contract_name}();
     }}
-    
+
     function testInvariant() public {{
         // Test basique
         assertTrue(true);
@@ -639,125 +653,138 @@ contract {contract_name}Test is Test {{
 """
                 with open(test_path, 'w') as f:
                     f.write(test_code)
-                
-                # Execution des tests Foundry
+
+                # Execution des tests Foundry de maniere asynchrone
                 cmd = [self.foundry_path, "test", "--root", temp_dir, "-vv"]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=10 * 1024 * 1024
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(),
+                        timeout=120
+                    )
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+                    logger.error("Fuzzing analysis timed out (120s)")
+                    return []
+
+                output = stdout.decode('utf-8', errors='ignore')
+
                 # Analyse des resultats
-                if "Failing tests" in result.stdout or result.returncode != 0:
+                if "Failing tests" in output or process.returncode != 0:
+                    self._vuln_counter += 1
                     vulnerability = Vulnerability(
-                        id=f"FUZZ_{len(vulnerabilities)}",
+                        id=f"FUZZ_{self._vuln_counter}",
                         type=VulnerabilityType.LOGIC_ERROR,
                         severity=VulnerabilitySeverity.HIGH,
                         title="Fuzzing test failure",
-                        description=f"Fuzzing detected a violation of invariants",
+                        description="Fuzzing detected a violation of invariants",
                         impact="The contract may not behave as expected under certain conditions",
                         remediation="Review the contract logic and invariants",
-                        code_snippet=result.stdout[:500],
-                        metadata={"fuzzing_output": result.stdout}
+                        code_snippet=output[:500],
+                        metadata={"fuzzing_output": output}
                     )
                     vulnerabilities.append(vulnerability)
-                
+
             finally:
                 # Nettoyage
                 shutil.rmtree(temp_dir, ignore_errors=True)
-                
-        except subprocess.TimeoutExpired:
-            logger.error("Fuzzing analysis timed out (120s)")
+
         except Exception as e:
             logger.error(f"Fuzzing analysis failed: {str(e)}")
-        
+
         return vulnerabilities
-    
+
     # =========================================================================
     # NIVEAU 3: SIMULATION D'ATTAQUES (ANVIL)
     # =========================================================================
-    
+
     async def run_threat_simulation(self, code: str, contract_name: str) -> List[Vulnerability]:
         """
-        Simule des attaques via Anvil.
-        
+        Simule des attaques via Anvil de maniere asynchrone.
+
         Args:
             code: Code a tester
             contract_name: Nom du contrat
-            
+
         Returns:
             List[Vulnerability]: Vulnerabilites detectees
         """
         vulnerabilities = []
-        
+
         try:
-            # Simulation d'attaques communes
+            # Simulation d'attaques communes (detections statiques pour l'exemple)
             attack_patterns = [
                 ("reentrancy", "Check for reentrancy vulnerability"),
                 ("front_running", "Check for front-running vulnerability"),
                 ("access_control", "Check for access control vulnerabilities"),
                 ("arithmetic", "Check for arithmetic issues")
             ]
-            
+
             for attack_type, description in attack_patterns:
                 # Detection basique
                 if attack_type == "reentrancy":
                     if self._detect_reentrancy(code):
                         vuln = self._create_reentrancy_vulnerability()
                         vulnerabilities.append(vuln)
-                
+
                 elif attack_type == "front_running":
                     if self._detect_front_running(code):
                         vuln = self._create_front_running_vulnerability()
                         vulnerabilities.append(vuln)
-                
+
                 elif attack_type == "access_control":
                     if self._detect_access_control_issues(code):
                         vuln = self._create_access_control_vulnerability()
                         vulnerabilities.append(vuln)
-                
+
                 elif attack_type == "arithmetic":
                     if self._detect_arithmetic_issues(code):
                         vuln = self._create_arithmetic_vulnerability()
                         vulnerabilities.append(vuln)
-            
+
         except Exception as e:
             logger.error(f"Threat simulation failed: {str(e)}")
-        
+
         return vulnerabilities
-    
+
     def _detect_reentrancy(self, code: str) -> bool:
         """Detecte les vulnerabilites de reentrance."""
-        # Pattern: external call followed by state modification
         if ".call" in code and "balance" in code and "require" not in code:
             return True
         if ".transfer" in code and "balance" in code:
             return True
         return False
-    
+
     def _detect_front_running(self, code: str) -> bool:
         """Detecte les vulnerabilites de front-running."""
-        # Pattern: visibility of transaction ordering
         if "tx.origin" in code:
             return True
         return False
-    
+
     def _detect_access_control_issues(self, code: str) -> bool:
         """Detecte les vulnerabilites de controle d'acces."""
-        # Pattern: functions without access control
         functions = re.findall(r"function\s+\w+\s*\([^)]*\)\s*(?:public|external)\s*{", code)
         if len(functions) > 0 and "onlyOwner" not in code and "require" not in code:
             return True
         return False
-    
+
     def _detect_arithmetic_issues(self, code: str) -> bool:
         """Detecte les vulnerabilites arithmetiques."""
-        # Pattern: operations without SafeMath or unchecked
         if " + " in code or " - " in code:
             if "unchecked" not in code and "SafeMath" not in code:
                 return True
         return False
-    
+
     def _create_reentrancy_vulnerability(self) -> Vulnerability:
+        self._vuln_counter += 1
         return Vulnerability(
-            id=f"SIM_{len(self._audit_history)}",
+            id=f"SIM_{self._vuln_counter}",
             type=VulnerabilityType.REENTRANCY,
             severity=VulnerabilitySeverity.CRITICAL,
             title="Reentrancy vulnerability detected",
@@ -773,10 +800,11 @@ contract {contract_name}Test is Test {{
     }
     """
         )
-    
+
     def _create_front_running_vulnerability(self) -> Vulnerability:
+        self._vuln_counter += 1
         return Vulnerability(
-            id=f"SIM_{len(self._audit_history)}",
+            id=f"SIM_{self._vuln_counter}",
             type=VulnerabilityType.FRONT_RUNNING,
             severity=VulnerabilitySeverity.HIGH,
             title="Front-running vulnerability detected",
@@ -784,10 +812,11 @@ contract {contract_name}Test is Test {{
             impact="An attacker could front-run transactions for profit.",
             remediation="Use commit-reveal patterns or add privacy measures.",
         )
-    
+
     def _create_access_control_vulnerability(self) -> Vulnerability:
+        self._vuln_counter += 1
         return Vulnerability(
-            id=f"SIM_{len(self._audit_history)}",
+            id=f"SIM_{self._vuln_counter}",
             type=VulnerabilityType.ACCESS_CONTROL,
             severity=VulnerabilitySeverity.HIGH,
             title="Access control vulnerability detected",
@@ -795,10 +824,11 @@ contract {contract_name}Test is Test {{
             impact="Unauthorized users could access restricted functions.",
             remediation="Add access control modifiers or require statements.",
         )
-    
+
     def _create_arithmetic_vulnerability(self) -> Vulnerability:
+        self._vuln_counter += 1
         return Vulnerability(
-            id=f"SIM_{len(self._audit_history)}",
+            id=f"SIM_{self._vuln_counter}",
             type=VulnerabilityType.ARITHMETIC,
             severity=VulnerabilitySeverity.HIGH,
             title="Arithmetic vulnerability detected",
@@ -806,28 +836,29 @@ contract {contract_name}Test is Test {{
             impact="Could lead to overflow/underflow vulnerabilities.",
             remediation="Use SafeMath or Solidity 0.8+ for built-in overflow checks.",
         )
-    
+
     # =========================================================================
     # NIVEAU 4: VERIFICATION FORMELLE (HALMOS)
     # =========================================================================
-    
+
     def parse_halmos_json(self, raw_json: Dict) -> List[Vulnerability]:
         """
         Extrait les vulnerabilites du rapport Halmos.
-        
+
         Args:
             raw_json: Rapport JSON de Halmos
-            
+
         Returns:
             List[Vulnerability]: Vulnerabilites extraites
         """
         vulnerabilities = []
-        
+
         results = raw_json.get("results", [])
         for result in results:
             if not result.get("verified", True):
+                self._vuln_counter += 1
                 vulnerability = Vulnerability(
-                    id=f"HALMOS_{len(vulnerabilities)}",
+                    id=f"HALMOS_{self._vuln_counter}",
                     type=VulnerabilityType.FORMAL_VERIFICATION,
                     severity=VulnerabilitySeverity.HIGH,
                     title="Formal verification failed",
@@ -838,71 +869,83 @@ contract {contract_name}Test is Test {{
                     metadata={"property": result.get("property"), "counterexample": result.get("counterexample")}
                 )
                 vulnerabilities.append(vulnerability)
-        
+
         return vulnerabilities
-    
+
     async def run_halmos_verification(self, code: str, contract_name: str) -> List[Vulnerability]:
         """
-        Execute Halmos pour la verification formelle.
-        
+        Execute Halmos pour la verification formelle de facon asynchrone.
+
         Args:
             code: Code a verifier
             contract_name: Nom du contrat
-            
+
         Returns:
             List[Vulnerability]: Vulnerabilites detectees
         """
         try:
             import tempfile
             import os
-            
+
             with tempfile.NamedTemporaryFile(mode='w', suffix='.sol', delete=False) as f:
                 f.write(code)
                 filepath = f.name
-            
+
             try:
                 # Execution de Halmos
                 cmd = [self.halmos_path, filepath, "--json"]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                
-                if result.returncode != 0:
-                    logger.error(f"Halmos execution failed: {result.stderr}")
-                    return []
-                
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=10 * 1024 * 1024
+                )
                 try:
-                    halmos_json = json.loads(result.stdout)
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(),
+                        timeout=120
+                    )
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+                    logger.error("Halmos verification timed out (120s)")
+                    return []
+
+                if process.returncode != 0:
+                    logger.error(f"Halmos execution failed: {stderr.decode('utf-8', errors='ignore')}")
+                    return []
+
+                try:
+                    halmos_json = json.loads(stdout.decode('utf-8'))
                     return self.parse_halmos_json(halmos_json)
                 except json.JSONDecodeError as e:
                     logger.error(f"Failed to parse Halmos JSON: {str(e)}")
                     return []
-                    
+
             finally:
                 os.unlink(filepath)
-                
-        except subprocess.TimeoutExpired:
-            logger.error("Halmos verification timed out (120s)")
-            return []
+
         except Exception as e:
             logger.error(f"Halmos verification failed: {str(e)}")
             return []
-    
+
     # =========================================================================
     # ENRICHISSEMENT ET TRAITEMENT
     # =========================================================================
-    
+
     async def _enrich_with_rag(self, report: AuditReport) -> AuditReport:
         """
         Enrichit l'audit avec le contexte RAG.
-        
+
         Args:
             report: Rapport d'audit
-            
+
         Returns:
             AuditReport: Rapport enrichi
         """
         if not self.knowledge_base:
             return report
-        
+
         try:
             for vuln in report.vulnerabilities:
                 query = f"{vuln.type.value} {vuln.title} smart contract security remediation"
@@ -910,32 +953,34 @@ contract {contract_name}Test is Test {{
                 if docs:
                     vuln.references.extend(docs)
                     vuln.remediation += f"\n\nContext: {docs[0][:200]}..."
-            
-            logger.info(f"Enriched audit with RAG context")
+
+            logger.info("Enriched audit with RAG context")
         except Exception as e:
             logger.warning(f"RAG enrichment failed: {str(e)}")
-        
+
         return report
-    
-    async def _apply_best_practices(self, report: AuditReport) -> AuditReport:
+
+    async def _apply_best_practices(self, report: AuditReport, code: str) -> AuditReport:
         """
-        Applique les bonnes pratiques a l'audit.
-        
+        Applique les bonnes pratiques a l'audit en utilisant le code source réel.
+
         Args:
             report: Rapport d'audit
-            
+            code: Code source du contrat
+
         Returns:
             AuditReport: Rapport avec bonnes pratiques appliquees
         """
         for practice in self.best_practices:
             try:
-                # Validation du code
-                validation = await practice.validate({"code": report.contract_name})
+                # Validation du code réel (Correction du bug de transmission de report.contract_name)
+                validation = await practice.validate({"code": code})
                 if not validation.get("passed", True):
                     # Ajout des suggestions
                     for violation in validation.get("violations", []):
+                        self._vuln_counter += 1
                         vuln = Vulnerability(
-                            id=f"BP_{len(report.vulnerabilities)}",
+                            id=f"BP_{self._vuln_counter}",
                             type=VulnerabilityType.COMPLIANCE,
                             severity=VulnerabilitySeverity.LOW,
                             title=violation.get("rule_name", "Best practice violation"),
@@ -946,16 +991,16 @@ contract {contract_name}Test is Test {{
                         report.vulnerabilities.append(vuln)
             except Exception as e:
                 logger.warning(f"Best practice validation failed: {str(e)}")
-        
+
         return report
-    
+
     async def _generate_fixes(self, report: AuditReport) -> AuditReport:
         """
         Genere des correctifs pour les vulnerabilites.
-        
+
         Args:
             report: Rapport d'audit
-            
+
         Returns:
             AuditReport: Rapport avec correctifs
         """
@@ -964,39 +1009,39 @@ contract {contract_name}Test is Test {{
                 try:
                     prompt = f"""
                     Generate a fix for the following vulnerability:
-                    
+
                     Type: {vuln.type.value}
                     Title: {vuln.title}
                     Description: {vuln.description}
-                    
+
                     Provide the fix as Solidity code.
                     """
-                    
+
                     response = await self.llm_client.generate(
                         prompt=prompt,
                         system_prompt="You are an expert at fixing smart contract vulnerabilities.",
                         temperature=0.2
                     )
-                    
+
                     vuln.remediation_code = self._extract_code_from_response(response)
                 except Exception as e:
                     logger.warning(f"Failed to generate fix for {vuln.id}: {str(e)}")
-        
+
         return report
-    
+
     def _extract_code_from_response(self, response: str) -> str:
         """Extrait le code de la reponse du LLM."""
         code_blocks = re.findall(r"```(?:\w+)?\n([\s\S]*?)```", response)
         return code_blocks[0].strip() if code_blocks else response.strip()
-    
+
     # =========================================================================
     # CLASSIFICATION ET SCORING
     # =========================================================================
-    
+
     def _classify_vulnerabilities(self, report: AuditReport) -> None:
         """
         Classe les vulnerabilites par severite.
-        
+
         Args:
             report: Rapport d'audit
         """
@@ -1004,7 +1049,7 @@ contract {contract_name}Test is Test {{
         report.high_count = 0
         report.medium_count = 0
         report.low_count = 0
-        
+
         for vuln in report.vulnerabilities:
             if vuln.severity == VulnerabilitySeverity.CRITICAL:
                 report.critical_count += 1
@@ -1014,72 +1059,72 @@ contract {contract_name}Test is Test {{
                 report.medium_count += 1
             elif vuln.severity == VulnerabilitySeverity.LOW:
                 report.low_count += 1
-    
+
     def _calculate_security_score(self, report: AuditReport) -> float:
         """
         Calcule le score de securite (0-100).
-        
+
         Args:
             report: Rapport d'audit
-            
+
         Returns:
             float: Score de securite
         """
         score = 100.0
-        
+
         # Deductions selon la severite
         score -= report.critical_count * 25.0
         score -= report.high_count * 10.0
         score -= report.medium_count * 5.0
         score -= report.low_count * 2.0
-        
+
         return max(0.0, min(100.0, score))
-    
+
     def _deduplicate_vulnerabilities(self, vulns: List[Vulnerability]) -> List[Vulnerability]:
         """
         Deduplique les vulnerabilites similaires.
-        
+
         Args:
             vulns: Liste des vulnerabilites
-            
+
         Returns:
             List[Vulnerability]: Liste dedupliquee
         """
         seen = set()
         unique = []
-        
+
         for vuln in vulns:
             key = f"{vuln.type.value}_{vuln.title}_{vuln.location}"
             if key not in seen:
                 seen.add(key)
                 unique.append(vuln)
-        
+
         return unique
-    
+
     # =========================================================================
     # FORMATAGE ET RAPPORTS
     # =========================================================================
-    
+
     def format_remediation_guide(self, vulnerabilities: List[Vulnerability]) -> str:
         """
         Genere un guide de correction.
-        
+
         Args:
             vulnerabilities: Liste des vulnerabilites
-            
+
         Returns:
             str: Guide de correction
         """
         if not vulnerabilities:
             return "✅ No vulnerabilities detected. The code is secure."
-        
+
         lines = [
             "🔒 Security Audit Report",
             "=" * 50,
             f"Total vulnerabilities found: {len(vulnerabilities)}",
             ""
         ]
-        
+
         # Groupement par severite
         by_severity = {}
         for vuln in vulnerabilities:
@@ -1087,7 +1132,7 @@ contract {contract_name}Test is Test {{
             if key not in by_severity:
                 by_severity[key] = []
             by_severity[key].append(vuln)
-        
+
         # Affichage par severite
         for severity in [VulnerabilitySeverity.CRITICAL, VulnerabilitySeverity.HIGH,
                         VulnerabilitySeverity.MEDIUM, VulnerabilitySeverity.LOW]:
@@ -1102,36 +1147,36 @@ contract {contract_name}Test is Test {{
                     lines.append(f"   💡 Fix: {vuln.remediation}")
                     if vuln.remediation_code:
                         lines.append(f"   ```solidity\n{vuln.remediation_code}\n```")
-        
+
         lines.append("\n" + "=" * 50)
         lines.append("📊 Summary:")
         lines.append(f"   - Critical: {sum(1 for v in vulnerabilities if v.severity == VulnerabilitySeverity.CRITICAL)}")
         lines.append(f"   - High: {sum(1 for v in vulnerabilities if v.severity == VulnerabilitySeverity.HIGH)}")
         lines.append(f"   - Medium: {sum(1 for v in vulnerabilities if v.severity == VulnerabilitySeverity.MEDIUM)}")
         lines.append(f"   - Low: {sum(1 for v in vulnerabilities if v.severity == VulnerabilitySeverity.LOW)}")
-        
+
         return "\n".join(lines)
-    
+
     # =========================================================================
     # STATISTIQUES ET RAPPORTS
     # =========================================================================
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """
         Retourne les statistiques de l'agent.
-        
+
         Returns:
             Dict: Statistiques detaillees
         """
         total_audits = len(self._audit_history)
         passed_audits = sum(1 for r in self._audit_history if r.passed)
-        
+
         total_vulnerabilities = sum(len(r.vulnerabilities) for r in self._audit_history)
         total_critical = sum(r.critical_count for r in self._audit_history)
         total_high = sum(r.high_count for r in self._audit_history)
-        
+
         avg_score = sum(r.score for r in self._audit_history) / total_audits if total_audits > 0 else 0
-        
+
         return {
             "total_audits": total_audits,
             "passed_audits": passed_audits,
@@ -1143,30 +1188,29 @@ contract {contract_name}Test is Test {{
             "total_high": total_high,
             "average_score": avg_score,
             "min_score": min((r.score for r in self._audit_history), default=0),
-            "max_score": max((r.score for r in self._audit_history), default=0),
-            **super().health_check()
+            "max_score": max((r.score for r in self._audit_history), default=0)
         }
-    
+
     def get_last_audit(self) -> Optional[AuditReport]:
         """
         Recupere le dernier audit.
-        
+
         Returns:
             Optional[AuditReport]: Dernier rapport ou None
         """
         return self._audit_history[-1] if self._audit_history else None
-    
+
     # =========================================================================
     # REPRESENTATION
     # =========================================================================
-    
+
     def __repr__(self) -> str:
         return f"<SecurityAgent(agent_id='{self.agent_id}', audits={len(self._audit_history)})>"
-    
+
     def to_dict(self) -> Dict:
         """
         Convertit l'agent en dictionnaire.
-        
+
         Returns:
             Dict: Representation de l'agent
         """
@@ -1177,6 +1221,5 @@ contract {contract_name}Test is Test {{
             "audits_count": len(self._audit_history),
             "skills_count": len(self.skills),
             "min_security_score": self.min_security_score,
-            "auto_fix": self.auto_fix,
-            "health": self.health_check()
+            "auto_fix": self.auto_fix
         }

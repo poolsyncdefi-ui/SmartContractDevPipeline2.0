@@ -13,7 +13,7 @@ import tempfile
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import httpx
 import asyncio
@@ -98,9 +98,26 @@ class GitSyncManager:
             gpg_key: Clé GPG pour les signatures
             sign_commits: Signer les commits
         """
-        self.workspace_path = workspace_path or settings.pipeline.default_workspace
-        self.token = token or settings.github_token.get_secret_value()
-        self.username = username or settings.github_username
+        # Valeurs par défaut sécurisées avec vérification d'attribut
+        default_workspace = getattr(settings.pipeline, 'default_workspace', Path('./workspace')) if hasattr(settings, 'pipeline') else Path('./workspace')
+        self.workspace_path = workspace_path or default_workspace
+        
+        # Token GitHub robuste (compatible SecretStr et str)
+        if token:
+            self.token = token
+        elif hasattr(settings, 'github_token') and settings.github_token:
+            token_val = settings.github_token
+            if hasattr(token_val, 'get_secret_value'):
+                try:
+                    self.token = token_val.get_secret_value()
+                except Exception:
+                    self.token = str(token_val)
+            else:
+                self.token = str(token_val)
+        else:
+            self.token = None
+        
+        self.username = username or getattr(settings, 'github_username', 'unknown')
         self.email = email or f"{self.username}@users.noreply.github.com"
         self.gpg_key = gpg_key
         self.sign_commits = sign_commits
@@ -129,6 +146,11 @@ class GitSyncManager:
         """
         if self._github_client:
             return
+        
+        if not self.token:
+            raise GitAuthenticationError(
+                message="GitHub token is required for GitHub operations"
+            )
         
         self._github_client = httpx.AsyncClient(
             base_url="https://api.github.com",
@@ -165,7 +187,7 @@ class GitSyncManager:
         self._stats["last_operation"] = {
             "operation": operation.value,
             "success": success,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     
     # ==========================================================================
@@ -190,12 +212,15 @@ class GitSyncManager:
             bool: True si réussi
         """
         try:
+            repo_path.mkdir(parents=True, exist_ok=True)
+            
             # Git init
             subprocess.run(
                 ["git", "init", "-b", default_branch],
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             # Configuration
@@ -206,7 +231,8 @@ class GitSyncManager:
                     ["git", "remote", "add", "origin", remote_url],
                     cwd=repo_path,
                     check=True,
-                    capture_output=True
+                    capture_output=True,
+                    text=True
                 )
             
             logger.info(f"Repository initialized: {repo_path}")
@@ -232,24 +258,28 @@ class GitSyncManager:
         subprocess.run(
             ["git", "config", "user.name", self.username],
             cwd=repo_path,
-            capture_output=True
+            capture_output=True,
+            text=True
         )
         subprocess.run(
             ["git", "config", "user.email", self.email],
             cwd=repo_path,
-            capture_output=True
+            capture_output=True,
+            text=True
         )
         
         if self.sign_commits and self.gpg_key:
             subprocess.run(
                 ["git", "config", "user.signingkey", self.gpg_key],
                 cwd=repo_path,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             subprocess.run(
                 ["git", "config", "commit.gpgsign", "true"],
                 cwd=repo_path,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
     
     def clone_repo(
@@ -272,6 +302,7 @@ class GitSyncManager:
             bool: True si réussi
         """
         try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
             cmd = ["git", "clone", repo_url, str(target_path)]
             
             if branch:
@@ -283,7 +314,8 @@ class GitSyncManager:
             subprocess.run(
                 cmd,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             self._configure_repo(target_path)
@@ -326,17 +358,19 @@ class GitSyncManager:
             # Ajouter les fichiers
             if files:
                 subprocess.run(
-                    ["git", "add"] + files,
+                    ["git", "add"] + [str(f) for f in files],
                     cwd=repo_path,
                     check=True,
-                    capture_output=True
+                    capture_output=True,
+                    text=True
                 )
             elif all_files:
                 subprocess.run(
                     ["git", "add", "-A"],
                     cwd=repo_path,
                     check=True,
-                    capture_output=True
+                    capture_output=True,
+                    text=True
                 )
             
             # Commit
@@ -416,7 +450,8 @@ class GitSyncManager:
                 cmd,
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             self._stats["pushes_count"] += 1
@@ -465,7 +500,8 @@ class GitSyncManager:
                 cmd,
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             self._stats["pulls_count"] += 1
@@ -510,7 +546,8 @@ class GitSyncManager:
                 cmd,
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             self._update_stats(GitOperation.FETCH, True)
@@ -559,7 +596,8 @@ class GitSyncManager:
                 cmd,
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             if checkout:
@@ -567,7 +605,8 @@ class GitSyncManager:
                     ["git", "checkout", branch_name],
                     cwd=repo_path,
                     check=True,
-                    capture_output=True
+                    capture_output=True,
+                    text=True
                 )
             
             self._update_stats(GitOperation.BRANCH, True)
@@ -607,7 +646,8 @@ class GitSyncManager:
                 cmd,
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             self._update_stats(GitOperation.BRANCH, True)
@@ -697,7 +737,8 @@ class GitSyncManager:
                 cmd,
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             self._update_stats(GitOperation.TAG, True)
@@ -730,7 +771,8 @@ class GitSyncManager:
                 ["git", "push", remote, tag_name],
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             self._update_stats(GitOperation.PUSH, True)
@@ -791,7 +833,7 @@ class GitSyncManager:
             bool: True s'il y a des conflits
         """
         status = self.get_status(repo_path)
-        return any(status.get(file) == GitStatus.UNMERGED.value for file in status)
+        return any(val == GitStatus.UNMERGED.value for val in status.values())
     
     def resolve_conflict(
         self,
@@ -816,14 +858,16 @@ class GitSyncManager:
                     ["git", "checkout", "--theirs", file_path],
                     cwd=repo_path,
                     check=True,
-                    capture_output=True
+                    capture_output=True,
+                    text=True
                 )
             elif resolution == "ours":
                 subprocess.run(
                     ["git", "checkout", "--ours", file_path],
                     cwd=repo_path,
                     check=True,
-                    capture_output=True
+                    capture_output=True,
+                    text=True
                 )
             else:
                 # Résolution manuelle
@@ -834,7 +878,8 @@ class GitSyncManager:
                 ["git", "add", file_path],
                 cwd=repo_path,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             
             self._update_stats(GitOperation.MERGE, True)
@@ -875,7 +920,7 @@ class GitSyncManager:
         await self._ensure_github_client()
         
         data = {
-            "description": description or f"Gist created at {datetime.utcnow().isoformat()}",
+            "description": description or f"Gist created at {datetime.now(timezone.utc).isoformat()}",
             "public": public,
             "files": {
                 filename: {
@@ -1160,464 +1205,6 @@ class GitSyncManager:
             "sign_commits": self.sign_commits,
             "has_gpg_key": bool(self.gpg_key)
         }
-    
-    # ==========================================================================
-    # FERMETURE
-    # ==========================================================================
-    
-    async def close(self) -> None:
-        """
-        Ferme le client GitHub.
-        """
-        if self._github_client:
-            await self._github_client.aclose()
-            self._github_client = None# ==============================================================================
-# Smart Contract Dev Pipeline 2.0 - Git Sync Manager
-# ==============================================================================
-# Fichier: src/git/git_sync_manager.py
-# Description: Gestionnaire des opérations Git et GitHub.
-#              Gestion des commits, pushes et Gists.
-# ==============================================================================
-
-import os
-import subprocess
-import tempfile
-import json
-from pathlib import Path
-from typing import Optional, List, Dict, Any
-from datetime import datetime
-import logging
-import httpx
-
-from src.config.settings import settings
-from src.core.exceptions import GitSyncError, GitAuthenticationError, GistPublishError
-
-# ==============================================================================
-# LOGGING
-# ==============================================================================
-
-logger = logging.getLogger(__name__)
-
-
-# ==============================================================================
-# MANAGER GIT
-# ==============================================================================
-
-class GitSyncManager:
-    """
-    Gestionnaire des opérations Git et GitHub.
-    """
-    
-    def __init__(
-        self,
-        workspace_path: Optional[Path] = None,
-        token: Optional[str] = None,
-        username: Optional[str] = None
-    ):
-        """
-        Initialise le gestionnaire Git.
-        
-        Args:
-            workspace_path: Chemin du workspace
-            token: Token GitHub
-            username: Nom d'utilisateur GitHub
-        """
-        self.workspace_path = workspace_path or settings.pipeline.default_workspace
-        self.token = token or settings.github_token.get_secret_value()
-        self.username = username or settings.github_username
-        
-        self._github_client: Optional[httpx.AsyncClient] = None
-        
-        logger.info(f"GitSyncManager initialized: workspace={self.workspace_path}")
-    
-    async def _ensure_github_client(self) -> None:
-        """
-        S'assure que le client GitHub est initialisé.
-        """
-        if self._github_client:
-            return
-        
-        self._github_client = httpx.AsyncClient(
-            base_url="https://api.github.com",
-            headers={
-                "Authorization": f"token {self.token}",
-                "Accept": "application/vnd.github.v3+json"
-            },
-            timeout=30.0
-        )
-    
-    # ==========================================================================
-    # OPERATIONS DE BASE
-    # ==========================================================================
-    
-    def init_repo(self, repo_path: Path, remote_url: Optional[str] = None) -> bool:
-        """
-        Initialise un dépôt Git.
-        
-        Args:
-            repo_path: Chemin du dépôt
-            remote_url: URL du remote (optionnel)
-            
-        Returns:
-            bool: True si réussi
-        """
-        try:
-            subprocess.run(
-                ["git", "init"],
-                cwd=repo_path,
-                check=True,
-                capture_output=True
-            )
-            
-            if remote_url:
-                subprocess.run(
-                    ["git", "remote", "add", "origin", remote_url],
-                    cwd=repo_path,
-                    check=True,
-                    capture_output=True
-                )
-            
-            logger.info(f"Repository initialized: {repo_path}")
-            return True
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to initialize repository: {e.stderr}")
-            raise GitSyncError(
-                message=f"Failed to initialize repository: {e.stderr}",
-                repo=str(repo_path),
-                operation="init"
-            )
-    
-    def clone_repo(self, repo_url: str, target_path: Path) -> bool:
-        """
-        Clone un dépôt Git.
-        
-        Args:
-            repo_url: URL du dépôt
-            target_path: Chemin cible
-            
-        Returns:
-            bool: True si réussi
-        """
-        try:
-            subprocess.run(
-                ["git", "clone", repo_url, str(target_path)],
-                check=True,
-                capture_output=True
-            )
-            logger.info(f"Repository cloned: {repo_url} -> {target_path}")
-            return True
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to clone repository: {e.stderr}")
-            raise GitSyncError(
-                message=f"Failed to clone repository: {e.stderr}",
-                repo=repo_url,
-                operation="clone"
-            )
-    
-    def commit(self, repo_path: Path, message: str, files: Optional[List[str]] = None) -> str:
-        """
-        Committe les changements.
-        
-        Args:
-            repo_path: Chemin du dépôt
-            message: Message de commit
-            files: Fichiers à committer (optionnel)
-            
-        Returns:
-            str: Hash du commit
-        """
-        try:
-            # Ajouter les fichiers
-            if files:
-                subprocess.run(
-                    ["git", "add"] + files,
-                    cwd=repo_path,
-                    check=True,
-                    capture_output=True
-                )
-            else:
-                subprocess.run(
-                    ["git", "add", "."],
-                    cwd=repo_path,
-                    check=True,
-                    capture_output=True
-                )
-            
-            # Commit
-            result = subprocess.run(
-                ["git", "commit", "-m", message],
-                cwd=repo_path,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            
-            # Extraire le hash
-            hash_result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repo_path,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            
-            commit_hash = hash_result.stdout.strip()
-            logger.info(f"Commit created: {commit_hash[:8]} - {message}")
-            return commit_hash
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to commit: {e.stderr}")
-            raise GitSyncError(
-                message=f"Failed to commit: {e.stderr}",
-                repo=str(repo_path),
-                operation="commit"
-            )
-    
-    def push(self, repo_path: Path, remote: str = "origin", branch: str = "main") -> bool:
-        """
-        Pousse les changements vers le remote.
-        
-        Args:
-            repo_path: Chemin du dépôt
-            remote: Nom du remote
-            branch: Branche
-            
-        Returns:
-            bool: True si réussi
-        """
-        try:
-            subprocess.run(
-                ["git", "push", remote, branch],
-                cwd=repo_path,
-                check=True,
-                capture_output=True
-            )
-            logger.info(f"Pushed to {remote}/{branch}")
-            return True
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to push: {e.stderr}")
-            raise GitSyncError(
-                message=f"Failed to push: {e.stderr}",
-                repo=str(repo_path),
-                operation="push"
-            )
-    
-    def pull(self, repo_path: Path, remote: str = "origin", branch: str = "main") -> bool:
-        """
-        Tire les changements depuis le remote.
-        
-        Args:
-            repo_path: Chemin du dépôt
-            remote: Nom du remote
-            branch: Branche
-            
-        Returns:
-            bool: True si réussi
-        """
-        try:
-            subprocess.run(
-                ["git", "pull", remote, branch],
-                cwd=repo_path,
-                check=True,
-                capture_output=True
-            )
-            logger.info(f"Pulled from {remote}/{branch}")
-            return True
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to pull: {e.stderr}")
-            raise GitSyncError(
-                message=f"Failed to pull: {e.stderr}",
-                repo=str(repo_path),
-                operation="pull"
-            )
-    
-    # ==========================================================================
-    # OPERATIONS GITHUB
-    # ==========================================================================
-    
-    async def create_gist(
-        self,
-        content: str,
-        filename: str,
-        description: Optional[str] = None,
-        public: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Crée un Gist sur GitHub.
-        
-        Args:
-            content: Contenu du Gist
-            filename: Nom du fichier
-            description: Description du Gist
-            public: Gist public ou privé
-            
-        Returns:
-            Dict[str, Any]: Informations du Gist
-            
-        Raises:
-            GistPublishError: Si la publication échoue
-        """
-        await self._ensure_github_client()
-        
-        data = {
-            "description": description or f"Gist created at {datetime.utcnow().isoformat()}",
-            "public": public,
-            "files": {
-                filename: {
-                    "content": content
-                }
-            }
-        }
-        
-        try:
-            response = await self._github_client.post("/gists", json=data)
-            response.raise_for_status()
-            result = response.json()
-            
-            logger.info(f"Gist created: {result['html_url']}")
-            
-            return {
-                "id": result["id"],
-                "url": result["html_url"],
-                "raw_url": result["files"][filename]["raw_url"],
-                "created_at": result["created_at"]
-            }
-            
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Failed to create gist: {e.response.text}")
-            raise GistPublishError(
-                filename=filename,
-                message=e.response.text,
-                status_code=e.response.status_code
-            )
-        except Exception as e:
-            raise GistPublishError(
-                filename=filename,
-                message=str(e)
-            )
-    
-    async def update_gist(
-        self,
-        gist_id: str,
-        content: str,
-        filename: str
-    ) -> Dict[str, Any]:
-        """
-        Met à jour un Gist existant.
-        
-        Args:
-            gist_id: ID du Gist
-            content: Nouveau contenu
-            filename: Nom du fichier
-            
-        Returns:
-            Dict[str, Any]: Informations du Gist
-        """
-        await self._ensure_github_client()
-        
-        data = {
-            "files": {
-                filename: {
-                    "content": content
-                }
-            }
-        }
-        
-        try:
-            response = await self._github_client.patch(f"/gists/{gist_id}", json=data)
-            response.raise_for_status()
-            result = response.json()
-            
-            logger.info(f"Gist updated: {result['html_url']}")
-            return {
-                "id": result["id"],
-                "url": result["html_url"],
-                "raw_url": result["files"][filename]["raw_url"],
-                "updated_at": result["updated_at"]
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to update gist: {str(e)}")
-            raise GitSyncError(
-                message=f"Failed to update gist: {str(e)}",
-                operation="update_gist"
-            )
-    
-    async def get_gist(self, gist_id: str) -> Dict[str, Any]:
-        """
-        Récupère un Gist.
-        
-        Args:
-            gist_id: ID du Gist
-            
-        Returns:
-            Dict[str, Any]: Informations du Gist
-        """
-        await self._ensure_github_client()
-        
-        try:
-            response = await self._github_client.get(f"/gists/{gist_id}")
-            response.raise_for_status()
-            return response.json()
-            
-        except Exception as e:
-            logger.error(f"Failed to get gist: {str(e)}")
-            raise GitSyncError(
-                message=f"Failed to get gist: {str(e)}",
-                operation="get_gist"
-            )
-    
-    # ==========================================================================
-    # OPERATIONS DE CODE
-    # ==========================================================================
-    
-    def save_artifact_to_workspace(
-        self,
-        content: str,
-        filename: str,
-        subpath: Optional[str] = None
-    ) -> Path:
-        """
-        Sauvegarde un artefact dans le workspace.
-        
-        Args:
-            content: Contenu de l'artefact
-            filename: Nom du fichier
-            subpath: Sous-chemin optionnel
-            
-        Returns:
-            Path: Chemin du fichier sauvegardé
-        """
-        target_path = self.workspace_path
-        if subpath:
-            target_path = target_path / subpath
-        
-        target_path.mkdir(parents=True, exist_ok=True)
-        file_path = target_path / filename
-        
-        file_path.write_text(content, encoding='utf-8')
-        logger.info(f"Artifact saved: {file_path}")
-        
-        return file_path
-    
-    def read_artifact_from_workspace(self, file_path: Path) -> str:
-        """
-        Lit un artefact depuis le workspace.
-        
-        Args:
-            file_path: Chemin du fichier
-            
-        Returns:
-            str: Contenu du fichier
-        """
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
-        
-        return file_path.read_text(encoding='utf-8')
     
     # ==========================================================================
     # FERMETURE

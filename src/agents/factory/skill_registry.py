@@ -95,7 +95,7 @@ class SkillMetadata:
     last_used: Optional[datetime] = None
     dependencies: Set[str] = field(default_factory=set)
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> Dict[str, Any]:
         """Convertit en dictionnaire."""
         return {
             "skill_id": self.skill_id,
@@ -164,15 +164,15 @@ class SkillRegistry:
         self._metadata: Dict[str, SkillMetadata] = {}
         
         # Gestion des versions
-        self._versions: Dict[str, List[str]] = defaultdict(list)  # skill_id -> [versions]
-        self._current_versions: Dict[str, str] = {}  # skill_id -> current_version
+        self._versions: Dict[str, List[str]] = defaultdict(list)
+        self._current_versions: Dict[str, str] = {}
         
         # Tags pour la recherche
-        self._tags_index: Dict[str, Set[str]] = defaultdict(set)  # tag -> {skill_ids}
+        self._tags_index: Dict[str, Set[str]] = defaultdict(set)
         
         # Dependances
-        self._dependencies: Dict[str, Set[str]] = defaultdict(set)  # skill_id -> {dep_ids}
-        self._dependents: Dict[str, Set[str]] = defaultdict(set)  # skill_id -> {dependent_ids}
+        self._dependencies: Dict[str, Set[str]] = defaultdict(set)
+        self._dependents: Dict[str, Set[str]] = defaultdict(set)
         
         # Injections
         self._knowledge_base: Optional[KnowledgeBase] = None
@@ -234,7 +234,7 @@ class SkillRegistry:
         if not skill_class:
             raise ValueError("skill_class cannot be None")
         if not issubclass(skill_class, BaseSkill):
-            raise ValueError(f"skill_class must be a subclass of BaseSkill")
+            raise ValueError("skill_class must be a subclass of BaseSkill")
         
         # Verifier si la version existe deja
         if skill_id in self._versions and version in self._versions[skill_id]:
@@ -357,6 +357,13 @@ class SkillRegistry:
         # Recuperer la classe
         skill_class = self.get(skill_id, version)
         
+        # Verifier que les metadonnees existent
+        if skill_id not in self._metadata:
+            raise SkillNotFoundError(
+                skill_id=skill_id,
+                message=f"Skill '{skill_id}' not found in metadata"
+            )
+        
         # Creer une nouvelle instance
         skill_config = SkillConfig(
             skill_id=skill_id,
@@ -438,16 +445,16 @@ class SkillRegistry:
         
         # Filtrage
         if scope is not None:
-            result = {s for s in result if self._metadata[s].scope == scope}
+            result = {s for s in result if s in self._metadata and self._metadata[s].scope == scope}
         
         if status is not None:
-            result = {s for s in result if self._metadata[s].status == status}
+            result = {s for s in result if s in self._metadata and self._metadata[s].status == status}
         
         if tag is not None:
             result = result.intersection(self._tags_index.get(tag, set()))
         
         if project_id is not None:
-            result = {s for s in result if self._metadata[s].project_id == project_id}
+            result = {s for s in result if s in self._metadata and self._metadata[s].project_id == project_id}
         
         return sorted(list(result))
     
@@ -625,15 +632,14 @@ class SkillRegistry:
             for record in records:
                 try:
                     # Creer une classe dynamique pour la competence
-                    # Note: Ceci est simplifie - dans la pratique, il faudrait
-                    # utiliser une usine de classes ou du code generation
                     skill_class = self._create_skill_class_from_record(record)
                     self.register(
                         skill_id=record.skill_id,
                         skill_class=skill_class,
-                        version="1.0.0"  # Version stockee dans les metadonnees
+                        version=record.version or "1.0.0"
                     )
                     loaded_count += 1
+                    logger.debug(f"Loaded skill: {record.skill_id}")
                 except Exception as e:
                     logger.error(f"Failed to load skill {record.skill_id}: {str(e)}")
             
@@ -654,12 +660,13 @@ class SkillRegistry:
         Returns:
             int: Nombre de competences sauvegardees
         """
+        from sqlalchemy import select
+        
         saved_count = 0
         
         for skill_id, metadata in self._metadata.items():
             try:
                 # Verification de l'existence
-                from sqlalchemy import select
                 stmt = select(SkillRecordModel).where(SkillRecordModel.skill_id == skill_id)
                 result = await db_session.execute(stmt)
                 record = result.scalar_one_or_none()
@@ -667,16 +674,32 @@ class SkillRegistry:
                 if record:
                     # Mise a jour
                     record.name = metadata.name
-                    record.prompt_rules = f"Version: {metadata.version}\nStatus: {metadata.status.value}"
-                    # ... autres champs
+                    record.description = metadata.description
+                    record.version = metadata.version
+                    record.status = metadata.status.value
+                    record.scope = metadata.scope.value
+                    record.project_id = metadata.project_id
+                    record.usage_count = metadata.usage_count
+                    record.last_used_at = metadata.last_used
+                    record.updated_at = datetime.utcnow()
+                    # Note: prompt_rules, input_schema_json devraient etre mis a jour
+                    # depuis la classe de competence reelle
                 else:
                     # Creation
                     record = SkillRecordModel(
                         skill_id=skill_id,
                         name=metadata.name,
+                        description=metadata.description,
+                        version=metadata.version,
+                        status=metadata.status.value,
+                        scope=metadata.scope.value,
+                        project_id=metadata.project_id,
                         prompt_rules=f"Version: {metadata.version}\nStatus: {metadata.status.value}",
-                        input_schema_json={},  # A remplir
-                        python_code=""  # A remplir
+                        input_schema_json={},  # A remplir depuis la classe
+                        python_code="",  # A remplir depuis la classe
+                        usage_count=metadata.usage_count,
+                        last_used_at=metadata.last_used,
+                        is_verified=False
                     )
                     db_session.add(record)
                 
@@ -738,8 +761,9 @@ class SkillRegistry:
     
     def clear_cache(self) -> None:
         """Vide le cache des instances."""
+        cache_size = len(self._skills)
         self._skills.clear()
-        logger.info("Skill cache cleared")
+        logger.info(f"Skill cache cleared ({cache_size} entries)")
     
     def archive_skill(self, skill_id: str) -> None:
         """
@@ -767,7 +791,7 @@ class SkillRegistry:
     # EVENEMENTS
     # =========================================================================
     
-    def _emit_event(self, event_type: str, data: Dict) -> None:
+    def _emit_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """
         Emet un evenement via le message bus.
         
@@ -796,9 +820,6 @@ class SkillRegistry:
         Returns:
             Type[BaseSkill]: Classe de competence
         """
-        # Implementation simplifiee - dans la pratique, il faudrait
-        # utiliser des techniques de generation de code plus avancees
-        
         # Creer une classe dynamique
         class DynamicSkill(BaseSkill):
             skill_id = record.skill_id
@@ -816,12 +837,39 @@ class SkillRegistry:
         
         # Ajouter le schema si disponible
         if record.input_schema_json:
-            from pydantic import create_model
             try:
-                fields = {}
-                for k, v in record.input_schema_json.items():
-                    fields[k] = (type(v), ...)
-                DynamicSkill.input_schema = create_model(f"{record.skill_id}_Input", **fields)
+                from pydantic import create_model
+                schema_data = record.input_schema_json
+                # Si c'est une chaîne JSON, la parser
+                if isinstance(schema_data, str):
+                    import json
+                    schema_data = json.loads(schema_data)
+                
+                if isinstance(schema_data, dict):
+                    fields = {}
+                    for k, v in schema_data.items():
+                        # Si v est un dict avec "type", le convertir en type Python
+                        if isinstance(v, dict) and "type" in v:
+                            type_mapping = {
+                                "str": str,
+                                "int": int,
+                                "float": float,
+                                "bool": bool,
+                                "list": list,
+                                "dict": dict,
+                                "any": Any
+                            }
+                            field_type = type_mapping.get(v["type"], Any)
+                            # Gestion des champs optionnels
+                            if v.get("optional", False):
+                                fields[k] = (Optional[field_type], None)
+                            else:
+                                fields[k] = (field_type, ...)
+                        else:
+                            fields[k] = (type(v) if v is not None else Any, ...)
+                    
+                    DynamicSkill.input_schema = create_model(f"{record.skill_id}_Input", **fields)
+                    logger.debug(f"Schema created for {record.skill_id}")
             except Exception as e:
                 logger.warning(f"Failed to create schema for {record.skill_id}: {str(e)}")
         
@@ -834,7 +882,7 @@ class SkillRegistry:
     def __repr__(self) -> str:
         return f"<SkillRegistry skills={len(self._skill_classes)} instances={len(self._skills)}>"
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> Dict[str, Any]:
         """
         Convertit le registre en dictionnaire.
         

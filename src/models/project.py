@@ -8,10 +8,10 @@
 # ==============================================================================
 
 from sqlalchemy import Column, String, DateTime, Enum, Text, JSON, Integer, Boolean, Index
-from sqlalchemy.orm import relationship, validates, backref
+from sqlalchemy.orm import relationship, validates
 from sqlalchemy.ext.hybrid import hybrid_property
 from src.db.database import Base
-import datetime
+from datetime import datetime, timezone
 import enum
 import uuid
 import json
@@ -146,7 +146,7 @@ class ProjectModel(Base):
     # Configuration et spécification
     config = Column(
         JSON,
-        default={},
+        default=dict,
         doc="Configuration complète du projet (ProjectConfig)"
     )
     
@@ -162,10 +162,11 @@ class ProjectModel(Base):
         doc="Version du projet (semver)"
     )
     
-    # Métadonnées
-    metadata = Column(
+    # Métadonnées (renommé pour éviter le conflit avec Base.metadata de SQLAlchemy)
+    extra_metadata = Column(
+        "metadata",
         JSON,
-        default={},
+        default=dict,
         doc="Métadonnées additionnelles (tags, labels, etc.)"
     )
     
@@ -207,18 +208,18 @@ class ProjectModel(Base):
         doc="Projet est public"
     )
     
-    # Dates
+    # Dates (UTC time-aware avec lambda pour éviter l'évaluation statique)
     created_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
         index=True,
         doc="Date de création"
     )
     
     updated_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
-        onupdate=datetime.datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         doc="Date de dernière mise à jour"
     )
     
@@ -327,17 +328,27 @@ class ProjectModel(Base):
     
     @hybrid_property
     def age_days(self) -> float:
-        """Âge du projet en jours."""
+        """Âge du projet en jours (avec gestion robuste des fuseaux horaires)."""
         if not self.created_at:
             return 0.0
-        return (datetime.datetime.utcnow() - self.created_at).total_seconds() / (24 * 3600)
+        now = datetime.now(timezone.utc)
+        created = self.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        return (now - created).total_seconds() / (24 * 3600)
     
     @hybrid_property
     def duration_days(self) -> Optional[float]:
-        """Durée du projet en jours."""
+        """Durée du projet en jours (avec gestion robuste des fuseaux horaires)."""
         if not self.started_at or not self.completed_at:
             return None
-        return (self.completed_at - self.started_at).total_seconds() / (24 * 3600)
+        start = self.started_at
+        end = self.completed_at
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        return (end - start).total_seconds() / (24 * 3600)
     
     # ==========================================================================
     # VALIDATEURS
@@ -433,7 +444,7 @@ class ProjectModel(Base):
         
         if include_config:
             result["config"] = self.config
-            result["metadata"] = self.metadata
+            result["metadata"] = self.extra_metadata
             result["spec_yaml"] = self.spec_yaml
         
         if include_relations:
@@ -475,15 +486,15 @@ class ProjectModel(Base):
         """
         old_status = self.status
         self.status = new_status
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         
         # Mise à jour des dates spécifiques
         if new_status == ProjectStatus.IN_PROGRESS and not self.started_at:
-            self.started_at = datetime.datetime.utcnow()
+            self.started_at = datetime.now(timezone.utc)
         elif new_status == ProjectStatus.COMPLETED:
-            self.completed_at = datetime.datetime.utcnow()
+            self.completed_at = datetime.now(timezone.utc)
         elif new_status == ProjectStatus.ARCHIVED:
-            self.archived_at = datetime.datetime.utcnow()
+            self.archived_at = datetime.now(timezone.utc)
         
         # Log du changement
         if reason:
@@ -491,27 +502,29 @@ class ProjectModel(Base):
                 "old_status": old_status.value if old_status else None,
                 "new_status": new_status.value if new_status else None,
                 "reason": reason,
-                "timestamp": datetime.datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
     
     def increment_task_count(self) -> None:
         """Incrémente le compteur de tâches."""
         self.task_count += 1
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
     
     def increment_completed_tasks(self) -> None:
         """Incrémente le compteur de tâches terminées."""
         self.completed_task_count += 1
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         self._check_completion()
     
     def increment_failed_tasks(self) -> None:
         """Incrémente le compteur de tâches échouées."""
         self.failed_task_count += 1
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
     
     def _check_completion(self) -> None:
-        """Vérifie si le projet est terminé."""
+        """
+        Vérifie si le projet est terminé et met à jour le statut automatiquement.
+        """
         if self.task_count > 0 and self.completed_task_count >= self.task_count:
             if self.status not in [ProjectStatus.COMPLETED, ProjectStatus.ARCHIVED]:
                 self.update_status(ProjectStatus.COMPLETED, "All tasks completed")
@@ -566,7 +579,7 @@ class ProjectModel(Base):
                 target[k] = {}
             target = target[k]
         target[keys[-1]] = value
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
     
     # ==========================================================================
     # GESTION DES TAGS
@@ -580,13 +593,13 @@ class ProjectModel(Base):
             return self.tags
         try:
             return json.loads(self.tags) if isinstance(self.tags, str) else []
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             return []
     
     def set_tags(self, tags: List[str]) -> None:
         """Définit les tags du projet."""
         self.tags = tags if tags else []
-        self.updated_at = datetime.datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
     
     def add_tag(self, tag: str) -> None:
         """Ajoute un tag au projet."""
@@ -612,22 +625,22 @@ class ProjectModel(Base):
     
     def add_metadata(self, key: str, value: Any) -> None:
         """Ajoute une métadonnée."""
-        if not self.metadata:
-            self.metadata = {}
-        self.metadata[key] = value
-        self.updated_at = datetime.datetime.utcnow()
+        if not self.extra_metadata:
+            self.extra_metadata = {}
+        self.extra_metadata[key] = value
+        self.updated_at = datetime.now(timezone.utc)
     
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Récupère une métadonnée."""
-        if not self.metadata:
+        if not self.extra_metadata:
             return default
-        return self.metadata.get(key, default)
+        return self.extra_metadata.get(key, default)
     
     def remove_metadata(self, key: str) -> None:
         """Supprime une métadonnée."""
-        if self.metadata and key in self.metadata:
-            del self.metadata[key]
-            self.updated_at = datetime.datetime.utcnow()
+        if self.extra_metadata and key in self.extra_metadata:
+            del self.extra_metadata[key]
+            self.updated_at = datetime.now(timezone.utc)
     
     # ==========================================================================
     # AUDIT LOG
@@ -635,19 +648,19 @@ class ProjectModel(Base):
     
     def _add_audit_log(self, action: str, data: Dict[str, Any]) -> None:
         """Ajoute une entrée d'audit log."""
-        if not self.metadata:
-            self.metadata = {}
-        if "audit_logs" not in self.metadata:
-            self.metadata["audit_logs"] = []
-        self.metadata["audit_logs"].append({
+        if not self.extra_metadata:
+            self.extra_metadata = {}
+        if "audit_logs" not in self.extra_metadata:
+            self.extra_metadata["audit_logs"] = []
+        self.extra_metadata["audit_logs"].append({
             "action": action,
             "data": data,
-            "timestamp": datetime.datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
     
     def get_audit_logs(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Récupère les logs d'audit."""
-        logs = self.metadata.get("audit_logs", []) if self.metadata else []
+        logs = self.extra_metadata.get("audit_logs", []) if self.extra_metadata else []
         if limit:
             return logs[-limit:]
         return logs
@@ -711,7 +724,7 @@ class ProjectModel(Base):
         # Parser le YAML pour extraire les informations
         try:
             spec_data = yaml.safe_load(spec_yaml)
-        except:
+        except yaml.YAMLError:
             spec_data = {}
         
         project = ProjectModel(
@@ -729,7 +742,7 @@ class ProjectModel(Base):
         
         # Extraire les métadonnées du YAML
         if "metadata" in spec_data:
-            project.metadata = spec_data["metadata"]
+            project.extra_metadata = spec_data["metadata"]
         
         # Extraire les tags du YAML
         if "tags" in spec_data:
@@ -748,18 +761,45 @@ class ProjectModel(Base):
         Returns:
             ProjectModel: Instance du projet
         """
+        # Gérer les enums avec des valeurs par défaut
+        status_str = data.get("status", "CREATED")
+        priority_str = data.get("priority", "medium")
+        category_str = data.get("category", "other")
+        chain_str = data.get("chain", "ethereum")
+        
+        # Convertir en enums
+        try:
+            status = ProjectStatus(status_str)
+        except ValueError:
+            status = ProjectStatus.CREATED
+        
+        try:
+            priority = ProjectPriority(priority_str)
+        except ValueError:
+            priority = ProjectPriority.MEDIUM
+        
+        try:
+            category = ProjectCategory(category_str)
+        except ValueError:
+            category = ProjectCategory.OTHER
+        
+        try:
+            chain = ProjectChain(chain_str)
+        except ValueError:
+            chain = ProjectChain.ETHEREUM
+        
         return ProjectModel(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", "Unnamed Project"),
             description=data.get("description", ""),
-            status=ProjectStatus(data.get("status", "CREATED")),
-            priority=ProjectPriority(data.get("priority", "medium")),
-            category=ProjectCategory(data.get("category", "other")),
-            chain=ProjectChain(data.get("chain", "ethereum")),
+            status=status,
+            priority=priority,
+            category=category,
+            chain=chain,
             config=data.get("config", {}),
             spec_yaml=data.get("spec_yaml", ""),
             version=data.get("version", "1.0.0"),
-            metadata=data.get("metadata", {}),
+            extra_metadata=data.get("metadata", {}),
             tags=data.get("tags", []),
             is_template=data.get("is_template", False),
             is_public=data.get("is_public", False),
@@ -808,7 +848,7 @@ if __name__ == "__main__":
     - lending
 """,
         config={"deployment": {"safe_address": "0x123..."}},
-        metadata={"team": "Dev Squad", "priority": "high"},
+        extra_metadata={"team": "Dev Squad", "priority": "high"},
         priority=ProjectPriority.HIGH,
         category=ProjectCategory.DEFI,
         tags=["defi", "lending", "security"]

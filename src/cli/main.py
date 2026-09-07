@@ -19,7 +19,7 @@ import json
 import time
 
 from src.cli.commands import cli as commands_cli
-from src.config.settings import settings, load_settings, reload_settings
+from src.config.settings import settings
 from src.core.exceptions import PipelineError
 
 # ==============================================================================
@@ -184,8 +184,13 @@ def load_profile(profile_name: str) -> bool:
             if hasattr(settings, key):
                 setattr(settings, key, value)
         
-        # Recharger les settings
-        reload_settings()
+        # Recharger les settings (si la fonction existe)
+        try:
+            from src.config.settings import reload_settings
+            reload_settings()
+        except ImportError:
+            # Fallback: rien
+            pass
         
         click.echo(success(f"✅ Profile '{profile_name}' loaded"))
         return True
@@ -211,8 +216,24 @@ def save_profile(profile_name: str) -> bool:
     profile_path = profile_dir / f"{profile_name}.json"
     
     try:
-        # Récupérer les settings
-        settings_dict = settings.to_dict(show_secrets=False)
+        # Récupérer les settings manuellement de manière robuste
+        settings_dict = {}
+        attrs = ['env', 'debug', 'database', 'redis', 'llm', 'chroma', 'pipeline', 'api', 'security', 'logging']
+        for attr in attrs:
+            if hasattr(settings, attr):
+                val = getattr(settings, attr)
+                if hasattr(val, 'model_dump'):
+                    settings_dict[attr] = val.model_dump()
+                elif hasattr(val, 'to_dict'):
+                    settings_dict[attr] = val.to_dict()
+                elif hasattr(val, 'dict'):
+                    settings_dict[attr] = val.dict()
+                elif hasattr(val, 'value'):
+                    settings_dict[attr] = val.value
+                elif isinstance(val, (dict, list, str, int, float, bool, type(None))):
+                    settings_dict[attr] = val
+                else:
+                    settings_dict[attr] = str(val)
         
         with open(profile_path, 'w') as f:
             json.dump(settings_dict, f, indent=2, default=str)
@@ -347,10 +368,14 @@ def help(ctx: CliContext):
 @pass_context
 def version(ctx: CliContext):
     """Affiche la version détaillée."""
+    env_value = getattr(settings, 'env', 'development')
+    env_str = env_value.value if hasattr(env_value, 'value') else str(env_value)
+    debug_value = getattr(settings, 'debug', False)
+    
     click.echo(f"Smart Contract Dev Pipeline v{VERSION}")
     click.echo(f"Python: {sys.version.split()[0]}")
-    click.echo(f"Environment: {settings.env.value}")
-    click.echo(f"Debug: {settings.debug}")
+    click.echo(f"Environment: {env_str}")
+    click.echo(f"Debug: {debug_value}")
 
 
 # ==============================================================================
@@ -370,19 +395,23 @@ def profile_list(ctx: CliContext):
     click.echo("📋 Available profiles:")
     click.echo("  " + "-" * 40)
     
+    found = False
+    
     # Profiles globaux
     global_dir = Path.home() / f".{CLI_NAME}"
     if global_dir.exists():
         for profile_file in global_dir.glob("*.json"):
             click.echo(f"  {profile_file.stem} (global)")
+            found = True
     
     # Profiles locaux
     local_dir = Path(f".{CLI_NAME}")
     if local_dir.exists():
         for profile_file in local_dir.glob("*.json"):
             click.echo(f"  {profile_file.stem} (local)")
+            found = True
     
-    if not any([global_dir.exists(), local_dir.exists()]):
+    if not found:
         click.echo("  No profiles found")
         click.echo(f"  Run 'pipeline profile create <name>' to create one")
 
@@ -499,8 +528,9 @@ def handle_exception(exc, ctx: Optional[CliContext] = None):
     elif isinstance(exc, click.Abort):
         click.echo("\n⚠️  Aborted", err=True)
     else:
+        debug_value = getattr(settings, 'debug', False)
         click.echo(error(f"❌ Error: {exc}"), err=True)
-        if settings.debug:
+        if debug_value:
             import traceback
             click.echo(traceback.format_exc(), err=True)
 
@@ -515,8 +545,8 @@ def main():
         # Configurer le logging par défaut
         configure_cli_logging()
         
-        # Exécuter la CLI avec le contexte
-        cli(obj=ctx)
+        # Exécuter la CLI avec le contexte (standalone_mode=False permet de capturer les exceptions ici)
+        cli(obj=ctx, standalone_mode=False)
         
         # Mettre à jour les métriques
         ctx.commands_executed += 1

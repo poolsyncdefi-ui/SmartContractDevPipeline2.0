@@ -4,7 +4,7 @@
 Formal verifier for the Smart Contract Dev Pipeline.
 F31 – src/security/formal_verifier.py
 
-Rôle Fonctionnel : Wrapper pour Halmos effectuant des preuves mathematiques symboliques.
+Role Fonctionnel : Wrapper pour Halmos effectuant des preuves mathematiques symboliques.
 Ce module implemente l'integration avec Halmos, un moteur de verification formelle
 base sur Z3, pour effectuer des preuves symboliques sur les smart contracts.
 Il supporte:
@@ -25,14 +25,22 @@ import tempfile
 import json
 import re
 from typing import Dict, Any, Optional, List, Tuple, Set
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum
 import logging
 
 # Import des modules du pipeline
-from src.core.exceptions import ValidationError
-from src.config.settings import settings
+from src.core.exceptions import PipelineError
+
+# Tentative d'import des settings avec fallback
+try:
+    from src.config.settings import settings
+except ImportError:
+    # Fallback pour les tests
+    class _Settings:
+        max_auto_debug_retries = 3
+    settings = _Settings()
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
@@ -65,7 +73,7 @@ class PropertyType(str, Enum):
 class VerificationProperty:
     """
     Propriete a verifier.
-    
+
     Attributes:
         name (str): Nom de la propriete
         description (str): Description de la propriete
@@ -82,19 +90,18 @@ class VerificationProperty:
     function: Optional[str] = None
     contract: Optional[str] = None
     params: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_halmos_arg(self) -> str:
-        """Convertit la propriete en argument Halmos."""
-        if self.function:
-            return f"--match-test {self.function}"
-        return f"--match-test {self.name}"
+
+    def to_halmos_arg(self) -> List[str]:
+        """Convertit la propriete en arguments Halmos sous forme de liste d'arguments distincts."""
+        target = self.function or self.name
+        return ["--match-test", target]
 
 
 @dataclass
 class VerificationReport:
     """
     Rapport de verification formelle.
-    
+
     Attributes:
         timestamp (datetime): Date du rapport
         contract_name (str): Nom du contrat verifie
@@ -110,7 +117,7 @@ class VerificationReport:
         execution_time (float): Temps d'execution en secondes
         details (Dict): Details supplementaires
     """
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     contract_name: str = ""
     properties: List[VerificationProperty] = field(default_factory=list)
     results: Dict[str, VerificationResult] = field(default_factory=dict)
@@ -123,13 +130,13 @@ class VerificationReport:
     error: str = ""
     execution_time: float = 0.0
     details: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         """Convertit le rapport en dictionnaire."""
         return {
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "contract_name": self.contract_name,
-            "properties": [p.__dict__ for p in self.properties],
+            "properties": [{"name": p.name, "description": p.description, "type": p.type.value, "expression": p.expression, "function": p.function, "contract": p.contract} for p in self.properties],
             "results": {k: v.value for k, v in self.results.items()},
             "counterexamples": self.counterexamples,
             "passed_count": self.passed_count,
@@ -146,10 +153,10 @@ class VerificationReport:
 class FormalVerifier:
     """
     Verificateur formel base sur Halmos.
-    
+
     Cette classe fournit une interface complete pour la verification formelle
     de smart contracts avec Halmos.
-    
+
     Attributes:
         project_path (str): Chemin du projet
         timeout (int): Timeout en secondes
@@ -158,7 +165,7 @@ class FormalVerifier:
         _stats (Dict): Statistiques de verification
         _cache (Dict): Cache des resultats
     """
-    
+
     # Proprietes predefinies pour les contrats ERC20
     ERC20_PROPERTIES = [
         VerificationProperty(
@@ -180,7 +187,7 @@ class FormalVerifier:
             expression="transfer(from, to, amount) => balanceOf(from) >= amount"
         )
     ]
-    
+
     def __init__(
         self,
         project_path: str = ".",
@@ -190,7 +197,7 @@ class FormalVerifier:
     ):
         """
         Initialise le verificateur formel.
-        
+
         Args:
             project_path: Chemin du projet
             timeout: Timeout en secondes (defaut: 300)
@@ -201,7 +208,7 @@ class FormalVerifier:
         self.timeout = timeout
         self.halmos_path = halmos_path
         self.solc_path = solc_path
-        
+
         # Cache et statistiques
         self._cache: Dict[str, VerificationReport] = {}
         self._stats = {
@@ -214,13 +221,13 @@ class FormalVerifier:
             "passed_properties": 0,
             "failed_properties": 0
         }
-        
+
         logger.info(f"FormalVerifier initialized (timeout={timeout}s)")
-    
+
     # =========================================================================
     # VERIFICATION D'INVARIANTS
     # =========================================================================
-    
+
     async def verify_invariants(
         self,
         contract_path: Optional[str] = None,
@@ -231,72 +238,73 @@ class FormalVerifier:
     ) -> Dict[str, Any]:
         """
         Execute la verification formelle des invariants.
-        
+
         Args:
             contract_path: Chemin du contrat (optionnel)
             check_function: Nom de la fonction a verifier (optionnel)
             properties: Liste des proprietes a verifier (optionnel)
             timeout: Timeout personnalise (optionnel)
             use_cache: Utiliser le cache (defaut: True)
-            
+
         Returns:
             Dict: Resultat de la verification
         """
-        start_time = datetime.utcnow()
-        
-        # Generation d'une cle de cache
-        cache_key = f"{contract_path}_{check_function}_{timeout}"
-        if use_cache and cache_key in self._cache:
-            logger.info(f"Cache hit for {cache_key}")
-            return self._cache[cache_key].to_dict()
-        
+        start_time = datetime.now(timezone.utc)
+
         # Preparation des proprietes
         if not properties:
             properties = self.ERC20_PROPERTIES
-        
+
         if check_function:
             # Filtrer les proprietes pour la fonction specifique
-            properties = [p for p in properties if p.function == check_function]
-        
-        # Construction de la commande
+            properties = [p for p in properties if p.function == check_function or p.name == check_function]
+
+        # Generation d'une cle de cache robuste basee sur le contenu des proprietes
+        prop_signatures = sorted([p.name for p in properties])
+        cache_key = f"{contract_path}_{check_function}_{timeout}_{prop_signatures}"
+        if use_cache and cache_key in self._cache:
+            logger.info(f"Cache hit for {cache_key}")
+            return self._cache[cache_key].to_dict()
+
+        # Construction de la commande avec des arguments separes
         cmd = [self.halmos_path]
-        
+
         if contract_path:
             cmd.append(contract_path)
-        
+
         if properties:
             for prop in properties:
-                cmd.append(prop.to_halmos_arg())
-        
+                cmd.extend(prop.to_halmos_arg())
+
         if timeout:
             cmd.extend(["--timeout", str(timeout)])
-        
+
         # Execution de Halmos
         result = await self._run_halmos(cmd, timeout or self.timeout)
-        
+
         # Parsing du resultat
         report = self._parse_halmos_output(result, properties, contract_path)
-        report.execution_time = (datetime.utcnow() - start_time).total_seconds()
-        
+        report.execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
+
         # Mise en cache
         if use_cache:
             self._cache[cache_key] = report
-        
+
         # Mise a jour des statistiques
         self._stats["total_verifications"] += 1
         self._stats["total_properties"] += report.total_count
         self._stats["passed_properties"] += report.passed_count
         self._stats["failed_properties"] += report.failed_count
-        
+
         if report.passed:
             self._stats["passed_verifications"] += 1
         else:
             self._stats["failed_verifications"] += 1
-        
+
         logger.info(f"Verification completed: {report.passed_count}/{report.total_count} passed")
-        
+
         return report.to_dict()
-    
+
     async def verify_contract(
         self,
         contract_path: str,
@@ -305,12 +313,12 @@ class FormalVerifier:
     ) -> Dict[str, Any]:
         """
         Verifie un contrat complet.
-        
+
         Args:
             contract_path: Chemin du contrat
             properties: Proprietes a verifier (optionnel)
             timeout: Timeout personnalise (optionnel)
-            
+
         Returns:
             Dict: Rapport de verification
         """
@@ -320,7 +328,7 @@ class FormalVerifier:
             properties=properties,
             timeout=timeout
         )
-    
+
     async def verify_property(
         self,
         property_name: str,
@@ -329,12 +337,12 @@ class FormalVerifier:
     ) -> Dict[str, Any]:
         """
         Verifie une propriete specifique.
-        
+
         Args:
             property_name: Nom de la propriete
             contract_path: Chemin du contrat (optionnel)
             timeout: Timeout personnalise (optionnel)
-            
+
         Returns:
             Dict: Resultat de la verification
         """
@@ -343,7 +351,7 @@ class FormalVerifier:
             check_function=property_name,
             timeout=timeout
         )
-    
+
     async def verify_erc20_contract(
         self,
         contract_path: str,
@@ -351,11 +359,11 @@ class FormalVerifier:
     ) -> Dict[str, Any]:
         """
         Verifie un contrat ERC20 avec les proprietes standard.
-        
+
         Args:
             contract_path: Chemin du contrat
             timeout: Timeout personnalise (optionnel)
-            
+
         Returns:
             Dict: Rapport de verification
         """
@@ -364,11 +372,11 @@ class FormalVerifier:
             properties=self.ERC20_PROPERTIES,
             timeout=timeout
         )
-    
+
     # =========================================================================
     # EXECUTION D'HALMOS
     # =========================================================================
-    
+
     async def _run_halmos(
         self,
         cmd: List[str],
@@ -376,11 +384,11 @@ class FormalVerifier:
     ) -> Dict[str, Any]:
         """
         Execute Halmos avec les parametres donnes.
-        
+
         Args:
             cmd: Commande et arguments
             timeout: Timeout en secondes
-            
+
         Returns:
             Dict: Resultat de l'execution
         """
@@ -392,15 +400,18 @@ class FormalVerifier:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             try:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(),
                     timeout=timeout
                 )
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
                 self._stats["timeouts"] += 1
                 return {
                     "success": False,
@@ -409,10 +420,10 @@ class FormalVerifier:
                     "returncode": -1,
                     "timed_out": True
                 }
-            
+
             output = stdout.decode('utf-8', errors='ignore')
             error = stderr.decode('utf-8', errors='ignore')
-            
+
             return {
                 "success": proc.returncode == 0,
                 "output": output,
@@ -420,7 +431,7 @@ class FormalVerifier:
                 "returncode": proc.returncode,
                 "timed_out": False
             }
-            
+
         except FileNotFoundError:
             self._stats["errors"] += 1
             logger.error(f"Halmos not found: {self.halmos_path}")
@@ -441,11 +452,11 @@ class FormalVerifier:
                 "returncode": -1,
                 "timed_out": False
             }
-    
+
     # =========================================================================
     # PARSING DES RESULTATS
     # =========================================================================
-    
+
     def _parse_halmos_output(
         self,
         result: Dict[str, Any],
@@ -454,12 +465,12 @@ class FormalVerifier:
     ) -> VerificationReport:
         """
         Parse la sortie d'Halmos.
-        
+
         Args:
             result: Resultat de l'execution
             properties: Proprietes verifiees
             contract_path: Chemin du contrat
-            
+
         Returns:
             VerificationReport: Rapport de verification
         """
@@ -469,21 +480,21 @@ class FormalVerifier:
             output=result.get("output", ""),
             error=result.get("error", "")
         )
-        
+
         # Si l'execution a echoue
-        if not result.get("success", False):
+        if not result.get("success", False) or result.get("timed_out", False):
             report.passed = False
             for prop in properties:
-                report.results[prop.name] = VerificationResult.ERROR
+                report.results[prop.name] = VerificationResult.ERROR if result.get("error") else VerificationResult.TIMEOUT
             return report
-        
+
         output = result.get("output", "")
-        
+
         # Parsing des resultats
         for prop in properties:
             result_key = self._determine_result(prop, output)
             report.results[prop.name] = result_key
-            
+
             if result_key == VerificationResult.PASSED:
                 report.passed_count += 1
             elif result_key == VerificationResult.FAILED:
@@ -492,15 +503,15 @@ class FormalVerifier:
                 counterexample = self._extract_counterexample(prop, output)
                 if counterexample:
                     report.counterexamples[prop.name] = counterexample
-        
+
         report.total_count = len(properties)
         report.passed = report.failed_count == 0
-        
+
         # Ajout des details supplementaires
         report.details = self._extract_details(output)
-        
+
         return report
-    
+
     def _determine_result(
         self,
         prop: VerificationProperty,
@@ -508,32 +519,38 @@ class FormalVerifier:
     ) -> VerificationResult:
         """
         Determine le resultat d'une propriete.
-        
+
         Args:
             prop: Propriete verifiee
             output: Sortie d'Halmos
-            
+
         Returns:
             VerificationResult: Resultat de la verification
         """
-        # Recherche de patterns dans la sortie
-        if f"PASSED: {prop.name}" in output or f"PASSED: {prop.function}" in output:
+        prop_name = prop.name
+        prop_func = prop.function
+
+        if prop_func and (f"PASSED: {prop_func}" in output or f"✅ {prop_func}" in output or f"[PASSED] {prop_func}" in output):
             return VerificationResult.PASSED
-        
-        if f"FAILED: {prop.name}" in output or f"FAILED: {prop.function}" in output:
+        if prop_func and (f"FAILED: {prop_func}" in output or f"❌ {prop_func}" in output or f"[FAILED] {prop_func}" in output):
             return VerificationResult.FAILED
-        
-        if "Violated" in output and prop.name in output:
+
+        if f"PASSED: {prop_name}" in output or f"✅ {prop_name}" in output or f"[PASSED] {prop_name}" in output:
+            return VerificationResult.PASSED
+        if f"FAILED: {prop_name}" in output or f"❌ {prop_name}" in output or f"[FAILED] {prop_name}" in output:
             return VerificationResult.FAILED
-        
+
+        if "Violated" in output and prop_name in output:
+            return VerificationResult.FAILED
+
         if "Timeout" in output:
             return VerificationResult.TIMEOUT
-        
+
         if "Error" in output:
             return VerificationResult.ERROR
-        
+
         return VerificationResult.UNKNOWN
-    
+
     def _extract_counterexample(
         self,
         prop: VerificationProperty,
@@ -541,69 +558,68 @@ class FormalVerifier:
     ) -> Optional[str]:
         """
         Extrait le contre-exemple de la sortie.
-        
+
         Args:
             prop: Propriete verifiee
             output: Sortie d'Halmos
-            
+
         Returns:
             Optional[str]: Contre-exemple ou None
         """
-        # Recherche du contre-exemple dans la sortie
         patterns = [
             rf"Counterexample for {prop.name}: (.+)",
             rf"Violated: (.+)",
             rf"Counterexample: (.+)",
-            r"Counterexample: \n(.+)"
+            r"Counterexample: \n(.+)",
+            rf"❌ {prop.name}: (.+)",
+            rf"[FAILED] {prop.name}: (.+)"
         ]
-        
+
         for pattern in patterns:
             match = re.search(pattern, output, re.DOTALL | re.IGNORECASE)
             if match:
                 return match.group(1).strip()
-        
-        # Si pas de contre-exemple structure, extraire les lignes pertinentes
+
         lines = output.split('\n')
         for i, line in enumerate(lines):
-            if prop.name in line and "Counterexample" in line:
+            if prop.name in line and ("Counterexample" in line or "Violated" in line or "❌" in line):
                 return '\n'.join(lines[i:i+10])
-        
+
         return None
-    
+
     def _extract_details(self, output: str) -> Dict[str, Any]:
         """
         Extrait les details supplementaires de la sortie.
-        
+
         Args:
             output: Sortie d'Halmos
-            
+
         Returns:
             Dict: Details extraits
         """
         details = {}
-        
-        # Extraction des statistiques
+
         stats_match = re.search(r"(\d+) properties verified", output)
         if stats_match:
             details["properties_verified"] = int(stats_match.group(1))
-        
+
         time_match = re.search(r"Time: (\d+\.?\d*)s", output)
         if time_match:
             details["verification_time"] = float(time_match.group(1))
-        
+
         return details
-    
+
     # =========================================================================
     # GENERATION DE RAPPORTS
     # =========================================================================
-    
+
     def generate_report_summary(self, report: VerificationReport) -> str:
         """
         Genere un resume du rapport de verification.
-        
+
         Args:
             report: Rapport de verification
-            
+
         Returns:
             str: Resume du rapport
         """
@@ -619,35 +635,35 @@ class FormalVerifier:
             "",
             "📋 Property Results:"
         ]
-        
+
         for prop in report.properties:
             result = report.results.get(prop.name, VerificationResult.UNKNOWN)
             status_icon = "✅" if result == VerificationResult.PASSED else "❌" if result == VerificationResult.FAILED else "⚠️"
             lines.append(f"  {status_icon} {prop.name}: {result.value}")
-            
+
             if prop.name in report.counterexamples:
                 lines.append(f"     Counterexample: {report.counterexamples[prop.name][:100]}...")
-        
+
         if report.failed_count > 0:
             lines.append("")
             lines.append("💡 Recommendations:")
             for prop in report.properties:
                 if prop.name in report.counterexamples:
                     lines.append(f"  - Fix {prop.name}: Check the counterexample above")
-        
+
         lines.append("")
         lines.append("=" * 40)
-        
+
         return "\n".join(lines)
-    
+
     # =========================================================================
     # STATISTIQUES
     # =========================================================================
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Retourne les statistiques du verificateur.
-        
+
         Returns:
             Dict: Statistiques
         """
@@ -657,7 +673,7 @@ class FormalVerifier:
             "project_path": self.project_path,
             "timeout": self.timeout
         }
-    
+
     def clear_cache(self) -> None:
         """
         Vide le cache.
@@ -665,18 +681,18 @@ class FormalVerifier:
         cache_size = len(self._cache)
         self._cache.clear()
         logger.info(f"Cache cleared ({cache_size} entries)")
-    
+
     # =========================================================================
     # REPRESENTATION
     # =========================================================================
-    
+
     def __repr__(self) -> str:
         return f"<FormalVerifier(project_path='{self.project_path}', cache={len(self._cache)})>"
-    
+
     def to_dict(self) -> Dict:
         """
         Convertit le verificateur en dictionnaire.
-        
+
         Returns:
             Dict: Representation
         """

@@ -1,28 +1,20 @@
-# src/agents/base/skill.py
+# ==============================================================================
+# Smart Contract Dev Pipeline 2.0 - Base Skill
+# ==============================================================================
+# Fichier: src/agents/base/skill.py
+# Description: Encapsule une compétence métier modulaire injectable avec support
+#              du RAG, mise en cache, validation Pydantic et exécution LLM.
+# ==============================================================================
 
-"""
-Base skill class for the Smart Contract Dev Pipeline.
-F15 – src/agents/base/skill.py
-
-Rôle Fonctionnel : Encapsule une competence metier modulaire injectable.
-Ce module definit la classe de base pour toutes les competences expertes
-du pipeline. Une competence est un module autonome comprenant trois
-composants indissociables:
-1. Prompt Template & Rules: Directives d'expertise metier
-2. Tooling Executable: Wrapper Python encapsulant les appels systeme
-3. Schema Pydantic: Contrat de donnees strict pour les entrees/sorties
-
-Les competences sont au coeur du moteur d'acquisition dynamique (Skill Engine)
-et peuvent etre creees a la volee par l'Agent Architecte.
-"""
 from abc import ABC, abstractmethod
-from pydantic import BaseModel, ValidationError
-from typing import Dict, Any, Type, Optional, List, Tuple
-from datetime import datetime
+from pydantic import BaseModel, ValidationError, create_model
+from typing import Dict, Any, Type, Optional, List
+from datetime import datetime, timezone
 import json
 import logging
 import hashlib
 from enum import Enum
+import asyncio
 
 # Import des modules du pipeline
 from src.core.models import Skill as SkillConfig
@@ -34,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class SkillStatus(str, Enum):
     """
-    Enum des statuts possibles pour une competence.
+    Enum des statuts possibles pour une compétence.
     """
     INITIALIZED = "initialized"
     VALIDATED = "validated"
@@ -46,38 +38,32 @@ class SkillStatus(str, Enum):
 
 class BaseSkill(ABC):
     """
-    Classe de base pour toutes les competences du pipeline.
+    Classe de base pour toutes les compétences du pipeline.
     
-    Une competence est un module autonome qui encapsule une expertise metier.
-    Elle est composee de:
-    - Des regles de prompt (expertise)
-    - Un wrapper d'outils (execution)
-    - Un schema Pydantic (validation)
-    
-    Les competences peuvent etre:
-    - Pre-definies: Incluses dans le catalogue initial
-    - Dynamiques: Creees a la volee par l'Agent Architecte
-    - Reutilisables: Stockees dans le SkillRegistry pour d'autres projets
+    Une compétence est un module autonome qui encapsule une expertise métier.
+    Elle est composée de :
+    - Des règles de prompt (expertise)
+    - Un wrapper d'outils (exécution)
+    - Un schéma Pydantic (validation)
     
     Attributes:
-        skill_id (str): Identifiant unique de la competence
-        name (str): Nom descriptif de la competence
-        description (str): Description detaillee de la competence
-        input_schema (Type[BaseModel]): Schema Pydantic pour la validation
-        version (str): Version de la competence (semver)
-        status (SkillStatus): Statut actuel de la competence
-        metadata (Dict): Metadonnees supplementaires
+        skill_id (str): Identifiant unique de la compétence
+        name (str): Nom descriptif de la compétence
+        description (str): Description détaillée de la compétence
+        input_schema (Type[BaseModel]): Schéma Pydantic pour la validation
+        version (str): Version de la compétence (semver)
+        status (SkillStatus): Statut actuel de la compétence
+        metadata (Dict): Métadonnées supplémentaires
         llm_client: Client LLM pour les appels IA
         knowledge_base: Base de connaissances pour le RAG
-        cache_enabled (bool): Active la mise en cache des resultats
-        execution_history (List[Dict]): Historique des executions
+        cache_enabled (bool): Active la mise en cache des résultats
+        execution_history (List[Dict]): Historique des exécutions
     """
     
-    # Attributs de classe - doivent etre definis par les classes filles
-    skill_id: str = None
-    name: str = None
-    description: str = None
-    input_schema: Type[BaseModel] = None
+    skill_id: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    input_schema: Optional[Type[BaseModel]] = None
     version: str = "1.0.0"
     
     def __init__(
@@ -89,29 +75,24 @@ class BaseSkill(ABC):
         max_retries: int = 3
     ):
         """
-        Initialise une nouvelle competence.
+        Initialise une nouvelle compétence.
         
         Args:
-            config: Configuration de la competence (SkillConfig)
+            config: Configuration de la compétence (SkillConfig)
             llm_client: Client LLM pour les appels IA (optionnel)
             knowledge_base: Base de connaissances pour le RAG (optionnel)
-            cache_enabled: Active la mise en cache (defaut: True)
-            max_retries: Nombre maximum de tentatives (defaut: 3)
+            cache_enabled: Active la mise en cache (défaut: True)
+            max_retries: Nombre maximum de tentatives (défaut: 3)
         """
-        # Validation de la configuration
         if not config or not config.skill_id:
             raise ValueError("Skill configuration is required with a valid skill_id")
         
-        # Attribution des proprietes depuis la config
         self.skill_id = config.skill_id
         self.name = config.name
         self.description = getattr(config, 'description', 'No description provided')
         
-        # Si input_schema n'est pas defini par la classe fille, essayer de le charger
         if not self.input_schema:
             try:
-                from pydantic import create_model
-                # Creation d'un modele dynamique depuis la config
                 self.input_schema = self._create_dynamic_schema(config)
                 logger.info(f"Dynamic schema created for skill {self.skill_id}")
             except Exception as e:
@@ -124,7 +105,7 @@ class BaseSkill(ABC):
         self.max_retries = max_retries
         self.status = SkillStatus.INITIALIZED
         self.metadata: Dict[str, Any] = {
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "version": self.version,
             "cache_enabled": cache_enabled
         }
@@ -137,41 +118,14 @@ class BaseSkill(ABC):
     @abstractmethod
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute la competence avec les parametres donnes.
-        
-        Cette methode doit etre implementee par chaque competence specifique.
-        Elle inclut automatiquement:
-        - La validation des parametres
-        - La gestion des erreurs
-        - Le logging d'execution
-        - La mise en cache (si activee)
-        
-        Args:
-            params: Parametres d'entree pour la competence
-            
-        Returns:
-            Dict contenant le resultat de l'execution
-            
-        Raises:
-            ValidationError: Si les parametres sont invalides
-            LLMError: Si une erreur LLM survient
-            PipelineError: Pour les autres erreurs du pipeline
+        Exécute la compétence avec les paramètres donnés.
         """
         pass
 
     @abstractmethod
     def get_system_prompt_rules(self) -> str:
         """
-        Retourne les regles systeme pour le prompt.
-        
-        Ces regles sont injectees dans le prompt de l'agent pour guider
-        le comportement du LLM. Elles doivent inclure:
-        - Les contraintes metier
-        - Les anti-patterns a eviter
-        - Les exemples concrets (few-shot)
-        
-        Returns:
-            str: Regles systeme formatees pour le prompt
+        Retourne les règles système pour le prompt.
         """
         pass
 
@@ -181,34 +135,17 @@ class BaseSkill(ABC):
         validate_output: bool = True
     ) -> Dict[str, Any]:
         """
-        Execute la competence avec validation complete.
-        
-        Cette methode encapsule l'execution avec:
-        - Validation des parametres d'entree
-        - Verification du cache
-        - Execution avec retry
-        - Validation de la sortie
-        - Logging et metriques
-        
-        Args:
-            params: Parametres d'entree
-            validate_output: Valider la sortie (defaut: True)
-            
-        Returns:
-            Dict: Resultat valide de l'execution
-            
-        Raises:
-            ValidationError: Si la validation des entrees/sorties echoue
+        Exécute la compétence avec validation complète (paramètres, cache, retry, sortie).
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         self.status = SkillStatus.EXECUTING
         
         try:
-            # 1. Validation des parametres d'entree
+            # 1. Validation des paramètres d'entrée
             validated_params = self.validate_parameters(params)
             logger.debug(f"Parameters validated for skill {self.skill_id}")
             
-            # 2. Verification du cache
+            # 2. Vérification du cache
             cache_key = self._generate_cache_key(validated_params)
             if self.cache_enabled and cache_key in self._cache:
                 logger.info(f"Cache hit for skill {self.skill_id}")
@@ -217,41 +154,34 @@ class BaseSkill(ABC):
                 cached_result["_from_cache"] = True
                 return cached_result
             
-            # 3. Execution avec retry
+            # 3. Exécution avec retry
             result = None
             last_error = None
             
             for attempt in range(self.max_retries):
                 try:
-                    # Preparation du contexte
                     context = self._prepare_execution_context(validated_params)
-                    
-                    # Execution de la competence
                     result = await self.execute(context)
                     
-                    # Validation de la sortie
                     if validate_output:
                         self._validate_output(result)
                     
-                    # Succes - mise en cache
                     if self.cache_enabled:
                         self._cache[cache_key] = result
                     
                     self.status = SkillStatus.COMPLETED
                     self._execution_count += 1
                     
-                    # Ajout des metriques
+                    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
                     result["_metadata"] = {
                         "skill_id": self.skill_id,
-                        "execution_time": (datetime.utcnow() - start_time).total_seconds(),
+                        "execution_time": duration,
                         "attempt": attempt + 1,
                         "cached": False,
                         "version": self.version
                     }
                     
-                    # Logging
                     await self._log_execution(params, result, success=True)
-                    
                     logger.info(f"Skill {self.skill_id} executed successfully")
                     return result
                     
@@ -261,10 +191,8 @@ class BaseSkill(ABC):
                         f"Skill {self.skill_id} failed (attempt {attempt + 1}/{self.max_retries}): {last_error}"
                     )
                     
-                    # Si ce n'est pas la derniere tentative, attendre
                     if attempt < self.max_retries - 1:
-                        import asyncio
-                        wait_time = 2 ** (attempt + 1)  # Backoff exponentiel
+                        wait_time = 2 ** (attempt + 1)
                         await asyncio.sleep(wait_time)
                     else:
                         raise
@@ -273,7 +201,6 @@ class BaseSkill(ABC):
                     logger.error(f"Unexpected error in skill {self.skill_id}: {str(e)}")
                     raise PipelineError(f"Skill execution failed: {str(e)}")
             
-            # Si on arrive ici, toutes les tentatives ont echoue
             self.status = SkillStatus.FAILED
             raise PipelineError(f"All retries failed for skill {self.skill_id}: {last_error}")
             
@@ -283,28 +210,18 @@ class BaseSkill(ABC):
             raise
         
         finally:
-            self.status = SkillStatus.COMPLETED if self.status != SkillStatus.FAILED else self.status
+            if self.status != SkillStatus.FAILED:
+                self.status = SkillStatus.COMPLETED
 
     def validate_parameters(self, params: Dict[str, Any]) -> BaseModel:
-        """
-        Valide les parametres d'entree avec le schema Pydantic.
-        
-        Args:
-            params: Parametres a valider
-            
-        Returns:
-            BaseModel: Modele valide
-            
-        Raises:
-            ValidationError: Si les parametres sont invalides
-        """
+        """Valide les paramètres d'entrée avec le schéma Pydantic."""
         if not self.input_schema:
             logger.warning(f"No input schema defined for skill {self.skill_id}")
-            # Retourne un modele vide si pas de schema
-            from pydantic import create_model
             return create_model("EmptyModel")(**{})
         
         try:
+            if isinstance(params, BaseModel):
+                return params
             validated = self.input_schema(**params)
             logger.debug(f"Parameters validated successfully for {self.skill_id}")
             return validated
@@ -313,15 +230,7 @@ class BaseSkill(ABC):
             raise
 
     def _validate_output(self, output: Dict[str, Any]) -> None:
-        """
-        Valide la sortie de la competence.
-        
-        Args:
-            output: Sortie a valider
-            
-        Raises:
-            ValidationError: Si la sortie est invalide
-        """
+        """Valide la sortie de la compétence."""
         if not isinstance(output, dict):
             raise ValidationError("Output must be a dictionary")
         
@@ -332,15 +241,7 @@ class BaseSkill(ABC):
             raise ValidationError(f"Invalid status: {output['status']}")
 
     def get_system_prompt_rules(self) -> str:
-        """
-        Retourne les regles systeme pour le prompt.
-        
-        Cette methode peut etre surchargee par les classes filles
-        pour fournir des regles specifiques.
-        
-        Returns:
-            str: Regles systeme par defaut
-        """
+        """Retourne les règles système pour le prompt."""
         return f"""
         You are using the skill '{self.name}' ({self.skill_id}).
         Description: {self.description}
@@ -354,48 +255,33 @@ class BaseSkill(ABC):
         """
 
     def set_llm_client(self, client) -> None:
-        """
-        Injecte le client LLM.
-        
-        Args:
-            client: Client LLM a utiliser
-        """
+        """Injecte le client LLM."""
         self.llm_client = client
         logger.debug(f"LLM client set for skill {self.skill_id}")
 
     def set_knowledge_base(self, kb) -> None:
-        """
-        Injecte la base de connaissances.
-        
-        Args:
-            kb: Base de connaissances a utiliser
-        """
+        """Injecte la base de connaissances."""
         self.knowledge_base = kb
         logger.debug(f"Knowledge base set for skill {self.skill_id}")
 
     def enable_cache(self) -> None:
-        """Active la mise en cache des resultats."""
+        """Active la mise en cache des résultats."""
         self.cache_enabled = True
         logger.info(f"Cache enabled for skill {self.skill_id}")
 
     def disable_cache(self) -> None:
-        """Desactive la mise en cache des resultats."""
+        """Désactive la mise en cache des résultats."""
         self.cache_enabled = False
         logger.info(f"Cache disabled for skill {self.skill_id}")
 
     def clear_cache(self) -> None:
-        """Vide le cache de la competence."""
+        """Vide le cache de la compétence."""
         cache_size = len(self._cache)
         self._cache.clear()
         logger.info(f"Cache cleared for skill {self.skill_id} ({cache_size} entries)")
 
     def get_statistics(self) -> Dict[str, Any]:
-        """
-        Retourne les statistiques d'execution de la competence.
-        
-        Returns:
-            Dict: Statistiques d'execution
-        """
+        """Retourne les statistiques d'exécution de la compétence."""
         successful = [h for h in self.execution_history if h.get("success", False)]
         failed = [h for h in self.execution_history if not h.get("success", True)]
         
@@ -407,7 +293,7 @@ class BaseSkill(ABC):
             "total_executions": len(self.execution_history),
             "successful": len(successful),
             "failed": len(failed),
-            "success_rate": len(successful) / len(self.execution_history) if self.execution_history else 0,
+            "success_rate": len(successful) / len(self.execution_history) if self.execution_history else 0.0,
             "cache_size": len(self._cache),
             "cache_enabled": self.cache_enabled,
             "execution_count": self._execution_count,
@@ -415,12 +301,7 @@ class BaseSkill(ABC):
         }
 
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Convertit la competence en dictionnaire pour la serialisation.
-        
-        Returns:
-            Dict: Representation dictionnaire de la competence
-        """
+        """Convertit la compétence en dictionnaire pour la sérialisation."""
         return {
             "skill_id": self.skill_id,
             "name": self.name,
@@ -434,35 +315,16 @@ class BaseSkill(ABC):
         }
 
     def _generate_cache_key(self, params: BaseModel) -> str:
-        """
-        Genere une cle de cache a partir des parametres.
-        
-        Args:
-            params: Parametres valides
-            
-        Returns:
-            str: Cle de cache unique
-        """
-        # Serialisation stable des parametres
-        param_str = json.dumps(params.dict(), sort_keys=True)
+        """Génère une clé de cache à partir des paramètres."""
+        param_str = json.dumps(params.model_dump(), sort_keys=True)
         return hashlib.sha256(param_str.encode()).hexdigest()
 
     def _prepare_execution_context(self, params: BaseModel) -> Dict[str, Any]:
-        """
-        Prepare le contexte d'execution avec les connaissances RAG.
+        """Prépare le contexte d'exécution avec les connaissances RAG."""
+        context = params.model_dump()
         
-        Args:
-            params: Parametres valides
-            
-        Returns:
-            Dict: Contexte d'execution enrichi
-        """
-        context = params.dict()
-        
-        # Ajout des connaissances RAG si disponibles
         if self.knowledge_base:
             try:
-                # Recherche de contextes pertinents
                 query = f"{self.name} {self.skill_id} {context.get('description', '')}"
                 relevant_docs = self.knowledge_base.query_context(query)
                 if relevant_docs:
@@ -480,17 +342,9 @@ class BaseSkill(ABC):
         success: bool,
         error: Optional[str] = None
     ) -> None:
-        """
-        Enregistre l'execution dans l'historique.
-        
-        Args:
-            params: Parametres d'entree
-            result: Resultat (si success)
-            success: Indique si l'execution a reussi
-            error: Message d'erreur (si echec)
-        """
+        """Enregistre l'exécution dans l'historique."""
         entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "params": params,
             "success": success,
             "skill_id": self.skill_id,
@@ -504,49 +358,41 @@ class BaseSkill(ABC):
         
         self.execution_history.append(entry)
         
-        # Limite de l'historique (1000 entrées max)
         if len(self.execution_history) > 1000:
             self.execution_history = self.execution_history[-1000:]
 
     def _create_dynamic_schema(self, config: SkillConfig) -> Type[BaseModel]:
-        """
-        Cree un schema Pydantic dynamique a partir de la configuration.
-        
-        Args:
-            config: Configuration de la competence
-            
-        Returns:
-            Type[BaseModel]: Schema Pydantic dynamique
-        """
-        from pydantic import create_model
-        
-        # Extraction des champs depuis la config
+        """Crée un schéma Pydantic dynamique à partir de la configuration."""
         fields = {}
-        if hasattr(config, 'input_schema') and config.input_schema:
-            for field_name, field_type in config.input_schema.items():
+        schema = getattr(config, 'parameters_schema', None)
+        if not schema:
+            schema = getattr(config, 'input_schema', None)
+        
+        if schema and isinstance(schema, dict):
+            for field_name, field_type in schema.items():
+                if isinstance(field_type, str):
+                    type_mapping = {
+                        'str': str,
+                        'int': int,
+                        'float': float,
+                        'bool': bool,
+                        'list': list,
+                        'dict': dict,
+                        'any': Any
+                    }
+                    field_type = type_mapping.get(field_type, Any)
                 fields[field_name] = (field_type, ...)
         
-        # Creation du modele dynamique
         model_name = f"{self.skill_id}_Input"
         return create_model(model_name, **fields)
 
     def __repr__(self) -> str:
-        """
-        Representation lisible de la competence.
-        """
         return f"<BaseSkill(skill_id='{self.skill_id}', name='{self.name}', status='{self.status.value}')>"
 
 
-# =============================================================================
-# CLASSE DE BASE POUR LES COMPETENCES AVEC EXECUTION LLM
-# =============================================================================
-
 class BaseLLMSkill(BaseSkill):
     """
-    Classe de base pour les competences qui utilisent un LLM.
-    
-    Cette classe etend BaseSkill pour les competences qui doivent
-    faire appel a un LLM pour l'execution.
+    Classe de base pour les compétences qui utilisent un LLM.
     """
     
     def __init__(
@@ -562,24 +408,12 @@ class BaseLLMSkill(BaseSkill):
         self.temperature = temperature
     
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute la competence avec le LLM.
-        
-        Cette implementation par defaut fait appel au LLM avec:
-        - Les regles systeme de la competence
-        - Le prompt formatte avec les parametres
-        - La temperature configuree
-        
-        Les classes filles peuvent surcharger cette methode
-        pour un comportement plus specifique.
-        """
+        """Exécute la compétence avec le LLM."""
         if not self.llm_client:
             raise LLMError(f"No LLM client configured for skill {self.skill_id}")
         
-        # Formatage du prompt
         prompt = self._format_prompt(params)
         
-        # Appel au LLM
         try:
             response = await self.llm_client.generate(
                 prompt=prompt,
@@ -596,16 +430,7 @@ class BaseLLMSkill(BaseSkill):
             raise LLMError(f"LLM execution failed: {str(e)}")
     
     def _format_prompt(self, params: Dict[str, Any]) -> str:
-        """
-        Formate le prompt a partir des parametres.
-        
-        Args:
-            params: Parametres d'entree
-            
-        Returns:
-            str: Prompt formatte
-        """
-        # Implementation par defaut - peut etre surchargee
+        """Formate le prompt à partir des paramètres."""
         prompt_parts = [
             f"Executing skill: {self.name} ({self.skill_id})",
             f"Description: {self.description}",

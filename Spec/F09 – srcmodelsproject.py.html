@@ -1,0 +1,88 @@
+<div class="spec-section" id="f09-project-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/models/project.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/models/project.py</code> définit le modèle ORM SQLAlchemy pour la table <code>projects</code>, représentant un projet de smart contract avec son état, ses configurations multi-chaînes, ses métriques de qualité/sécurité et ses règles de validation[cite: 8].</p>
+
+  <div class="model-group">
+    <h5>Énumérations Typées</h5>
+    <ul>
+      <li><code>ProjectStatus</code> : États du projet (<code>CREATED</code>, <code>IN_PROGRESS</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>PAUSED</code>, <code>ARCHIVED</code>, <code>CANCELLED</code>, <code>ON_HOLD</code>)[cite: 8].</li>
+      <li><code>ProjectChain</code> : Blockchains supportées (<code>ETHEREUM</code>, <code>POLYGON</code>, <code>ARBITRUM</code>, <code>OPTIMISM</code>, <code>BASE</code>, <code>SOLANA</code>, <code>BSC</code>, <code>AVALANCHE</code>, <code>FANTOM</code>, <code>CELO</code>, <code>NEAR</code>)[cite: 8].</li>
+      <li><code>ProjectPriority</code> : Niveaux de priorité (<code>LOW</code>, <code>MEDIUM</code>, <code>HIGH</code>, <code>CRITICAL</code>)[cite: 8].</li>
+      <li><code>ProjectCategory</code> : Domaines métier (<code>DEFI</code>, <code>NFT</code>, <code>GAMING</code>, <code>DAO</code>, <code>INFRASTRUCTURE</code>, <code>TOOLING</code>, <code>BRIDGE</code>, <code>OTHER</code>)[cite: 8].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Modèle Principal <code>ProjectModel(Base)</code></h5>
+    <ul>
+      <li><strong>Colonnes &amp; Indexation :</strong> Identifiant UUID, nom, description, statuts/priorités, configuration JSON, spécification YAML, versioning semver, métriques de sécurité/qualité, horodatages et index composites de recherche[cite: 8].</li>
+      <li><strong>Relations SQLAlchemy :</strong> Relations <code>sprints</code>, <code>tasks</code> et <code>artifacts</code> avec chargement réactif <code>lazy="selectin"</code> et suppression en cascade (<code>cascade="all, delete-orphan"</code>)[cite: 8].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Propriétés Hybrides &amp; Validateurs</h5>
+    <ul>
+      <li>
+        <strong>Propriétés Hybrides (<code>@hybrid_property</code>) :</strong>
+        <ul>
+          <li><code>completion_rate</code> &amp; <code>failure_rate</code> : Calcul dynamique des pourcentages de succès et d'échec[cite: 8].</li>
+          <li><code>is_active</code>, <code>is_completed</code>, <code>is_archived</code> : Prédicats de contrôle d'état métier[cite: 8].</li>
+          <li><code>age_days</code> &amp; <code>duration_days</code> : Calculs temporels de l'ancienneté et de la durée globale d'exécution[cite: 8].</li>
+        </ul>
+      </li>
+      <li>
+        <strong>Validateurs Intégrés (<code>@validates</code>) :</strong>
+        <ul>
+          <li><code>validate_name</code> : Contrôle de longueur (&le; 100 caractères) et filtrage Regex du nom de projet[cite: 8].</li>
+          <li><code>validate_version</code> : Validation stricte du format SemVer (<code>X.Y.Z</code>)[cite: 8].</li>
+          <li><code>validate_spec_yaml</code> : Validation syntaxique du manifeste YAML via <code>yaml.safe_load</code>[cite: 8].</li>
+          <li><code>validate_security_score</code> &amp; <code>validate_quality_score</code> : Bornage strict des scores entre 0 et 100[cite: 8].</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Méthodes Métier &amp; Utilitaires</h5>
+    <ul>
+      <li><code>update_status(new_status, reason)</code> : Transition de statut avec horodatage automatique et journalisation d'audit[cite: 8].</li>
+      <li><code>increment_task_count()</code>, <code>increment_completed_tasks()</code>, <code>increment_failed_tasks()</code> : Incrémentation réactive et vérification de complétion automatique[cite: 8].</li>
+      <li><code>get_config_value(key)</code> / <code>set_config_value(key, value)</code> : Manipulation fine des configurations imbriquées avec notation par point (ex: <code>deployment.safe_address</code>)[cite: 8].</li>
+      <li><strong>Gestion des Tags &amp; Métadonnées :</strong> Méthodes <code>add_tag</code>, <code>remove_tag</code>, <code>has_tag</code>, <code>add_metadata</code>, <code>get_metadata</code>, <code>remove_metadata</code>[cite: 8].</li>
+      <li><strong>Audit Trail :</strong> Méthodes <code>_add_audit_log</code> et <code>get_audit_logs</code> traçant les modifications sensibles[cite: 8].</li>
+      <li><code>to_dict(include_config, include_relations)</code> &amp; <code>to_summary()</code> : Sérialisation flexible pour l'API et les tableaux de bord[cite: 8].</li>
+      <li><code>create_from_config(...)</code> &amp; <code>from_dict(...)</code> : Méthodes usines (factory) statiques instanciant un projet à partir de YAML ou de dictionnaires[cite: 8].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Typage Fort via Enum :</strong> Remplacement des chaînes libres par des énumérations Python/SQLAlchemy typées pour tous les attributs de statut, chaîne, catégorie et priorité[cite: 8].</li>
+    <li><strong>Validation Fast-Fail à l'Assignation :</strong> Validation systématique des champs via <code>@validates</code> (Regex SemVer, parseur YAML, bornage 0-100) prévenant toute corruption de données avant l'écriture BDD[cite: 8].</li>
+    <li><strong>Traçabilité &amp; Audit Trail Intégré :</strong> Journalisation automatique de l'historique des changements d'état dans les métadonnées JSON du projet[cite: 8].</li>
+    <li><strong>Accès Sécurisé aux Configurations Imbriquées :</strong> Implémentation d'un getter/setter à notation pointée évitant les erreurs <code>KeyError</code> sur les objets JSON complexes[cite: 8].</li>
+    <li><strong>Optimisation des Requêtes (SelectIn Loading) :</strong> Chargement optimisé des relations via `lazy="selectin"` empêchant le problème de requêtage $N+1$[cite: 8].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Propriétés Hybrides Dynamiques :</strong> Utilisation de <code>@hybrid_property</code> pour calculer à la volée les taux de complétion, d'échec et les durées sans persistance redondante[cite: 8].</li>
+    <li><strong>Parseur Auto-Inférentiel (YAML Factory) :</strong> La méthode statique <code>create_from_config</code> extrait et assigne automatiquement le nom, la version, la chaîne et les tags depuis le manifeste YAML[cite: 8].</li>
+    <li><strong>Intégrité Référentielle Stricte :</strong> Suppression en cascade configurée sur toutes les sous-entités associées (Sprints, Tâches, Artefacts)[cite: 8].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/models/project.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Modèle ORM <code>ProjectModel</code> complet avec 20+ colonnes, index composites et relations SQLAlchemy[cite: 8]</li>
+    <li>4 énumérations métier (<code>ProjectStatus</code>, <code>ProjectChain</code>, <code>ProjectPriority</code>, <code>ProjectCategory</code>)[cite: 8]</li>
+    <li>5 validateurs de champs (SemVer, YAML, scores 0-100, regex de nom)[cite: 8]</li>
+    <li>7 propriétés hybrides dynamiques pour les métriques de projet[cite: 8]</li>
+    <li>Méthodes utilitaires avancées (audit logs, notation par point pour JSON, gestionnaire de tags)[cite: 8]</li>
+    <li>Méthodes de sérialisation dictionnaire et usines de création statiques (<code>create_from_config</code>, <code>from_dict</code>)[cite: 8]</li>
+    <li>Documentation complète au format Docstrings et script de test unitaire CLI exécutable[cite: 8]</li>
+  </ul>
+</div>

@@ -9,7 +9,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Union, AsyncIterator, Callable, Awaitable
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 import logging
 import asyncio
@@ -54,14 +54,14 @@ class LLMModelType(str, Enum):
 @dataclass
 class LLMRequest:
     """Requête LLM."""
-    id: str = field(default_factory=lambda: hashlib.md5(str(datetime.utcnow().timestamp()).encode()).hexdigest()[:8])
+    id: str = field(default_factory=lambda: hashlib.md5(str(datetime.now(timezone.utc).timestamp()).encode()).hexdigest()[:8])
     prompt: str = ""
     system_prompt: Optional[str] = None
     temperature: float = 0.1
     max_tokens: Optional[int] = None
     model: Optional[str] = None
     provider: Optional[str] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -88,7 +88,7 @@ class LLMResponse:
     duration_ms: float = 0.0
     tokens_used: Optional[int] = None
     cost: Optional[float] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -311,7 +311,7 @@ class LLMClient(ABC):
             "kwargs": kwargs
         }
         # Trier les clés pour garantir la cohérence
-        cache_str = json.dumps(cache_data, sort_keys=True)
+        cache_str = json.dumps(cache_data, sort_keys=True, default=str)
         return hashlib.md5(cache_str.encode()).hexdigest()
     
     def _get_from_cache(self, cache_key: str) -> Optional[str]:
@@ -321,7 +321,7 @@ class LLMClient(ABC):
         
         if cache_key in self._cache:
             entry = self._cache[cache_key]
-            if (datetime.utcnow() - entry["timestamp"]).total_seconds() < self.cache_ttl:
+            if (datetime.now(timezone.utc) - entry["timestamp"]).total_seconds() < self.cache_ttl:
                 logger.debug(f"Cache hit for key: {cache_key[:8]}")
                 return entry["response"]
             else:
@@ -335,7 +335,7 @@ class LLMClient(ABC):
         if self.cache_enabled:
             self._cache[cache_key] = {
                 "response": response,
-                "timestamp": datetime.utcnow()
+                "timestamp": datetime.now(timezone.utc)
             }
     
     def _update_metrics(
@@ -347,12 +347,13 @@ class LLMClient(ABC):
         """Met à jour les métriques."""
         self._metrics.total_requests += 1
         self._request_count += 1
-        self._last_request_time = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc)
+        self._last_request_time = now_utc
         
         if not self._metrics.first_request:
-            self._metrics.first_request = datetime.utcnow()
+            self._metrics.first_request = now_utc
         
-        self._metrics.last_request = datetime.utcnow()
+        self._metrics.last_request = now_utc
         
         if response:
             self._metrics.total_tokens += response.tokens_used or 0
@@ -380,10 +381,11 @@ class LLMClient(ABC):
             self._metrics.by_provider[provider]["cost"] += response.cost or 0
             
             # Taux
-            elapsed = (datetime.utcnow() - self._metrics.first_request).total_seconds()
-            if elapsed > 0:
-                self._metrics.requests_per_second = self._metrics.total_requests / elapsed
-                self._metrics.tokens_per_second = self._metrics.total_tokens / elapsed
+            if self._metrics.first_request:
+                elapsed = (now_utc - self._metrics.first_request).total_seconds()
+                if elapsed > 0:
+                    self._metrics.requests_per_second = self._metrics.total_requests / elapsed
+                    self._metrics.tokens_per_second = self._metrics.total_tokens / elapsed
     
     async def _notify_callbacks(
         self,
@@ -449,7 +451,7 @@ class LLMClient(ABC):
         
         # Générer la réponse
         try:
-            start_time = datetime.utcnow()
+            start_time = datetime.now(timezone.utc)
             
             response_text = await self.generate(
                 prompt=prompt,
@@ -459,7 +461,7 @@ class LLMClient(ABC):
                 **kwargs
             )
             
-            duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             
             response = LLMResponse(
                 text=response_text,
@@ -668,7 +670,6 @@ class LLMClient(ABC):
         Returns:
             float: Coût estimé
         """
-        # Tarifs par défaut (à ajuster selon le fournisseur)
         rates = {
             "gpt-4": {"input": 0.00003, "output": 0.00006},
             "gpt-3.5-turbo": {"input": 0.000001, "output": 0.000002},
@@ -679,7 +680,6 @@ class LLMClient(ABC):
         model_key = model or self.model
         rate = rates.get(model_key, rates["default"])
         
-        # Estimation simplifiée (50% input, 50% output)
         input_tokens = tokens // 2
         output_tokens = tokens - input_tokens
         
@@ -776,7 +776,7 @@ class MockLLMClient(LLMClient):
         **kwargs
     ) -> str:
         self._request_count += 1
-        self._last_request_time = datetime.utcnow()
+        self._last_request_time = datetime.now(timezone.utc)
         
         if self._delay_ms > 0:
             await asyncio.sleep(self._delay_ms / 1000)
@@ -784,7 +784,6 @@ class MockLLMClient(LLMClient):
         if self._responses:
             return self._responses.pop(0)
         
-        # Réponse par défaut
         prompt_preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
         return f"Mock response for: {prompt_preview}"
     
@@ -797,7 +796,7 @@ class MockLLMClient(LLMClient):
         **kwargs
     ) -> AsyncIterator[str]:
         self._request_count += 1
-        self._last_request_time = datetime.utcnow()
+        self._last_request_time = datetime.now(timezone.utc)
         
         if self._delay_ms > 0:
             await asyncio.sleep(self._delay_ms / 1000)
@@ -807,7 +806,6 @@ class MockLLMClient(LLMClient):
                 yield token
             return
         
-        # Streaming simulé
         prompt_preview = prompt[:30] + "..." if len(prompt) > 30 else prompt
         yield "Mock streaming response for: "
         for char in prompt_preview:
@@ -815,7 +813,6 @@ class MockLLMClient(LLMClient):
             await asyncio.sleep(0.05)
     
     async def embed(self, text: str) -> List[float]:
-        # Embedding simulé (vecteur déterministe)
         import hashlib
         hash_bytes = hashlib.sha256(text.encode()).digest()
         embedding = [float(b) / 255.0 for b in hash_bytes[:self._embedding_dimension]]

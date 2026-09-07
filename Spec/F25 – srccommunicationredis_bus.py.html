@@ -1,0 +1,69 @@
+<div class="spec-section" id="f25-redis-bus-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/communication/redis_bus.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/communication/redis_bus.py</code> fournit une implémentation concrète de l'interface abstraite <code>MessageBus</code> basée sur Redis Pub/Sub, assurant le routage haute performance, la souscription dynamique par patterns, la reconnexion automatique et la gestion du TTL des messages[cite: 18].</p>
+
+  <div class="model-group">
+    <h5>Classe Principale : <code>RedisMessageBus(MessageBus)</code></h5>
+    <ul>
+      <li><strong>Gestion des Connexions &amp; Résilience :</strong>
+        <ul>
+          <li><code>connect()</code> : Initialise séparément deux clients Redis (<code>_pub</code> pour l'émission et <code>_sub</code> pour la réception) avec PING de validation[cite: 18].</li>
+          <li><code>disconnect()</code> : Interrompt proprement la tâche d'écoute et ferme les instances Pub/Sub et clients Redis[cite: 18].</li>
+          <li><code>_ensure_connected()</code> : S'assure que le canal réseau est opérationnel avant toute opération, déclenchant des tentatives successives en cas de coupure[cite: 18].</li>
+          <li><code>_reconnect()</code> &amp; <code>_resubscribe_all()</code> : Orchestre la reconnexion à chaud avec backoff exponentiel et restaure la totalité des abonnements enregistrés[cite: 18].</li>
+        </ul>
+      </li>
+      <li><strong>Publication &amp; Traitement TTL :</strong>
+        <ul>
+          <li><code>publish(topic, message)</code> : Valide, sérialise le message en JSON et le publie sur Redis; applique une clé temporaire avec expiration (<code>setex</code>) si un TTL est spécifié[cite: 18].</li>
+        </ul>
+      </li>
+      <li><strong>Gestion des Abonnements :</strong>
+        <ul>
+          <li><code>subscribe(topic, callback, subscription_type, filter_criteria)</code> : Enregistre les métadonnées de souscription, active la commande Redis <code>subscribe</code> (pour topic exact) ou <code>psubscribe</code> (pour pattern) et démarre le worker d'écoute[cite: 18].</li>
+          <li><code>unsubscribe(subscription_id)</code> : Retire le callback associé et désabonne le canal Redis si plus aucun listener n'est rattaché au topic[cite: 18].</li>
+        </ul>
+      </li>
+      <li><strong>Écoute &amp; Distribution Asynchrone :</strong>
+        <ul>
+          <li><code>_listen()</code> : Boucle d'écoute en arrière-plan interrogeant <code>_pubsub.get_message()</code> de manière non-bloquante[cite: 18].</li>
+          <li><code>_handle_redis_message(message)</code> : Désérialise les payloads, filtre les messages périmés via <code>msg.is_expired()</code> et passe la main à la distribution[cite: 18].</li>
+          <li><code>_deliver_to_subscribers(channel, message)</code> : Répartit le message aux abonnés exacts, aux abonnés par pattern et transmet au bus parent[cite: 18].</li>
+          <li><code>_matches_pattern(channel, pattern)</code> : Convertit un pattern Redis (wildcards <code>*</code>, <code>?</code>) en expression régulière pour la correspondance des canaux[cite: 18].</li>
+        </ul>
+      </li>
+      <li><strong>Cycle de Vie, Diagnostic &amp; Observabilité :</strong>
+        <ul>
+          <li><code>start()</code> &amp; <code>close()</code> : Démarre et arrête proprement l'ensemble de l'infrastructure d'écoute Redis[cite: 18].</li>
+          <li><code>health_check()</code> : Teste la réactivité en direct (PING) et fournit l'état de la connexion et des tâches d'arrière-plan[cite: 18].</li>
+          <li><code>get_redis_stats()</code> &amp; <code>to_dict()</code> : Expose les métriques fines (messages publiés/reçus, erreurs, nombre de reconnexions, état des sockets)[cite: 18].</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Séparation Stricte des Clients I/O :</strong> Utilisation distincte d'un client de publication (<code>_pub</code>) et d'un client de souscription (<code>_sub</code>) afin d'éviter les blocages d'E/S propres au mode Pub/Sub de Redis[cite: 18].</li>
+    <li><strong>Reconnexion Automatique &amp; Backoff Exponentiel :</strong> Mécanisme de reconnexion résilient augmentant le délai d'attente à chaque tentative (<code>reconnect_delay * attempts</code>) avec réabonnement automatique (<code>_resubscribe_all()</code>)[cite: 18].</li>
+    <li><strong>Nettoyage Propre des Ressources (Graceful Shutdown) :</strong> Annulation sécurisée de la tâche asyncio d'écoute (<code>_listen_task</code>) et fermeture explicite des connexions Redis lors de l'arrêt du service[cite: 18].</li>
+    <li><strong>Filtrage Précoce des Messages Expirés :</strong> Contrôle de validité temporelle (<code>is_expired()</code>) dès la désérialisation pour éviter le traitement inutile de messages caducs par les agents[cite: 18].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Support Hybride Topics Exacts et Wildcards :</strong> Gestion unifiée des souscriptions strictes et par motifs grâce à la conversion dynamique des patterns Redis en Regex (<code>_matches_pattern()</code>)[cite: 18].</li>
+    <li><strong>Gestion Avancée du TTL applicatif :</strong> Association d'une clé temporaire Redis (<code>msg:{id}</code> via <code>setex</code>) pour garantir la persistance temporaire ou l'invalidation explicite des messages horodatés[cite: 18].</li>
+    <li><strong>Double Niveau de Distribution des Messages :</strong> Intégration transparente combinant les callbacks d'abonnements Redis locaux et la cascade vers la méthode <code>_deliver_message()</code> du bus de classe mère[cite: 18].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/communication/redis_bus.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 classe concrète <code>RedisMessageBus</code> héritant de <code>MessageBus</code>[cite: 18]</li>
+    <li>17 méthodes spécialisées couvrant la connexion, l'émission, la souscription, le re-try réseau et l'observabilité[cite: 18]</li>
+    <li>Support complet des mécanismes de Health Check et de statistiques télémetriques en temps réel[cite: 18]</li>
+  </ul>
+</div>

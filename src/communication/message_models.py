@@ -4,7 +4,7 @@
 Message models for inter-agent communication.
 F23 – src/communication/message_models.py
 
-Rôle Fonctionnel : Schemas de messages Pydantic pour les echanges inter-agents sur le Bus.
+Role Fonctionnel : Schemas de messages Pydantic pour les echanges inter-agents sur le Bus.
 Ce module definit les structures de messages utilisees pour la communication
 entre les differents agents du pipeline. Il supporte:
 - Différents types de messages (tâche, résultat, erreur, événement, etc.)
@@ -15,10 +15,10 @@ entre les differents agents du pipeline. Il supporte:
 - La gestion du cycle de vie des messages
 
 Les messages sont utilisés par le MessageBus pour assurer la communication
-découplée entre les composants du pipeline.
+decouplée entre les composants du pipeline.
 """
 from enum import Enum
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, Any, List, Set, Union
 from datetime import datetime, timedelta
 import uuid
@@ -44,7 +44,7 @@ class MessageType(str, Enum):
     PING = "ping"                    # Ping de santé
     PONG = "pong"                    # Pong de réponse
     STATUS = "status"                # Demande/rapport de statut
-    
+
     # Messages avancés
     NOTIFICATION = "notification"    # Notification
     EVENT = "event"                  # Événement système
@@ -57,7 +57,7 @@ class MessageType(str, Enum):
     LOG = "log"                      # Message de log
     CONFIG = "config"                # Message de configuration
     PROGRESS = "progress"            # Progression d'une tâche
-    
+
     # Messages de coordination
     REGISTER = "register"            # Enregistrement d'un agent
     UNREGISTER = "unregister"        # Désenregistrement
@@ -112,11 +112,11 @@ class MessageDeliveryMode(str, Enum):
 class BaseMessage(BaseModel):
     """
     Message de base pour la communication inter-agents.
-    
-    Cette classe définit la structure commune à tous les messages du système.
-    Elle inclut les champs de base tels que l'identifiant, le type, l'expéditeur,
+
+    Cette classe definit la structure commune à tous les messages du système.
+    Elle inclut les champs de base tels que l'identifiant, le type, l'expediteur,
     et les métadonnées de suivi.
-    
+
     Attributes:
         id (str): Identifiant unique du message (UUID)
         type (MessageType): Type de message
@@ -136,7 +136,7 @@ class BaseMessage(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     type: MessageType
     sender: str = Field(..., min_length=1, description="ID de l'agent expéditeur")
-    
+
     # Champs optionnels
     recipient: Optional[str] = Field(None, description="ID du destinataire")
     delivery_mode: MessageDeliveryMode = Field(
@@ -151,42 +151,54 @@ class BaseMessage(BaseModel):
     status: MessageStatus = Field(default=MessageStatus.PENDING)
     retry_count: int = Field(0, ge=0, description="Nombre de tentatives")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées")
-    
-    @validator('priority')
-    def validate_priority(cls, v):
+
+    @field_validator('priority')
+    @classmethod
+    def validate_priority(cls, v: int) -> int:
         """Valide le niveau de priorité."""
         if not 0 <= v <= 10:
             raise ValueError(f"Priority must be between 0 and 10, got {v}")
         return v
-    
-    @validator('ttl')
-    def validate_ttl(cls, v):
+
+    @field_validator('ttl')
+    @classmethod
+    def validate_ttl(cls, v: Optional[int]) -> Optional[int]:
         """Valide le TTL."""
         if v is not None and v < 1:
             raise ValueError(f"TTL must be at least 1 second, got {v}")
         return v
-    
-    @validator('sender')
-    def validate_sender(cls, v):
+
+    @field_validator('sender')
+    @classmethod
+    def validate_sender(cls, v: str) -> str:
         """Valide l'ID de l'expéditeur."""
         if not v or len(v.strip()) == 0:
             raise ValueError("Sender cannot be empty")
         return v.strip()
-    
-    @root_validator
-    def validate_recipient(cls, values):
-        """Valide la cohérence des champs."""
-        delivery_mode = values.get('delivery_mode')
+
+    @model_validator(mode='before')
+    @classmethod
+    def validate_recipient(cls, values: Any) -> Any:
+        """Valide la cohérence des champs et ajuste le mode si aucun destinataire n'est fourni."""
+        if not isinstance(values, dict):
+            return values
+            
+        delivery_mode = values.get('delivery_mode', MessageDeliveryMode.POINT_TO_POINT)
         recipient = values.get('recipient')
-        
+
+        # Si aucun destinataire n'est spécifié sous un mode point-à-point par défaut, basculer vers broadcast
+        if recipient is None and delivery_mode == MessageDeliveryMode.POINT_TO_POINT:
+            values['delivery_mode'] = MessageDeliveryMode.BROADCAST
+            delivery_mode = MessageDeliveryMode.BROADCAST
+
         if delivery_mode == MessageDeliveryMode.POINT_TO_POINT and not recipient:
             raise ValueError("Recipient is required for point-to-point delivery")
-        
+
         if delivery_mode == MessageDeliveryMode.BROADCAST and recipient:
             raise ValueError("Recipient must be None for broadcast delivery")
-        
+
         return values
-    
+
     def is_expired(self) -> bool:
         """Vérifie si le message a expiré."""
         if self.ttl is None:
@@ -195,34 +207,34 @@ class BaseMessage(BaseModel):
             return False
         age = (datetime.utcnow() - self.timestamp).total_seconds()
         return age > self.ttl
-    
+
     def to_json(self) -> str:
         """Convertit le message en JSON."""
         return self.model_dump_json()
-    
+
     @classmethod
     def from_json(cls, json_str: str) -> 'BaseMessage':
         """Crée un message depuis JSON."""
         return cls.model_validate_json(json_str)
-    
+
     def copy_with(self, **kwargs) -> 'BaseMessage':
         """Crée une copie du message avec des champs modifiés."""
         data = self.model_dump()
         data.update(kwargs)
         return self.__class__(**data)
-    
+
     def to_dict(self) -> Dict:
         """Convertit le message en dictionnaire."""
         return self.model_dump()
-    
+
     def get_priority_level(self) -> int:
         """Retourne le niveau de priorité numérique."""
         return self.priority
-    
+
     def is_reply_to(self, other: 'BaseMessage') -> bool:
         """Vérifie si ce message est une réponse à un autre."""
         return self.correlation_id == other.id
-    
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}(id={self.id}, type={self.type.value}, sender={self.sender}, status={self.status.value})>"
 
@@ -234,37 +246,38 @@ class BaseMessage(BaseModel):
 class TaskMessage(BaseMessage):
     """
     Message de tâche.
-    
+
     Représente une tâche à exécuter par un agent.
-    
+
     Attributes:
         type (MessageType): Type de message (TASK)
         payload (Dict[str, Any]): Contenu de la tâche
     """
     type: MessageType = MessageType.TASK
     payload: Dict[str, Any] = Field(..., description="Données de la tâche")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de la tâche."""
         required_fields = ['task_id', 'action']
         for field in required_fields:
             if field not in v:
                 raise ValueError(f"Payload missing required field: {field}")
         return v
-    
+
     def get_task_id(self) -> str:
         """Retourne l'ID de la tâche."""
         return self.payload.get('task_id', '')
-    
+
     def get_action(self) -> str:
         """Retourne l'action à exécuter."""
         return self.payload.get('action', '')
-    
+
     def get_parameters(self) -> Dict[str, Any]:
         """Retourne les paramètres de la tâche."""
         return self.payload.get('parameters', {})
-    
+
     def get_context(self) -> Dict[str, Any]:
         """Retourne le contexte de la tâche."""
         return self.payload.get('context', {})
@@ -273,43 +286,44 @@ class TaskMessage(BaseMessage):
 class ResultMessage(BaseMessage):
     """
     Message de résultat.
-    
+
     Représente le résultat d'une tâche exécutée.
-    
+
     Attributes:
         type (MessageType): Type de message (RESULT)
         payload (Dict[str, Any]): Contenu du résultat
     """
     type: MessageType = MessageType.RESULT
     payload: Dict[str, Any] = Field(..., description="Données du résultat")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload du résultat."""
         required_fields = ['task_id', 'status']
         for field in required_fields:
             if field not in v:
                 raise ValueError(f"Payload missing required field: {field}")
-        
+
         if v['status'] not in ['SUCCESS', 'FAILED', 'CIRCUIT_OPEN']:
             raise ValueError(f"Invalid status: {v['status']}")
-        
+
         return v
-    
+
     def is_success(self) -> bool:
         """Vérifie si le résultat est un succès."""
         return self.payload.get('status') == 'SUCCESS'
-    
+
     def is_failure(self) -> bool:
         """Vérifie si le résultat est un échec."""
-        return self.payload.get('status') == 'FAILED'
-    
+        return self.payload.get('status') in ['FAILED', 'CIRCUIT_OPEN']
+
     def get_result(self) -> Optional[Dict[str, Any]]:
         """Retourne le résultat si succès."""
         if self.is_success():
             return self.payload.get('result')
         return None
-    
+
     def get_error(self) -> Optional[str]:
         """Retourne l'erreur si échec."""
         if self.is_failure():
@@ -320,33 +334,34 @@ class ResultMessage(BaseMessage):
 class ErrorMessage(BaseMessage):
     """
     Message d'erreur.
-    
+
     Représente une erreur survenue dans le système.
-    
+
     Attributes:
         type (MessageType): Type de message (ERROR)
         payload (Dict[str, Any]): Contenu de l'erreur
     """
     type: MessageType = MessageType.ERROR
     payload: Dict[str, Any] = Field(..., description="Données de l'erreur")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de l'erreur."""
         required_fields = ['code', 'message']
         for field in required_fields:
             if field not in v:
                 raise ValueError(f"Payload missing required field: {field}")
         return v
-    
+
     def get_error_code(self) -> str:
         """Retourne le code d'erreur."""
         return self.payload.get('code', 'UNKNOWN')
-    
+
     def get_error_message(self) -> str:
         """Retourne le message d'erreur."""
         return self.payload.get('message', 'Unknown error')
-    
+
     def get_details(self) -> Optional[Dict[str, Any]]:
         """Retourne les détails de l'erreur."""
         return self.payload.get('details')
@@ -355,33 +370,34 @@ class ErrorMessage(BaseMessage):
 class NotificationMessage(BaseMessage):
     """
     Message de notification.
-    
+
     Représente une notification à envoyer aux agents ou à l'interface.
-    
+
     Attributes:
         type (MessageType): Type de message (NOTIFICATION)
         payload (Dict[str, Any]): Contenu de la notification
     """
     type: MessageType = MessageType.NOTIFICATION
     payload: Dict[str, Any] = Field(..., description="Données de la notification")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de la notification."""
         required_fields = ['title', 'message']
         for field in required_fields:
             if field not in v:
                 raise ValueError(f"Payload missing required field: {field}")
         return v
-    
+
     def get_title(self) -> str:
         """Retourne le titre de la notification."""
         return self.payload.get('title', '')
-    
+
     def get_message(self) -> str:
         """Retourne le message de la notification."""
         return self.payload.get('message', '')
-    
+
     def get_level(self) -> str:
         """Retourne le niveau de la notification."""
         return self.payload.get('level', 'info')
@@ -390,29 +406,30 @@ class NotificationMessage(BaseMessage):
 class EventMessage(BaseMessage):
     """
     Message d'événement.
-    
+
     Représente un événement système.
-    
+
     Attributes:
         type (MessageType): Type de message (EVENT)
         payload (Dict[str, Any]): Contenu de l'événement
     """
     type: MessageType = MessageType.EVENT
     payload: Dict[str, Any] = Field(..., description="Données de l'événement")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de l'événement."""
         required_fields = ['event_type', 'data']
         for field in required_fields:
             if field not in v:
                 raise ValueError(f"Payload missing required field: {field}")
         return v
-    
+
     def get_event_type(self) -> str:
         """Retourne le type d'événement."""
         return self.payload.get('event_type', '')
-    
+
     def get_data(self) -> Any:
         """Retourne les données de l'événement."""
         return self.payload.get('data')
@@ -421,31 +438,32 @@ class EventMessage(BaseMessage):
 class QueryMessage(BaseMessage):
     """
     Message de requête.
-    
+
     Représente une requête d'information.
-    
+
     Attributes:
         type (MessageType): Type de message (QUERY)
         payload (Dict[str, Any]): Contenu de la requête
     """
     type: MessageType = MessageType.QUERY
     payload: Dict[str, Any] = Field(..., description="Données de la requête")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de la requête."""
         if 'query' not in v:
             raise ValueError("Payload missing required field: query")
         return v
-    
+
     def get_query(self) -> str:
         """Retourne la requête."""
         return self.payload.get('query', '')
-    
+
     def get_parameters(self) -> Dict[str, Any]:
         """Retourne les paramètres de la requête."""
         return self.payload.get('parameters', {})
-    
+
     def get_timeout(self) -> Optional[int]:
         """Retourne le timeout en secondes."""
         return self.payload.get('timeout')
@@ -454,31 +472,32 @@ class QueryMessage(BaseMessage):
 class ResponseMessage(BaseMessage):
     """
     Message de réponse.
-    
+
     Représente une réponse à une requête.
-    
+
     Attributes:
         type (MessageType): Type de message (RESPONSE)
         payload (Dict[str, Any]): Contenu de la réponse
     """
     type: MessageType = MessageType.RESPONSE
     payload: Dict[str, Any] = Field(..., description="Données de la réponse")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de la réponse."""
         if 'data' not in v:
             raise ValueError("Payload missing required field: data")
         return v
-    
+
     def get_data(self) -> Any:
         """Retourne les données de la réponse."""
         return self.payload.get('data')
-    
+
     def is_error(self) -> bool:
         """Vérifie si la réponse contient une erreur."""
         return 'error' in self.payload
-    
+
     def get_error(self) -> Optional[str]:
         """Retourne l'erreur si présente."""
         return self.payload.get('error')
@@ -487,31 +506,32 @@ class ResponseMessage(BaseMessage):
 class AcknowledgmentMessage(BaseMessage):
     """
     Message d'accusé de réception.
-    
+
     Représente une confirmation de réception d'un message.
-    
+
     Attributes:
         type (MessageType): Type de message (ACKNOWLEDGMENT)
         payload (Dict[str, Any]): Contenu de l'accusé
     """
     type: MessageType = MessageType.ACKNOWLEDGMENT
     payload: Dict[str, Any] = Field(..., description="Données de l'accusé")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de l'accusé."""
         if 'message_id' not in v:
             raise ValueError("Payload missing required field: message_id")
         return v
-    
+
     def get_message_id(self) -> str:
         """Retourne l'ID du message accusé."""
         return self.payload.get('message_id', '')
-    
+
     def is_acknowledged(self) -> bool:
         """Vérifie si l'accusé est positif."""
         return self.payload.get('success', True)
-    
+
     def get_error(self) -> Optional[str]:
         """Retourne l'erreur si échec."""
         if not self.is_acknowledged():
@@ -522,31 +542,32 @@ class AcknowledgmentMessage(BaseMessage):
 class HeartbeatMessage(BaseMessage):
     """
     Message de heartbeat.
-    
+
     Représente un signal de vie d'un agent.
-    
+
     Attributes:
         type (MessageType): Type de message (HEARTBEAT)
         payload (Dict[str, Any]): Contenu du heartbeat
     """
     type: MessageType = MessageType.HEARTBEAT
     payload: Dict[str, Any] = Field(..., description="Données du heartbeat")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload du heartbeat."""
         if 'status' not in v:
             raise ValueError("Payload missing required field: status")
         return v
-    
+
     def get_status(self) -> str:
         """Retourne le statut de l'agent."""
         return self.payload.get('status', 'unknown')
-    
+
     def get_metrics(self) -> Optional[Dict[str, Any]]:
         """Retourne les métriques de l'agent."""
         return self.payload.get('metrics')
-    
+
     def get_capabilities(self) -> List[str]:
         """Retourne les capacités de l'agent."""
         return self.payload.get('capabilities', [])
@@ -555,44 +576,45 @@ class HeartbeatMessage(BaseMessage):
 class ProgressMessage(BaseMessage):
     """
     Message de progression.
-    
+
     Représente la progression d'une tâche.
-    
+
     Attributes:
         type (MessageType): Type de message (PROGRESS)
         payload (Dict[str, Any]): Contenu de la progression
     """
     type: MessageType = MessageType.PROGRESS
     payload: Dict[str, Any] = Field(..., description="Données de la progression")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de la progression."""
         required_fields = ['task_id', 'progress']
         for field in required_fields:
             if field not in v:
                 raise ValueError(f"Payload missing required field: {field}")
-        
+
         progress = v['progress']
         if not isinstance(progress, (int, float)):
             raise ValueError("Progress must be a number")
         if not 0 <= progress <= 100:
             raise ValueError(f"Progress must be between 0 and 100, got {progress}")
-        
+
         return v
-    
+
     def get_task_id(self) -> str:
         """Retourne l'ID de la tâche."""
         return self.payload.get('task_id', '')
-    
+
     def get_progress(self) -> float:
         """Retourne la progression (0-100)."""
         return self.payload.get('progress', 0.0)
-    
+
     def get_message(self) -> Optional[str]:
         """Retourne le message de progression."""
         return self.payload.get('message')
-    
+
     def get_remaining(self) -> Optional[str]:
         """Retourne le temps restant estimé."""
         return self.payload.get('remaining')
@@ -601,41 +623,42 @@ class ProgressMessage(BaseMessage):
 class CircuitBreakerMessage(BaseMessage):
     """
     Message de circuit breaker.
-    
+
     Représente une notification de changement d'état du circuit breaker.
-    
+
     Attributes:
         type (MessageType): Type de message (CIRCUIT_BREAKER)
         payload (Dict[str, Any]): Contenu du circuit breaker
     """
     type: MessageType = MessageType.CIRCUIT_BREAKER
     payload: Dict[str, Any] = Field(..., description="Données du circuit breaker")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload du circuit breaker."""
         required_fields = ['component', 'state']
         for field in required_fields:
             if field not in v:
                 raise ValueError(f"Payload missing required field: {field}")
-        
+
         if v['state'] not in ['OPEN', 'CLOSED', 'HALF_OPEN']:
             raise ValueError(f"Invalid circuit breaker state: {v['state']}")
-        
+
         return v
-    
+
     def get_component(self) -> str:
         """Retourne le composant concerné."""
         return self.payload.get('component', '')
-    
+
     def get_state(self) -> str:
         """Retourne l'état du circuit breaker."""
         return self.payload.get('state', 'CLOSED')
-    
+
     def get_error(self) -> Optional[str]:
         """Retourne l'erreur si présente."""
         return self.payload.get('error')
-    
+
     def get_timestamp(self) -> Optional[datetime]:
         """Retourne l'horodatage du changement."""
         return self.payload.get('timestamp')
@@ -644,27 +667,28 @@ class CircuitBreakerMessage(BaseMessage):
 class CommandMessage(BaseMessage):
     """
     Message de commande.
-    
+
     Représente une commande à exécuter.
-    
+
     Attributes:
         type (MessageType): Type de message (COMMAND)
         payload (Dict[str, Any]): Contenu de la commande
     """
     type: MessageType = MessageType.COMMAND
     payload: Dict[str, Any] = Field(..., description="Données de la commande")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de la commande."""
         if 'command' not in v:
             raise ValueError("Payload missing required field: command")
         return v
-    
+
     def get_command(self) -> str:
         """Retourne la commande."""
         return self.payload.get('command', '')
-    
+
     def get_parameters(self) -> Dict[str, Any]:
         """Retourne les paramètres de la commande."""
         return self.payload.get('parameters', {})
@@ -673,31 +697,32 @@ class CommandMessage(BaseMessage):
 class MetricsMessage(BaseMessage):
     """
     Message de métriques.
-    
+
     Représente des métriques système.
-    
+
     Attributes:
         type (MessageType): Type de message (METRICS)
         payload (Dict[str, Any]): Contenu des métriques
     """
     type: MessageType = MessageType.METRICS
     payload: Dict[str, Any] = Field(..., description="Données des métriques")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload des métriques."""
         if 'metrics' not in v:
             raise ValueError("Payload missing required field: metrics")
         return v
-    
+
     def get_metrics(self) -> Dict[str, Any]:
         """Retourne les métriques."""
         return self.payload.get('metrics', {})
-    
+
     def get_type(self) -> str:
         """Retourne le type de métriques."""
         return self.payload.get('type', 'generic')
-    
+
     def get_tags(self) -> Dict[str, str]:
         """Retourne les tags des métriques."""
         return self.payload.get('tags', {})
@@ -706,31 +731,32 @@ class MetricsMessage(BaseMessage):
 class ConfigMessage(BaseMessage):
     """
     Message de configuration.
-    
+
     Représente une mise à jour de configuration.
-    
+
     Attributes:
         type (MessageType): Type de message (CONFIG)
         payload (Dict[str, Any]): Contenu de la configuration
     """
     type: MessageType = MessageType.CONFIG
     payload: Dict[str, Any] = Field(..., description="Données de la configuration")
-    
-    @validator('payload')
-    def validate_payload(cls, v):
+
+    @field_validator('payload')
+    @classmethod
+    def validate_payload(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Valide le payload de la configuration."""
         if 'config' not in v:
             raise ValueError("Payload missing required field: config")
         return v
-    
+
     def get_config(self) -> Dict[str, Any]:
         """Retourne la configuration."""
         return self.payload.get('config', {})
-    
+
     def get_version(self) -> Optional[str]:
         """Retourne la version de la configuration."""
         return self.payload.get('version')
-    
+
     def get_component(self) -> Optional[str]:
         """Retourne le composant concerné."""
         return self.payload.get('component')
@@ -743,10 +769,10 @@ class ConfigMessage(BaseMessage):
 class MessageFactory:
     """
     Fabrique de messages.
-    
+
     Centralise la création des messages pour garantir la cohérence.
     """
-    
+
     @staticmethod
     def create_task_message(
         sender: str,
@@ -759,7 +785,7 @@ class MessageFactory:
     ) -> TaskMessage:
         """
         Crée un message de tâche.
-        
+
         Args:
             sender: ID de l'expéditeur
             recipient: ID du destinataire
@@ -768,7 +794,7 @@ class MessageFactory:
             parameters: Paramètres de la tâche
             context: Contexte de la tâche
             **kwargs: Champs supplémentaires
-            
+
         Returns:
             TaskMessage: Message de tâche
         """
@@ -784,11 +810,11 @@ class MessageFactory:
             payload=payload,
             **kwargs
         )
-    
+
     @staticmethod
     def create_result_message(
         sender: str,
-        recipient: str,
+        recipient: Optional[str],
         task_id: str,
         status: str,
         result: Optional[Dict[str, Any]] = None,
@@ -798,7 +824,7 @@ class MessageFactory:
     ) -> ResultMessage:
         """
         Crée un message de résultat.
-        
+
         Args:
             sender: ID de l'expéditeur
             recipient: ID du destinataire
@@ -808,7 +834,7 @@ class MessageFactory:
             error: Message d'erreur (si échec)
             correlation_id: ID de corrélation
             **kwargs: Champs supplémentaires
-            
+
         Returns:
             ResultMessage: Message de résultat
         """
@@ -820,7 +846,7 @@ class MessageFactory:
             payload['result'] = result
         if error is not None:
             payload['error'] = error
-        
+
         return ResultMessage(
             sender=sender,
             recipient=recipient,
@@ -828,11 +854,11 @@ class MessageFactory:
             correlation_id=correlation_id,
             **kwargs
         )
-    
+
     @staticmethod
     def create_error_message(
         sender: str,
-        recipient: str,
+        recipient: Optional[str],
         code: str,
         message: str,
         details: Optional[Dict[str, Any]] = None,
@@ -841,7 +867,7 @@ class MessageFactory:
     ) -> ErrorMessage:
         """
         Crée un message d'erreur.
-        
+
         Args:
             sender: ID de l'expéditeur
             recipient: ID du destinataire
@@ -850,7 +876,7 @@ class MessageFactory:
             details: Détails de l'erreur
             correlation_id: ID de corrélation
             **kwargs: Champs supplémentaires
-            
+
         Returns:
             ErrorMessage: Message d'erreur
         """
@@ -860,7 +886,7 @@ class MessageFactory:
         }
         if details is not None:
             payload['details'] = details
-        
+
         return ErrorMessage(
             sender=sender,
             recipient=recipient,
@@ -868,7 +894,7 @@ class MessageFactory:
             correlation_id=correlation_id,
             **kwargs
         )
-    
+
     @staticmethod
     def create_notification_message(
         sender: str,
@@ -880,7 +906,7 @@ class MessageFactory:
     ) -> NotificationMessage:
         """
         Crée un message de notification.
-        
+
         Args:
             sender: ID de l'expéditeur
             recipient: ID du destinataire
@@ -888,7 +914,7 @@ class MessageFactory:
             message: Message de la notification
             level: Niveau de la notification
             **kwargs: Champs supplémentaires
-            
+
         Returns:
             NotificationMessage: Message de notification
         """
@@ -903,7 +929,7 @@ class MessageFactory:
             payload=payload,
             **kwargs
         )
-    
+
     @staticmethod
     def create_event_message(
         sender: str,
@@ -914,14 +940,14 @@ class MessageFactory:
     ) -> EventMessage:
         """
         Crée un message d'événement.
-        
+
         Args:
             sender: ID de l'expéditeur
             recipient: ID du destinataire
             event_type: Type d'événement
             data: Données de l'événement
             **kwargs: Champs supplémentaires
-            
+
         Returns:
             EventMessage: Message d'événement
         """
@@ -935,11 +961,11 @@ class MessageFactory:
             payload=payload,
             **kwargs
         )
-    
+
     @staticmethod
     def create_progress_message(
         sender: str,
-        recipient: str,
+        recipient: Optional[str],
         task_id: str,
         progress: float,
         message: Optional[str] = None,
@@ -948,7 +974,7 @@ class MessageFactory:
     ) -> ProgressMessage:
         """
         Crée un message de progression.
-        
+
         Args:
             sender: ID de l'expéditeur
             recipient: ID du destinataire
@@ -957,7 +983,7 @@ class MessageFactory:
             message: Message de progression
             remaining: Temps restant estimé
             **kwargs: Champs supplémentaires
-            
+
         Returns:
             ProgressMessage: Message de progression
         """
@@ -969,18 +995,18 @@ class MessageFactory:
             payload['message'] = message
         if remaining is not None:
             payload['remaining'] = remaining
-        
+
         return ProgressMessage(
             sender=sender,
             recipient=recipient,
             payload=payload,
             **kwargs
         )
-    
+
     @staticmethod
     def create_response_message(
         sender: str,
-        recipient: str,
+        recipient: Optional[str],
         data: Any,
         error: Optional[str] = None,
         correlation_id: Optional[str] = None,
@@ -988,7 +1014,7 @@ class MessageFactory:
     ) -> ResponseMessage:
         """
         Crée un message de réponse.
-        
+
         Args:
             sender: ID de l'expéditeur
             recipient: ID du destinataire
@@ -996,14 +1022,14 @@ class MessageFactory:
             error: Message d'erreur (optionnel)
             correlation_id: ID de corrélation
             **kwargs: Champs supplémentaires
-            
+
         Returns:
             ResponseMessage: Message de réponse
         """
         payload = {'data': data}
         if error is not None:
             payload['error'] = error
-        
+
         return ResponseMessage(
             sender=sender,
             recipient=recipient,
@@ -1023,13 +1049,13 @@ __all__ = [
     'MessagePriority',
     'MessageStatus',
     'MessageDeliveryMode',
-    
+
     # Messages de base
     'BaseMessage',
     'TaskMessage',
     'ResultMessage',
     'ErrorMessage',
-    
+
     # Messages avancés
     'NotificationMessage',
     'EventMessage',
@@ -1042,7 +1068,7 @@ __all__ = [
     'CommandMessage',
     'MetricsMessage',
     'ConfigMessage',
-    
+
     # Factory
     'MessageFactory'
 ]

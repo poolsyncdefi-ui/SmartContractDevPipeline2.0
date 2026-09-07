@@ -1,0 +1,71 @@
+<div class="spec-section" id="f18-agent-factory-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/agents/factory/agent_factory.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/agents/factory/agent_factory.py</code> implémente la fabrique logicielle chargée d'instancier, assembler, valider et mettre en cache les agents intelligents sur mesure en leur associant dynamiquement leurs compétences (Skills) et leurs bonnes pratiques[cite: 17].</p>
+
+  <div class="model-group">
+    <h5>Énumérations &amp; Structures de Contexte</h5>
+    <ul>
+      <li><code>AgentRole</code> : Énumération des rôles d'agents prédéfinis (<code>ARCHITECT</code>, <code>DEVELOPER</code>, <code>SECURITY</code>, <code>FEEDBACK</code>, <code>TESTER</code>, <code>DEPLOYER</code>, <code>CUSTOM</code>)[cite: 17].</li>
+      <li><code>AgentCreationContext</code> : DataClass encapsulant l'environnement d'exécution de création (ID projet, configuration, clients LLM, RAG, bus de messages, paramètres supplémentaires)[cite: 17].</li>
+      <li><code>AgentCreationResult</code> : DataClass résumant le résultat de la création d'un agent (instance, durée, compétences et pratiques appliquées, statut de succès, erreur éventuelle)[cite: 17].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Fabrique Principale : <code>AgentFactory</code> (Gestion des Templates &amp; Pratiques)</h5>
+    <ul>
+      <li><code>__init__()</code> : Initialisation avec injection du <code>SkillRegistry</code>, des clients LLM/RAG/MessageBus par défaut, de la configuration du cache et des pratiques globales[cite: 17].</li>
+      <li><code>register_agent_template()</code> &amp; <code>_register_default_templates()</code> : Enregistrement dynamique des modèles d'agents par rôle avec association de compétences et pratiques par défaut[cite: 17].</li>
+      <li><code>load_configs()</code> &amp; <code>add_practice()</code> : Chargement dynamique des configurations de compétences/pratiques et instanciation des pratiques applicables[cite: 17].</li>
+      <li><code>_prepare_practices()</code>, <code>_apply_practices()</code> &amp; <code>_create_practice_instance()</code> : Préparation et injection dynamique des règles de bonnes pratiques directement dans les instances d'agents[cite: 17].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Création &amp; Assemblage d'Agents et de Squads</h5>
+    <ul>
+      <li><code>create_agent()</code> : Chaîne d'assemblage complète : résolution du template, préparation des compétences, validation des dépendances, instanciation, application des pratiques, notification et mise en cache[cite: 17].</li>
+      <li><code>create_agent_async()</code> : Version asynchrone préparée pour l'intégration d'opérations I/O non-bloquantes (ex: RAG)[cite: 17].</li>
+      <li><code>create_agent_with_defaults()</code> : Raccourci de création basant la sélection des compétences sur le mapping par défaut du rôle (via <code>_get_default_skills_for_role</code>)[cite: 17].</li>
+      <li><code>create_development_squad()</code> : Instanciation en lot d'une équipe complète projet (Architecte, Développeur, Sécurité, Feedback) avec tolérance aux fautes par rôle[cite: 17].</li>
+      <li><code>_prepare_skills()</code> &amp; <code>_validate_skills()</code> : Extraction des compétences depuis le registre, vérification de la présence des schémas d'entrée et validation des dépendances requises[cite: 17].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Gestion du Cache, Télémétrie &amp; Événements</h5>
+    <ul>
+      <li><code>clear_cache()</code>, <code>get_cached_agent()</code>, <code>remove_cached_agent()</code> : Méthodes de contrôle fine-grained du cache d'instances pour éviter la ré-instanciation coûteuse[cite: 17].</li>
+      <li><code>_generate_cache_key()</code> : Clé composite garantissant l'unicité du cache basée sur le rôle, la combinaison de compétences et les pratiques[cite: 17].</li>
+      <li><code>get_stats()</code> &amp; <code>to_dict()</code> : Calcul des statistiques en temps réel (taux de succès, taux de hit cache, répartition par rôle/compétence)[cite: 17].</li>
+      <li><code>_notify_agent_creation()</code> : Émission d'événements de création d'agent sur le <code>MessageBus</code>[cite: 17].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Pattern Factory &amp; Dependency Injection :</strong> Découplage complet entre la définition des agents et leur création, avec injection explicite des clients (LLM, KnowledgeBase, MessageBus)[cite: 17].</li>
+    <li><strong>Validation Pré-instanciation Intégrée :</strong> Contrôle systématique de l'intégrité des compétences et de leurs dépendances via <code>_validate_skills</code> avant de construire l'agent[cite: 17].</li>
+    <li><strong>Stratégie de Cache Améliorée :</strong> Génération de clés composites uniques et gestion souple de la mise en cache pour optimiser les performances lors de réutilisations[cite: 17].</li>
+    <li><strong>Conception Tolérante aux Pannes pour Équipes (Squads) :</strong> Isolation des erreurs lors de la création d'équipes complètes dans <code>create_development_squad</code> afin qu'un échec sur un agent ne bloque pas la création des autres[cite: 17].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Création d'Équipes Multi-Agents en Un Appel :</strong> La méthode <code>create_development_squad</code> orchestre la création spontanée de toute l'équipe projet (Architect, Developer, Security, Feedback) préconfigurée[cite: 17].</li>
+    <li><strong>Association Dynamique de Rôles et Compétences :</strong> Possibilité de surcharger ou de personnaliser les compétences à chaud lors de la création d'agent sans redéfinir la classe de base[cite: 17].</li>
+    <li><strong>Télémétrie et Métriques Intégrées :</strong> Suivi précis du taux de succès de création, des hits de cache et de l'utilisation des compétences par rôle via <code>get_stats()</code>[cite: 17].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/agents/factory/agent_factory.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 classe Factory centrale (<code>AgentFactory</code>)[cite: 17]</li>
+    <li>2 DataClasses de contexte/résultat (<code>AgentCreationContext</code>, <code>AgentCreationResult</code>) et 1 énumération de rôles (<code>AgentRole</code>)[cite: 17]</li>
+    <li>Création unitaire d'agent et création groupée d'équipes complets (squads)[cite: 17]</li>
+    <li>Système de cache multi-index avec métriques d'utilisation détaillées[cite: 17]</li>
+    <li>Injection dynamique de règles métier, RAG et bus de messages[cite: 17]</li>
+  </ul>
+</div>

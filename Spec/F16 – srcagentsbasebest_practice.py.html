@@ -1,0 +1,71 @@
+<div class="spec-section" id="f16-best-practice-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/agents/base/best_practice.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/agents/base/best_practice.py</code> fournit la structure d'analyse et de validation automatique du code généré dans le pipeline[cite: 15]. Il évalue la conformité du code par rapport à des règles de sécurité, de performance, de style et d'architecture[cite: 15].</p>
+
+  <div class="model-group">
+    <h5>Énumérations &amp; DataClasses de Core Validation</h5>
+    <ul>
+      <li><code>ValidationSeverity</code> : Énumération hiérarchique des sévérités (<code>CRITICAL</code>, <code>HIGH</code>, <code>MEDIUM</code>, <code>LOW</code>, <code>INFO</code>)[cite: 15].</li>
+      <li><code>ValidationCategory</code> : Catégories d'analyse (<code>SECURITY</code>, <code>STYLE</code>, <code>PERFORMANCE</code>, <code>ARCHITECTURE</code>, <code>DOCUMENTATION</code>, <code>TESTING</code>, <code>MAINTAINABILITY</code>, <code>COMPLIANCE</code>)[cite: 15].</li>
+      <li><code>BestPracticeLevel</code> : Niveaux d'exigence applicables (<code>BASIC</code>, <code>STANDARD</code>, <code>ADVANCED</code>, <code>EXPERT</code>)[cite: 15].</li>
+      <li><code>ValidationRule</code> : DataClass définissant une règle individuelle (ID, nom, sévérité, catégorie, pattern regex, message, suggestion de correctif)[cite: 15].</li>
+      <li><code>ValidationResult</code> : DataClass accumulant le statut global (<code>passed</code>), le score (0-100), les violations, avertissements et suggestions[cite: 15]. Possède les méthodes <code>add_violation()</code>, <code>add_warning()</code>, <code>add_suggestion()</code>, <code>to_dict()</code> et <code>_get_severity_order()</code>[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Moteur Abstrait <code>BaseBestPractice(ABC)</code></h5>
+    <ul>
+      <li><code>validate(output)</code> : Méthode abstraite imposant l'analyse spécifique d'un dictionnaire de sortie[cite: 15].</li>
+      <li><code>validate_with_context(output, context)</code> : Exécution de validation avec gestion d'erreurs, mode strict (<code>strict_mode</code>) et enrichissement par contexte[cite: 15].</li>
+      <li><code>get_rules()</code>, <code>add_rule()</code>, <code>remove_rule()</code> : Méthodes de gestion dynamique du registre de règles (<code>_rule_registry</code>)[cite: 15].</li>
+      <li><code>enable_category()</code>, <code>disable_category()</code>, <code>is_category_enabled()</code> : Contrôle granulaire des catégories de règles actives[cite: 15].</li>
+      <li><code>_check_pattern(content, pattern)</code> : Analyse multiline par expression régulière retournant les numéros de ligne et correspondances[cite: 15].</li>
+      <li><code>_apply_auto_fix(content, violations)</code> : Moteur basique d'application automatique de correctifs sur le code source[cite: 15].</li>
+      <li><code>get_report(result)</code> &amp; <code>to_dict()</code> : Génération de rapports complets horodatés et sérialisation JSON[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Validateurs Spécifiques de Domaine</h5>
+    <ul>
+      <li><code>SolidityBestPractice</code> : Validateur dédié au langage Solidity avec la méthode <code>_load_solidity_rules()</code> chargeant les contrôles natifs (licence SPDX <code>SOL001</code>, pragma <code>SOL002</code>, réentrance <code>SOL003</code>, nommage d'événements <code>SOL004</code>, syntaxe constructeur <code>SOL005</code>)[cite: 15].</li>
+      <li><code>JavaScriptBestPractice</code> : Validateur dédié à JavaScript/TypeScript avec <code>_load_default_rules()</code> vérifiant l'usage de <code>const/let</code> (<code>JS001</code>), <code>async/await</code> (<code>JS002</code>) et la gestion d'erreurs <code>try/catch</code> (<code>JS003</code>)[cite: 15].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Pattern Composite : <code>CompositeBestPractice</code></h5>
+    <ul>
+      <li><code>validate(output)</code> : Orchestration et agrégation des résultats de multiples validateurs spécialisés avec consolidation des scores, violations et sévérité maximale[cite: 15].</li>
+      <li><code>add_validator(validator)</code> &amp; <code>remove_validator(practice_id)</code> : Primitives d'assemblage modulaire de la chaîne de validation[cite: 15].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Patron de Conception Composite (Composite Pattern) :</strong> Permet de combiner plusieurs validateurs (ex: Solidity + Security) au sein d'une instance unique <code>CompositeBestPractice</code> exécutée de manière uniforme[cite: 15].</li>
+    <li><strong>Calcul Dynamique du Score de Qualité :</strong> Décrémentation pondérée du score global (10 points par violation, 5 points par avertissement) avec ajustement automatique du statut <code>passed</code> selon la sévérité[cite: 15].</li>
+    <li><strong>Isolation par Catégorie et Séparation des Sévérités :</strong> Possibilité d'activer ou désactiver des règles par catégorie (<code>SECURITY</code>, <code>PERFORMANCE</code>, etc.) et de réagir différemment selon le niveau d'impact[cite: 15].</li>
+    <li><strong>Support Préparatoire au Remédiation Automatique (Auto-Fix) :</strong> Architecture conçue pour corriger automatiquement les violations simples détectées par Regex via <code>_apply_auto_fix</code>[cite: 15].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Localisation Précise des Anomalies :</strong> Calcul automatique du numéro de ligne exact dans le fichier source lors des correspondances de patterns regex via <code>_check_pattern</code>[cite: 15].</li>
+    <li><strong>Extensibilité Multi-Langages Natifs :</strong> Prise en charge prête à l'emploi des spécificités Solidity (Smart Contracts) et JS/TS (Scripts d'outillage/tests)[cite: 15].</li>
+    <li><strong>Génération de Rapports de Conformité Auditables :</strong> Restitution d'un rapport structuré avec horodatage UTC, détails des règles violées, suggestions et niveau d'exigence (<code>get_report</code>)[cite: 15].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/agents/base/best_practice.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 classe abstraite de base (<code>BaseBestPractice</code>) et 1 validateur composite (<code>CompositeBestPractice</code>)[cite: 15]</li>
+    <li>2 implémentations spécialisées par langage (<code>SolidityBestPractice</code>, <code>JavaScriptBestPractice</code>)[cite: 15]</li>
+    <li>3 énumérations de qualification (<code>ValidationSeverity</code>, <code>ValidationCategory</code>, <code>BestPracticeLevel</code>)[cite: 15]</li>
+    <li>2 structures de données formelles (<code>ValidationRule</code>, <code>ValidationResult</code>)[cite: 15]</li>
+    <li>Moteur de détection regex par ligne, calcul de score de qualité et infrastructure d'auto-fix[cite: 15]</li>
+  </ul>
+</div>

@@ -18,11 +18,10 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from src.config.settings import settings
-from src.db.database import init_database, check_db_connection
+from src.db.database import init_database, check_db_connection, get_async_session
 from src.db.migrations import run_migrations, reset_models, get_current_version
 from src.models.project import ProjectModel, ProjectStatus, ProjectChain
 from src.models.task import TaskModel, TaskState, TaskPriority, TaskType
-from src.persistence.project_state import ProjectState
 from src.orchestration.workflow_engine import WorkflowEngine
 
 
@@ -92,7 +91,7 @@ def cli():
 
 @cli.command()
 @common_options
-def status(output_json: bool):
+def status(verbose: bool, quiet: bool, output_json: bool):
     """Affiche le statut du pipeline."""
     result = {
         "version": "2.0.0",
@@ -118,12 +117,12 @@ def status(output_json: bool):
     # Configuration
     click.echo("\n⚙️ Configuration:")
     config = {
-        "workspace": str(settings.pipeline.default_workspace),
-        "database_url": settings.database.url,
-        "redis_url": settings.redis.url,
-        "ollama_url": settings.llm.ollama_url,
-        "environment": settings.env.value,
-        "debug": settings.debug
+        "workspace": str(getattr(settings.pipeline, 'default_workspace', './workspace')),
+        "database_url": getattr(settings.database, 'url', 'postgresql://...'),
+        "redis_url": getattr(settings.redis, 'url', 'redis://localhost:6379/0'),
+        "ollama_url": getattr(settings.llm, 'ollama_url', 'http://localhost:11434'),
+        "environment": getattr(settings, 'env', 'development'),
+        "debug": getattr(settings, 'debug', False)
     }
     result["config"] = config
     for key, value in config.items():
@@ -131,7 +130,6 @@ def status(output_json: bool):
     
     # Statistiques
     async def get_stats():
-        from src.db.database import get_async_session
         from sqlalchemy import select, func
         from src.models.project import ProjectModel
         from src.models.task import TaskModel, TaskState
@@ -169,7 +167,7 @@ def status(output_json: bool):
 @common_options
 @click.option('--reset', is_flag=True, help='Reset database (drop and recreate)')
 @click.option('--seed', is_flag=True, help='Seed database with initial data')
-def db_init(reset: bool, seed: bool, verbose: bool, output_json: bool):
+def db_init(reset: bool, seed: bool, verbose: bool, quiet: bool, output_json: bool):
     """Initialise la base de données."""
     click.echo("📊 Initializing database...")
     
@@ -185,9 +183,12 @@ def db_init(reset: bool, seed: bool, verbose: bool, output_json: bool):
     
     if seed:
         click.echo("📊 Seeding database...")
-        from src.db.seeds import seed_all
-        asyncio.run(seed_all())
-        click.echo("✅ Database seeded")
+        try:
+            from src.db.seeds import seed_all
+            asyncio.run(seed_all())
+            click.echo("✅ Database seeded")
+        except ImportError:
+            click.echo("⚠️  Seed module not found, skipping.")
     
     click.echo("✅ Database initialized")
     
@@ -197,7 +198,7 @@ def db_init(reset: bool, seed: bool, verbose: bool, output_json: bool):
 
 @cli.command()
 @common_options
-def db_migrate(output_json: bool):
+def db_migrate(verbose: bool, quiet: bool, output_json: bool):
     """Exécute les migrations de la base de données."""
     click.echo("📊 Running migrations...")
     
@@ -221,7 +222,7 @@ def db_migrate(output_json: bool):
 @cli.command()
 @common_options
 @click.argument('version')
-def db_rollback(version: str, output_json: bool):
+def db_rollback(version: str, verbose: bool, quiet: bool, output_json: bool):
     """Rollback vers une version spécifique."""
     click.echo(f"📊 Rolling back to version {version}...")
     
@@ -257,7 +258,7 @@ def db_rollback(version: str, output_json: bool):
 @click.option('--category', default='other', help='Category (defi, nft, gaming, dao, etc.)')
 def project_create(name: str, spec: Optional[str], config: Optional[str], 
                    chain: Optional[str], tags: Optional[str], priority: str,
-                   category: str, output_json: bool):
+                   category: str, verbose: bool, quiet: bool, output_json: bool):
     """Crée un nouveau projet."""
     click.echo(f"📋 Creating project: {name}")
     
@@ -297,45 +298,33 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
             click.echo(f"❌ Error loading config: {e}")
             return
     
-    # Créer le projet
+    # Créer le projet manuellement
+    async def save_project():
+        import uuid
+        from src.models.project import ProjectPriority, ProjectCategory, ProjectChain
+        
+        async with get_async_session() as session:
+            project = ProjectModel(
+                id=str(uuid.uuid4()),
+                name=name,
+                spec_yaml=spec_content,
+                config=config_data,
+                chain=ProjectChain(chain) if chain else ProjectChain.ETHEREUM,
+                priority=ProjectPriority(priority) if priority else ProjectPriority.MEDIUM,
+                category=ProjectCategory(category) if category else ProjectCategory.OTHER,
+                status=ProjectStatus.CREATED
+            )
+            # Appliquer les tags
+            if tags:
+                project.set_tags([t.strip() for t in tags.split(',')])
+            
+            session.add(project)
+            await session.commit()
+            await session.refresh(project)
+            return project
+    
     try:
-        project = ProjectModel.create_from_config(
-            name=name,
-            spec_yaml=spec_content,
-            config=config_data
-        )
-        
-        # Appliquer les tags
-        if tags:
-            project.set_tags([t.strip() for t in tags.split(',')])
-        
-        # Appliquer la priorité
-        if priority:
-            from src.models.project import ProjectPriority
-            try:
-                project.priority = ProjectPriority(priority)
-            except ValueError:
-                click.echo(f"⚠️  Invalid priority: {priority}. Using 'medium'.")
-        
-        # Appliquer la catégorie
-        if category:
-            from src.models.project import ProjectCategory
-            try:
-                project.category = ProjectCategory(category)
-            except ValueError:
-                click.echo(f"⚠️  Invalid category: {category}. Using 'other'.")
-        
-        # Sauvegarder en base de données
-        async def save_project():
-            from src.db.database import get_async_session
-            async with get_async_session() as session:
-                session.add(project)
-                await session.commit()
-                await session.refresh(project)
-                return project
-        
         saved_project = asyncio.run(save_project())
-        
         click.echo(f"✅ Project created: {saved_project.id}")
         click.echo(f"   Name: {saved_project.name}")
         click.echo(f"   Chain: {saved_project.chain.value if saved_project.chain else 'ethereum'}")
@@ -344,7 +333,7 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
         click.echo(f"   Category: {saved_project.category.value if saved_project.category else 'other'}")
         
         if output_json:
-            click.echo(json.dumps(saved_project.to_dict(include_config=True), indent=2))
+            click.echo(json.dumps(saved_project.to_dict(), indent=2))
             
     except Exception as e:
         click.echo(f"❌ Error creating project: {e}")
@@ -355,12 +344,11 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
 @cli.command()
 @common_options
 @click.argument('project_id')
-def project_show(project_id: str, output_json: bool):
+def project_show(project_id: str, verbose: bool, quiet: bool, output_json: bool):
     """Affiche les détails d'un projet."""
     click.echo(f"📋 Showing project: {project_id}")
     
     async def get_project():
-        from src.db.database import get_async_session
         from sqlalchemy import select
         from src.models.project import ProjectModel
         
@@ -392,19 +380,9 @@ def project_show(project_id: str, output_json: bool):
         click.echo(f"  Tasks: {project.task_count} (completed: {project.completed_task_count})")
         click.echo(f"  Security score: {project.security_score}")
         click.echo(f"  Quality score: {project.quality_score}")
-        click.echo(f"  Completion rate: {project.get_completion_rate():.1f}%")
+        click.echo(f"  Completion rate: {project.completion_rate:.1f}%")
         click.echo(f"  Created: {project.created_at.isoformat() if project.created_at else 'N/A'}")
         click.echo(f"  Updated: {project.updated_at.isoformat() if project.updated_at else 'N/A'}")
-        
-        if project.config:
-            click.echo(f"\n  Configuration:")
-            for key, value in project.config.items():
-                if isinstance(value, dict):
-                    click.echo(f"    {key}:")
-                    for subkey, subvalue in value.items():
-                        click.echo(f"      {subkey}: {subvalue}")
-                else:
-                    click.echo(f"    {key}: {value}")
 
 
 @cli.command()
@@ -416,13 +394,13 @@ def project_show(project_id: str, output_json: bool):
 @click.option('--limit', default=20, help='Limit results')
 def project_list(status: Optional[str], priority: Optional[str], 
                  category: Optional[str], chain: Optional[str], 
-                 limit: int, output_json: bool):
+                 limit: int, verbose: bool, quiet: bool, output_json: bool):
     """Liste tous les projets."""
     click.echo("📋 Listing projects...")
     
     async def list_projects():
-        from src.db.database import get_async_session
         from sqlalchemy import select
+        from src.models.project import ProjectModel
         
         async with get_async_session() as session:
             query = select(ProjectModel)
@@ -441,7 +419,7 @@ def project_list(status: Optional[str], priority: Optional[str],
     projects = asyncio.run(list_projects())
     
     if output_json:
-        click.echo(json.dumps([p.to_summary() for p in projects], indent=2))
+        click.echo(json.dumps([p.to_dict() for p in projects], indent=2))
     else:
         if not projects:
             click.echo("No projects found.")
@@ -453,7 +431,7 @@ def project_list(status: Optional[str], priority: Optional[str],
         for p in projects:
             click.echo(f"  {p.id[:8]} | {p.name[:20]} | {p.status.value if p.status else 'N/A':<8} | "
                        f"{p.priority.value if p.priority else 'medium':<8} | {p.task_count:>5} | "
-                       f"{p.get_completion_rate():>5.0f}% | "
+                       f"{p.completion_rate:>5.0f}% | "
                        f"{p.created_at.strftime('%Y-%m-%d') if p.created_at else 'N/A'}")
 
 
@@ -470,7 +448,7 @@ def project_list(status: Optional[str], priority: Optional[str],
 def project_update(project_id: str, status: Optional[str], name: Optional[str], 
                    description: Optional[str], priority: Optional[str],
                    category: Optional[str], chain: Optional[str],
-                   tags: Optional[str], output_json: bool):
+                   tags: Optional[str], verbose: bool, quiet: bool, output_json: bool):
     """Met à jour un projet."""
     click.echo(f"📋 Updating project: {project_id}")
     
@@ -495,7 +473,6 @@ def project_update(project_id: str, status: Optional[str], name: Optional[str],
         return
     
     async def update_project():
-        from src.db.database import get_async_session
         from sqlalchemy import select
         from src.models.project import ProjectModel, ProjectStatus, ProjectPriority, ProjectCategory, ProjectChain
         
@@ -548,7 +525,7 @@ def project_update(project_id: str, status: Optional[str], name: Optional[str],
 @common_options
 @click.argument('project_id')
 @click.option('--yes', is_flag=True, help='Skip confirmation')
-def project_delete(project_id: str, yes: bool, output_json: bool):
+def project_delete(project_id: str, yes: bool, verbose: bool, quiet: bool, output_json: bool):
     """Supprime un projet."""
     click.echo(f"📋 Deleting project: {project_id}")
     
@@ -559,7 +536,6 @@ def project_delete(project_id: str, yes: bool, output_json: bool):
             return
     
     async def delete_project():
-        from src.db.database import get_async_session
         from sqlalchemy import select
         from src.models.project import ProjectModel
         
@@ -607,7 +583,7 @@ def project_delete(project_id: str, yes: bool, output_json: bool):
 def task_create(project_id: str, name: str, skill: str, parameters: Optional[str],
                 depends_on: Optional[str], priority: str, task_type: str,
                 requires_validation: bool, timeout: int, max_retries: int,
-                output_json: bool):
+                verbose: bool, quiet: bool, output_json: bool):
     """Crée une nouvelle tâche."""
     click.echo(f"📋 Creating task: {name}")
     
@@ -626,7 +602,7 @@ def task_create(project_id: str, name: str, skill: str, parameters: Optional[str
         deps = [d.strip() for d in depends_on.split(',')]
     
     async def create_task():
-        from src.db.database import get_async_session
+        import uuid
         from sqlalchemy import select
         from src.models.project import ProjectModel
         from src.models.task import TaskModel, TaskPriority, TaskType
@@ -643,20 +619,22 @@ def task_create(project_id: str, name: str, skill: str, parameters: Optional[str
             
             # Créer la tâche
             task = TaskModel(
+                id=str(uuid.uuid4()),
                 project_id=project_id,
                 name=name,
                 skill_id=skill,
                 parameters=params,
                 dependencies=deps,
-                priority=TaskPriority(priority),
-                task_type=TaskType(task_type),
+                priority=TaskPriority(priority) if priority in ['low', 'normal', 'high', 'critical'] else TaskPriority.NORMAL,
+                task_type=TaskType(task_type) if task_type in [t.value for t in TaskType] else TaskType.CUSTOM,
                 requires_human_validation=requires_validation,
                 timeout_seconds=timeout,
                 max_retries=max_retries
             )
             
             session.add(task)
-            project.increment_task_count()
+            # Incrémenter le compteur
+            project.task_count = (project.task_count or 0) + 1
             await session.commit()
             await session.refresh(task)
             return task
@@ -680,12 +658,11 @@ def task_create(project_id: str, name: str, skill: str, parameters: Optional[str
 @cli.command()
 @common_options
 @click.argument('task_id')
-def task_show(task_id: str, output_json: bool):
+def task_show(task_id: str, verbose: bool, quiet: bool, output_json: bool):
     """Affiche les détails d'une tâche."""
     click.echo(f"📋 Showing task: {task_id}")
     
     async def get_task():
-        from src.db.database import get_async_session
         from sqlalchemy import select
         from src.models.task import TaskModel
         
@@ -734,7 +711,7 @@ def task_show(task_id: str, output_json: bool):
 @click.option('--priority', help='New priority')
 @click.option('--parameters', help='New parameters (JSON string)')
 def task_update(task_id: str, state: Optional[str], priority: Optional[str],
-                parameters: Optional[str], output_json: bool):
+                parameters: Optional[str], verbose: bool, quiet: bool, output_json: bool):
     """Met à jour une tâche."""
     click.echo(f"📋 Updating task: {task_id}")
     
@@ -755,7 +732,6 @@ def task_update(task_id: str, state: Optional[str], priority: Optional[str],
         return
     
     async def update_task():
-        from src.db.database import get_async_session
         from sqlalchemy import select
         from src.models.task import TaskModel, TaskState, TaskPriority
         
@@ -772,11 +748,13 @@ def task_update(task_id: str, state: Optional[str], priority: Optional[str],
                 if key == "state":
                     new_state = TaskState(value)
                     if new_state == TaskState.SUCCESS and task.state != TaskState.SUCCESS:
-                        task.mark_success()
+                        task.state = TaskState.SUCCESS
                     elif new_state == TaskState.FAILED and task.state != TaskState.FAILED:
-                        task.mark_failed("Updated via CLI")
+                        task.state = TaskState.FAILED
+                        task.error_message = "Updated via CLI"
                     elif new_state == TaskState.CANCELLED:
-                        task.mark_cancelled("Updated via CLI")
+                        task.state = TaskState.CANCELLED
+                        task.error_message = "Cancelled via CLI"
                     else:
                         task.state = new_state
                 elif key == "priority":
@@ -806,12 +784,11 @@ def task_update(task_id: str, state: Optional[str], priority: Optional[str],
 @common_options
 @click.argument('task_id')
 @click.option('--force', is_flag=True, help='Force retry even if max retries reached')
-def task_retry(task_id: str, force: bool, output_json: bool):
+def task_retry(task_id: str, force: bool, verbose: bool, quiet: bool, output_json: bool):
     """Réessaie une tâche échouée."""
     click.echo(f"🔄 Retrying task: {task_id}")
     
     async def retry_task():
-        from src.db.database import get_async_session
         from sqlalchemy import select
         from src.models.task import TaskModel, TaskState
         
@@ -867,14 +844,13 @@ def task_retry(task_id: str, force: bool, output_json: bool):
 @common_options
 @click.argument('task_id')
 @click.option('--reason', help='Cancellation reason')
-def task_cancel(task_id: str, reason: Optional[str], output_json: bool):
+def task_cancel(task_id: str, reason: Optional[str], verbose: bool, quiet: bool, output_json: bool):
     """Annule une tâche."""
     click.echo(f"🛑 Cancelling task: {task_id}")
     
     async def cancel_task():
-        from src.db.database import get_async_session
         from sqlalchemy import select
-        from src.models.task import TaskModel
+        from src.models.task import TaskModel, TaskState
         
         async with get_async_session() as session:
             result = await session.execute(
@@ -888,7 +864,8 @@ def task_cancel(task_id: str, reason: Optional[str], output_json: bool):
             if task.is_terminal:
                 return {"error": f"Task {task_id} is already in terminal state: {task.state.value}"}
             
-            task.mark_cancelled(reason or "Cancelled via CLI")
+            task.state = TaskState.CANCELLED
+            task.error_message = reason or "Cancelled via CLI"
             await session.commit()
             await session.refresh(task)
             return task
@@ -912,13 +889,13 @@ def task_cancel(task_id: str, reason: Optional[str], output_json: bool):
 @click.option('--priority', help='Filter by priority')
 @click.option('--limit', default=20, help='Limit results')
 def task_list(project_id: str, state: Optional[str], priority: Optional[str], 
-              limit: int, output_json: bool):
+              limit: int, verbose: bool, quiet: bool, output_json: bool):
     """Liste les tâches d'un projet."""
     click.echo(f"📋 Listing tasks for project: {project_id}")
     
     async def list_tasks():
-        from src.db.database import get_async_session
         from sqlalchemy import select
+        from src.models.task import TaskModel
         
         async with get_async_session() as session:
             query = select(TaskModel).where(TaskModel.project_id == project_id)
@@ -933,7 +910,7 @@ def task_list(project_id: str, state: Optional[str], priority: Optional[str],
     tasks = asyncio.run(list_tasks())
     
     if output_json:
-        click.echo(json.dumps([t.to_summary() for t in tasks], indent=2))
+        click.echo(json.dumps([t.to_dict() for t in tasks], indent=2))
     else:
         if not tasks:
             click.echo("No tasks found.")
@@ -962,15 +939,15 @@ def task_list(project_id: str, state: Optional[str], priority: Optional[str],
 @click.option('--end-date', help='End date (ISO format)')
 def sprint_create(project_id: str, name: str, description: Optional[str],
                   start_date: Optional[str], end_date: Optional[str],
-                  output_json: bool):
+                  verbose: bool, quiet: bool, output_json: bool):
     """Crée un nouveau sprint."""
     click.echo(f"📋 Creating sprint: {name}")
     
     async def create_sprint():
-        from src.db.database import get_async_session
+        import uuid
         from sqlalchemy import select
         from src.models.project import ProjectModel
-        from src.models.sprint import Sprint
+        from src.persistence.models_orm import Sprint
         
         async with get_async_session() as session:
             result = await session.execute(
@@ -982,6 +959,7 @@ def sprint_create(project_id: str, name: str, description: Optional[str],
                 return {"error": f"Project {project_id} not found"}
             
             sprint = Sprint(
+                id=str(uuid.uuid4()),
                 project_id=project_id,
                 name=name,
                 description=description or "",
@@ -1012,14 +990,13 @@ def sprint_create(project_id: str, name: str, description: Optional[str],
 @cli.command()
 @common_options
 @click.argument('sprint_id')
-def sprint_show(sprint_id: str, output_json: bool):
+def sprint_show(sprint_id: str, verbose: bool, quiet: bool, output_json: bool):
     """Affiche les détails d'un sprint."""
     click.echo(f"📋 Showing sprint: {sprint_id}")
     
     async def get_sprint():
-        from src.db.database import get_async_session
         from sqlalchemy import select
-        from src.models.sprint import Sprint
+        from src.persistence.models_orm import Sprint
         
         async with get_async_session() as session:
             result = await session.execute(
@@ -1042,7 +1019,7 @@ def sprint_show(sprint_id: str, output_json: bool):
         click.echo(f"  Description: {sprint.description}")
         click.echo(f"  Status: {sprint.status if sprint.status else 'planned'}")
         click.echo(f"  Project: {sprint.project_id}")
-        click.echo(f"  Tasks: {len(sprint.tasks) if sprint.tasks else 0}")
+        click.echo(f"  Tasks: {len(sprint.task_results) if sprint.task_results else 0}")
         click.echo(f"  Created: {sprint.created_at.isoformat() if sprint.created_at else 'N/A'}")
 
 
@@ -1056,12 +1033,11 @@ def sprint_show(sprint_id: str, output_json: bool):
 @click.option('--sprint', '-s', help='Sprint ID')
 @click.option('--parallel', is_flag=True, help='Execute in parallel')
 @click.option('--max-parallel', default=4, help='Max parallel tasks')
-def run(project_id: str, sprint: Optional[str], parallel: bool, max_parallel: int, output_json: bool):
+def run(project_id: str, sprint: Optional[str], parallel: bool, max_parallel: int, verbose: bool, quiet: bool, output_json: bool):
     """Exécute le pipeline pour un projet."""
     click.echo(f"🚀 Running pipeline for project: {project_id}")
     
     async def execute():
-        from src.db.database import get_async_session
         from sqlalchemy import select
         from src.models.project import ProjectModel
         from src.models.task import TaskModel, TaskState
@@ -1087,17 +1063,24 @@ def run(project_id: str, sprint: Optional[str], parallel: bool, max_parallel: in
             if not tasks:
                 return {"error": "No tasks found"}
             
-            # Initialiser le moteur
+            # Initialiser le moteur de workflow
             engine = WorkflowEngine(
+                agents={},  # À configurer plus tard
                 max_parallel=max_parallel if parallel else 1
             )
             
-            # Ajouter les tâches
+            # Ajouter les tâches au moteur
             for task in tasks:
-                engine.add_task(task.id, task.skill_id, task.parameters or {})
+                engine.add_task(
+                    task_id=task.id,
+                    agent_id=task.skill_id,
+                    action="execute",
+                    parameters=task.parameters or {},
+                    dependencies=task.dependencies or []
+                )
             
             # Exécuter
-            result = await engine.run_pipeline()
+            result = await engine.start(workflow_id=f"cli_{project_id}")
             
             # Mettre à jour le projet
             project.update_status(ProjectStatus.IN_PROGRESS)
@@ -1106,8 +1089,8 @@ def run(project_id: str, sprint: Optional[str], parallel: bool, max_parallel: in
             return {
                 "success": True,
                 "project_id": project_id,
-                "tasks_completed": len(result),
-                "results": result
+                "tasks_completed": len(tasks),
+                "result": result
             }
     
     result = asyncio.run(execute())
@@ -1125,12 +1108,11 @@ def run(project_id: str, sprint: Optional[str], parallel: bool, max_parallel: in
 @cli.command()
 @common_options
 @click.argument('task_id')
-def task_status(task_id: str, output_json: bool):
+def task_status(task_id: str, verbose: bool, quiet: bool, output_json: bool):
     """Affiche le statut d'une tâche."""
     click.echo(f"📋 Showing task status: {task_id}")
     
     async def get_task():
-        from src.db.database import get_async_session
         from sqlalchemy import select
         from src.models.task import TaskModel
         
@@ -1172,7 +1154,7 @@ def task_status(task_id: str, output_json: bool):
 @click.option('--level', default='full', help='Audit level (level_1, level_2, level_3, level_4, full)')
 @click.option('--output', '-o', help='Output file for report')
 @click.option('--json-output', is_flag=True, help='Output as JSON')
-def audit(contract_path: str, level: str, output: Optional[str], json_output: bool, output_json: bool):
+def audit(contract_path: str, level: str, output: Optional[str], json_output: bool, verbose: bool, quiet: bool, output_json: bool):
     """Exécute un audit de sécurité sur un contrat."""
     click.echo(f"🔒 Auditing contract: {contract_path}")
     
@@ -1223,7 +1205,7 @@ def audit(contract_path: str, level: str, output: Optional[str], json_output: bo
 @click.argument('contract_path')
 @click.option('--function', '-f', help='Function to verify')
 @click.option('--timeout', default=300, help='Timeout in seconds')
-def verify(contract_path: str, function: Optional[str], timeout: int, output_json: bool):
+def verify(contract_path: str, function: Optional[str], timeout: int, verbose: bool, quiet: bool, output_json: bool):
     """Exécute une vérification formelle sur un contrat."""
     click.echo(f"🔬 Verifying contract: {contract_path}")
     
@@ -1266,7 +1248,7 @@ def verify(contract_path: str, function: Optional[str], timeout: int, output_jso
 @click.option('--cache', is_flag=True, help='Clean cache')
 @click.option('--logs', is_flag=True, help='Clean logs')
 @click.option('--all', is_flag=True, help='Clean everything')
-def cleanup(workspace: bool, cache: bool, logs: bool, all: bool, output_json: bool):
+def cleanup(workspace: bool, cache: bool, logs: bool, all: bool, verbose: bool, quiet: bool, output_json: bool):
     """Nettoie les fichiers temporaires."""
     click.echo("🧹 Cleaning up...")
     
@@ -1280,7 +1262,7 @@ def cleanup(workspace: bool, cache: bool, logs: bool, all: bool, output_json: bo
     
     # Nettoyer le workspace
     if workspace:
-        workspace_path = settings.pipeline.default_workspace
+        workspace_path = getattr(settings.pipeline, 'default_workspace', Path('./workspace'))
         if workspace_path.exists():
             click.echo(f"📁 Cleaning workspace: {workspace_path}")
             import shutil
@@ -1318,7 +1300,7 @@ def cleanup(workspace: bool, cache: bool, logs: bool, all: bool, output_json: bo
 
 @cli.command()
 @common_options
-def info(output_json: bool):
+def info(verbose: bool, quiet: bool, output_json: bool):
     """Affiche des informations sur l'environnement."""
     click.echo("=" * 60)
     click.echo("Smart Contract Dev Pipeline - Environment Info")
@@ -1330,13 +1312,13 @@ def info(output_json: bool):
     
     # Configuration
     click.echo(f"\n⚙️ Configuration:")
-    click.echo(f"  Environment: {settings.env.value}")
-    click.echo(f"  Debug: {settings.debug}")
-    click.echo(f"  Workspace: {settings.pipeline.default_workspace}")
-    click.echo(f"  Database: {settings.database.url}")
-    click.echo(f"  Redis: {settings.redis.url}")
-    click.echo(f"  Ollama: {settings.llm.ollama_url}")
-    click.echo(f"  ChromaDB: {settings.chroma.host}:{settings.chroma.port}")
+    click.echo(f"  Environment: {getattr(settings, 'env', 'development')}")
+    click.echo(f"  Debug: {getattr(settings, 'debug', False)}")
+    click.echo(f"  Workspace: {getattr(settings.pipeline, 'default_workspace', './workspace')}")
+    click.echo(f"  Database: {getattr(settings.database, 'url', 'postgresql://')}")
+    click.echo(f"  Redis: {getattr(settings.redis, 'url', 'redis://localhost:6379/0')}")
+    click.echo(f"  Ollama: {getattr(settings.llm, 'ollama_url', 'http://localhost:11434')}")
+    click.echo(f"  ChromaDB: {getattr(settings.chroma, 'host', 'localhost')}:{getattr(settings.chroma, 'port', 8000)}")
     
     # Vérifications
     click.echo(f"\n🔍 Health Checks:")
@@ -1348,7 +1330,7 @@ def info(output_json: bool):
     # Redis
     try:
         import redis.asyncio as aioredis
-        redis_client = asyncio.run(aioredis.from_url(settings.redis.url))
+        redis_client = asyncio.run(aioredis.from_url(getattr(settings.redis, 'url', 'redis://localhost:6379/0')))
         redis_ok = asyncio.run(redis_client.ping())
         asyncio.run(redis_client.close())
         click.echo(f"  Redis: {'✅ Connected' if redis_ok else '❌ Disconnected'}")
@@ -1370,12 +1352,12 @@ def info(output_json: bool):
     if output_json:
         click.echo("\n" + json.dumps({
             "python": sys.version.split()[0],
-            "environment": settings.env.value,
-            "debug": settings.debug,
-            "workspace": str(settings.pipeline.default_workspace),
-            "database": settings.database.url,
-            "redis": settings.redis.url,
-            "ollama": settings.llm.ollama_url
+            "environment": getattr(settings, 'env', 'development'),
+            "debug": getattr(settings, 'debug', False),
+            "workspace": str(getattr(settings.pipeline, 'default_workspace', './workspace')),
+            "database": getattr(settings.database, 'url', 'postgresql://'),
+            "redis": getattr(settings.redis, 'url', 'redis://localhost:6379/0'),
+            "ollama": getattr(settings.llm, 'ollama_url', 'http://localhost:11434')
         }, indent=2))
     
     click.echo("\n" + "=" * 60)

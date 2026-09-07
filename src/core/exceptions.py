@@ -9,8 +9,6 @@
 
 from typing import Optional, Any, Dict, List, Union
 from datetime import datetime
-from enum import Enum
-
 
 # ==============================================================================
 # EXCEPTION DE BASE
@@ -86,16 +84,20 @@ class ConfigurationError(PipelineError):
         message: str, 
         config_file: Optional[str] = None, 
         missing_env: Optional[str] = None,
-        field: Optional[str] = None
+        field: Optional[str] = None,
+        code: str = "CONFIG_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
+        d = details or {}
+        d.update(kwargs)
         if config_file:
-            details["config_file"] = config_file
+            d["config_file"] = config_file
         if missing_env:
-            details["missing_env"] = missing_env
+            d["missing_env"] = missing_env
         if field:
-            details["field"] = field
-        super().__init__(message, details, code="CONFIG_ERROR")
+            d["field"] = field
+        super().__init__(message, d, code=code)
 
 
 class EnvironmentVariableError(ConfigurationError):
@@ -119,7 +121,7 @@ class YAMLParseError(ConfigurationError):
         if column:
             details["column"] = column
         message = f"Failed to parse YAML file: {file_path}"
-        super().__init__(message, details, code="YAML_PARSE_ERROR")
+        super().__init__(message, details=details, code="YAML_PARSE_ERROR")
 
 
 # ==============================================================================
@@ -135,6 +137,7 @@ class SkillError(PipelineError):
         skill_id: str, 
         message: str, 
         cause: Optional[Exception] = None, 
+        code: str = "SKILL_ERROR",
         **kwargs
     ):
         """
@@ -142,6 +145,7 @@ class SkillError(PipelineError):
             skill_id: Identifiant de la compétence
             message: Message d'erreur
             cause: Exception originale (optionnel)
+            code: Code d'erreur
             **kwargs: Détails supplémentaires
         """
         details = {"skill_id": skill_id}
@@ -149,7 +153,7 @@ class SkillError(PipelineError):
             details["cause"] = str(cause)
             details["cause_type"] = type(cause).__name__
         details.update(kwargs)
-        super().__init__(message, details, code="SKILL_ERROR")
+        super().__init__(message, details, code=code)
         self.skill_id = skill_id
         self.cause = cause
 
@@ -250,6 +254,7 @@ class AgentError(PipelineError):
         agent_id: str, 
         message: str, 
         cause: Optional[Exception] = None, 
+        code: str = "AGENT_ERROR",
         **kwargs
     ):
         details = {"agent_id": agent_id}
@@ -257,7 +262,7 @@ class AgentError(PipelineError):
             details["cause"] = str(cause)
             details["cause_type"] = type(cause).__name__
         details.update(kwargs)
-        super().__init__(message, details, code="AGENT_ERROR")
+        super().__init__(message, details, code=code)
         self.agent_id = agent_id
         self.cause = cause
 
@@ -312,7 +317,8 @@ class TaskError(PipelineError):
         self, 
         task_id: str, 
         message: str, 
-        cause: Optional[Exception] = None, 
+        cause: Optional[Exception] = None,
+        code: str = "TASK_ERROR",
         **kwargs
     ):
         details = {"task_id": task_id}
@@ -320,7 +326,7 @@ class TaskError(PipelineError):
             details["cause"] = str(cause)
             details["cause_type"] = type(cause).__name__
         details.update(kwargs)
-        super().__init__(message, details, code="TASK_ERROR")
+        super().__init__(message, details, code=code)
         self.task_id = task_id
         self.cause = cause
 
@@ -358,10 +364,11 @@ class TaskCircularDependencyError(TaskError):
     Cycle détecté dans le DAG des tâches.
     """
     def __init__(self, task_ids: List[str], message: Optional[str] = None):
+        first_id = task_ids[0] if task_ids else "unknown"
         if message is None:
-            message = f"Circular dependency detected: {' -> '.join(task_ids)}"
+            message = f"Circular dependency detected: {' -> '.join(task_ids) if task_ids else 'unknown'}"
         super().__init__(
-            task_ids[0] if task_ids else "unknown", 
+            first_id, 
             message, 
             cycle=task_ids,
             code="TASK_CIRCULAR_DEPENDENCY"
@@ -447,15 +454,19 @@ class CommunicationError(PipelineError):
         self, 
         message: str, 
         channel: Optional[str] = None, 
-        cause: Optional[Exception] = None
+        cause: Optional[Exception] = None,
+        code: str = "COMMUNICATION_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
-        if channel:
-            details["channel"] = channel
-        if cause:
-            details["cause"] = str(cause)
-            details["cause_type"] = type(cause).__name__
-        super().__init__(message, details, code="COMMUNICATION_ERROR")
+        d = details or {}
+        d.update(kwargs)
+        if channel: 
+            d["channel"] = channel
+        if cause: 
+            d["cause"] = str(cause)
+            d["cause_type"] = type(cause).__name__
+        super().__init__(message, d, code=code)
 
 
 class MessageBusError(CommunicationError):
@@ -512,14 +523,18 @@ class KnowledgeBaseError(PipelineError):
         self, 
         message: str, 
         collection: Optional[str] = None, 
-        operation: Optional[str] = None
+        operation: Optional[str] = None,
+        code: str = "KNOWLEDGE_BASE_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
-        if collection:
-            details["collection"] = collection
-        if operation:
-            details["operation"] = operation
-        super().__init__(message, details, code="KNOWLEDGE_BASE_ERROR")
+        d = details or {}
+        d.update(kwargs)
+        if collection: 
+            d["collection"] = collection
+        if operation: 
+            d["operation"] = operation
+        super().__init__(message, d, code=code)
 
 
 class EmbeddingError(KnowledgeBaseError):
@@ -553,13 +568,22 @@ class GitSyncError(PipelineError):
     """
     Erreur lors des opérations Git/GitHub.
     """
-    def __init__(self, message: str, repo: Optional[str] = None, operation: Optional[str] = None):
-        details = {}
-        if repo:
-            details["repo"] = repo
-        if operation:
-            details["operation"] = operation
-        super().__init__(message, details, code="GIT_SYNC_ERROR")
+    def __init__(
+        self, 
+        message: str, 
+        repo: Optional[str] = None, 
+        operation: Optional[str] = None,
+        code: str = "GIT_SYNC_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ):
+        d = details or {}
+        d.update(kwargs)
+        if repo: 
+            d["repo"] = repo
+        if operation: 
+            d["operation"] = operation
+        super().__init__(message, d, code=code)
 
 
 class GitAuthenticationError(GitSyncError):
@@ -606,14 +630,18 @@ class LLMError(PipelineError):
         self, 
         message: str, 
         provider: Optional[str] = None, 
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        code: str = "LLM_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
-        if provider:
-            details["provider"] = provider
-        if model:
-            details["model"] = model
-        super().__init__(message, details, code="LLM_ERROR")
+        d = details or {}
+        d.update(kwargs)
+        if provider: 
+            d["provider"] = provider
+        if model: 
+            d["model"] = model
+        super().__init__(message, d, code=code)
 
 
 class LLMConnectionError(LLMError):
@@ -676,14 +704,18 @@ class SecurityError(PipelineError):
         self, 
         message: str, 
         tool: Optional[str] = None, 
-        contract: Optional[str] = None
+        contract: Optional[str] = None,
+        code: str = "SECURITY_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
-        if tool:
-            details["tool"] = tool
-        if contract:
-            details["contract"] = contract
-        super().__init__(message, details, code="SECURITY_ERROR")
+        d = details or {}
+        d.update(kwargs)
+        if tool: 
+            d["tool"] = tool
+        if contract: 
+            d["contract"] = contract
+        super().__init__(message, d, code=code)
 
 
 class SecurityAuditError(SecurityError):
@@ -739,14 +771,18 @@ class OrchestrationError(PipelineError):
         self, 
         message: str, 
         workflow_id: Optional[str] = None, 
-        step: Optional[int] = None
+        step: Optional[int] = None,
+        code: str = "ORCHESTRATION_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
-        if workflow_id:
-            details["workflow_id"] = workflow_id
-        if step is not None:
-            details["step"] = step
-        super().__init__(message, details, code="ORCHESTRATION_ERROR")
+        d = details or {}
+        d.update(kwargs)
+        if workflow_id: 
+            d["workflow_id"] = workflow_id
+        if step is not None: 
+            d["step"] = step
+        super().__init__(message, d, code=code)
 
 
 class CircuitBreakerError(OrchestrationError):
@@ -807,14 +843,18 @@ class StorageError(PipelineError):
         self, 
         message: str, 
         table: Optional[str] = None, 
-        operation: Optional[str] = None
+        operation: Optional[str] = None,
+        code: str = "STORAGE_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
-        if table:
-            details["table"] = table
-        if operation:
-            details["operation"] = operation
-        super().__init__(message, details, code="STORAGE_ERROR")
+        d = details or {}
+        d.update(kwargs)
+        if table: 
+            d["table"] = table
+        if operation: 
+            d["operation"] = operation
+        super().__init__(message, d, code=code)
 
 
 class DatabaseConnectionError(StorageError):
@@ -863,14 +903,18 @@ class ArtifactError(PipelineError):
         self, 
         message: str, 
         artifact_id: Optional[str] = None, 
-        artifact_type: Optional[str] = None
+        artifact_type: Optional[str] = None,
+        code: str = "ARTIFACT_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
-        if artifact_id:
-            details["artifact_id"] = artifact_id
-        if artifact_type:
-            details["artifact_type"] = artifact_type
-        super().__init__(message, details, code="ARTIFACT_ERROR")
+        d = details or {}
+        d.update(kwargs)
+        if artifact_id: 
+            d["artifact_id"] = artifact_id
+        if artifact_type: 
+            d["artifact_type"] = artifact_type
+        super().__init__(message, d, code=code)
 
 
 class ArtifactNotFoundError(ArtifactError):
@@ -908,14 +952,18 @@ class DeploymentError(PipelineError):
         self, 
         message: str, 
         network: Optional[str] = None, 
-        contract: Optional[str] = None
+        contract: Optional[str] = None,
+        code: str = "DEPLOYMENT_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
-        details = {}
-        if network:
-            details["network"] = network
-        if contract:
-            details["contract"] = contract
-        super().__init__(message, details, code="DEPLOYMENT_ERROR")
+        d = details or {}
+        d.update(kwargs)
+        if network: 
+            d["network"] = network
+        if contract: 
+            d["contract"] = contract
+        super().__init__(message, d, code=code)
 
 
 class DeploymentTimeoutError(DeploymentError):
@@ -971,13 +1019,13 @@ def format_exception(e: Exception) -> Dict[str, Any]:
 
 def exception_to_response(e: Exception) -> Dict[str, Any]:
     """
-    Convertit une exception en réponse HTTP.
+    Convertit une exception en réponse HTTP structurée.
     
     Args:
         e: L'exception à convertir
         
     Returns:
-        Dictionnaire pour la réponse HTTP
+        Dictionnaire avec les champs 'error' et 'status_code'
     """
     formatted = format_exception(e)
     
@@ -996,8 +1044,11 @@ def exception_to_response(e: Exception) -> Dict[str, Any]:
     elif isinstance(e, (LLMTimeoutError, TaskTimeoutError, SkillExecutionTimeoutError, WorkflowTimeoutError)):
         status_code = 408
     
-    formatted["status_code"] = status_code
-    return formatted
+    # Retourne une structure standardisée
+    return {
+        "error": formatted,
+        "status_code": status_code
+    }
 
 
 def is_retryable(e: Exception) -> bool:

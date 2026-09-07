@@ -1,0 +1,83 @@
+<div class="spec-section" id="f14-abstract-agent-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/agents/base/abstract_agent.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/agents/base/abstract_agent.py</code> définit la classe de base abstraite <code>AbstractAgent</code> et les structures d'accompagnement fournissant le squelette commun pour l'ensemble des agents du pipeline (Architect, Developer, Security, Feedback)[cite: 13].</p>
+
+  <div class="model-group">
+    <h5>Énumérations &amp; Structure de Métriques Télémétriques</h5>
+    <ul>
+      <li><code>AgentStatus</code> : Énumération des états du cycle de vie (<code>IDLE</code>, <code>RUNNING</code>, <code>WAITING</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>CIRCUIT_OPEN</code>, <code>PAUSED</code>, <code>CANCELLED</code>)[cite: 13].</li>
+      <li><code>AgentEvent</code> : Événements d'agent (<code>STARTED</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>RETRY</code>, <code>CIRCUIT_OPENED</code>, <code>CIRCUIT_CLOSED</code>, <code>SKILL_ATTACHED</code>, <code>SKILL_REMOVED</code>, <code>PAUSED</code>, <code>RESUMED</code>, <code>CANCELLED</code>)[cite: 13].</li>
+      <li><code>AgentMetrics</code> : Dataclass mesurant les temps d'exécution (min, max, moyen, total), le taux de succès, les tentatives (retries) et les statistiques d'utilisation des compétences (<code>update()</code>, <code>to_dict()</code>)[cite: 13].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Cœur Abstrait <code>AbstractAgent(ABC, LoggableMixin)</code></h5>
+    <ul>
+      <li><code>execute_task(task_data)</code> : Méthode abstraite (<code>@abstractmethod</code>) imposant le contrat d'exécution spécifique aux agents dérivés[cite: 13].</li>
+      <li><code>execute_with_circuit_breaker(task_data)</code> : Wrapper d'exécution résilient incluant verrouillage asynchrone (<code>asyncio.Lock</code>), gestion des timeouts (<code>task_timeout</code>), retries automatiques à backoff exponentiel, circuit breaker et enregistrement systématique des métriques/logs[cite: 13].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Gestion Dynamique des Compétences (Skills)</h5>
+    <ul>
+      <li><code>attach_skill(skill)</code> : Attache une instance de <code>BaseSkill</code> avec validation de type, vérification des doublons et émission d'événement[cite: 13].</li>
+      <li><code>remove_skill(skill_id)</code> : Retire une compétence par identifiant et émet l'événement <code>SKILL_REMOVED</code>[cite: 13].</li>
+      <li><code>get_skill(skill_id)</code> &amp; <code>has_skill(skill_id)</code> : Méthodes d'inspection et de récupération des compétences rattachées[cite: 13].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Moteur d'Événements Asynchrones (Pub/Sub)</h5>
+    <ul>
+      <li><code>add_event_listener(listener)</code> / <code>remove_event_listener(listener)</code> : Inscription et désinscription de fonctions de callback asynchrones[cite: 13].</li>
+      <li><code>_emit_event(event_type, data)</code> : Publication asynchrone sécurisée des événements de l'agent vers tous les listeners enregistrés[cite: 13].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Contrôle du Cycle de Vie &amp; Circuit Breaker</h5>
+    <ul>
+      <li><code>cancel()</code>, <code>pause()</code>, <code>resume()</code> : Contrôle dynamique de l'état d'exécution de l'agent[cite: 13].</li>
+      <li><code>reset_circuit_breaker()</code>, <code>is_circuit_open()</code> : Réinitialisation et vérification de l'état du coupe-circuit de l'agent[cite: 13].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Validation, Logging &amp; Diagnostics</h5>
+    <ul>
+      <li><code>_validate_task_data(task_data)</code> &amp; <code>_validate_result(result)</code> : Contrôles de structure stricts sur les dictionnaires d'entrée et de sortie[cite: 13].</li>
+      <li><code>_log_execution(...)</code> &amp; <code>_log_error(...)</code> : Persistance des traces via <code>ExecutionLogModel</code> et intégration avec le mixin <code>LoggableMixin</code>[cite: 13].</li>
+      <li><code>health_check()</code>, <code>get_capabilities()</code>, <code>get_history(limit)</code>, <code>get_performance_stats()</code>, <code>to_dict()</code>, <code>__repr__()</code> : Interfaces complètes de diagnostic, de télémétrie et de sérialisation[cite: 13].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Patron de Conception Template Method :</strong> La classe abstraite encapsule toute la logique transversale (circuit breaker, backoff, logs, métriques, événements) tout en déléguant l'exécution métier pure à la méthode <code>execute_task</code> des classes filles[cite: 13].</li>
+    <li><strong>Gestion Avancée de la Concurrence Asynchrone :</strong> Utilisation d'un verrou d'exclusivité <code>asyncio.Lock</code> pour garantir qu'un agent ne traite qu'une tâche à la fois et prévenir les conditions de concurrence sur l'état du coupe-circuit[cite: 13].</li>
+    <li><strong>Tolérance aux Panne &amp; Backoff Exponentiel :</strong> Gestion robuste des erreurs et des timeouts via des tentatives espacées de manière exponentielle ($2^{\text{retry\_count}}$ secondes) avant le basculement du circuit breaker[cite: 13].</li>
+    <li><strong>Architecture Événementielle Découplée :</strong> Système Pub/Sub asynchrone intégré permettant de notifier le reste de la plateforme (orchestrateur, UI, monitoring) sans couplage fort[cite: 13].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Coupe-Circuit Auto-Protecteur (Circuit Breaker) :</strong> Basculement automatique en état <code>CIRCUIT_OPEN</code> en cas d'échecs répétatifs ou de timeouts pour éviter l'épuisement des ressources ou des appels LLM en boucle[cite: 13].</li>
+    <li><strong>Télémétrie et Profiling Intégrés :</strong> Calcul automatique et temps réel des durées d'exécution, taux de succès et comptage d'utilisation de chaque compétence au sein de <code>AgentMetrics</code>[cite: 13].</li>
+    <li><strong>Traçabilité Totale (Auditation DB) :</strong> Troncature intelligente (limite à 5000 caractères) et formatage JSON des prompts, réponses brutes et sorties d'outils vers la base de données via <code>ExecutionLogModel</code>[cite: 13].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/agents/base/abstract_agent.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>1 classe abstraite de base complète (<code>AbstractAgent</code>) héritant de <code>ABC</code> et <code>LoggableMixin</code>[cite: 13]</li>
+    <li>2 énumérations formelles (<code>AgentStatus</code>, <code>AgentEvent</code>) et 1 dataclass de métriques complète (<code>AgentMetrics</code>)[cite: 13]</li>
+    <li>Mécanisme d'exécution résilient complet (<code>execute_with_circuit_breaker</code>) avec timeout et retry backoff[cite: 13]</li>
+    <li>Gestionnaire de compétences dynamique (<code>attach_skill</code>, <code>remove_skill</code>, <code>get_skill</code>, <code>has_skill</code>)[cite: 13]</li>
+    <li>Système d'événements asynchrones complet (listeners, emission d'événements)[cite: 13]</li>
+    <li>Outillage d'inspection, de contrôle (pause, cancel, resume) et de diagnostic de santé (<code>health_check</code>)[cite: 13]</li>
+  </ul>
+</div>

@@ -9,15 +9,13 @@
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter, HTTPException, status
 from typing import Dict, Set, List, Optional, Any, Callable, Awaitable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import asyncio
 import uuid
 from enum import Enum
 from dataclasses import dataclass, field
-
-from src.core.models import EventType
 
 # ==============================================================================
 # CONFIGURATION
@@ -62,8 +60,8 @@ class ClientInfo:
     """Informations sur un client connecté."""
     client_id: str
     websocket: WebSocket
-    connected_at: datetime = field(default_factory=datetime.utcnow)
-    last_activity: datetime = field(default_factory=datetime.utcnow)
+    connected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     status: ConnectionStatus = ConnectionStatus.CONNECTED
     metadata: Dict[str, Any] = field(default_factory=dict)
     groups: Set[str] = field(default_factory=set)
@@ -81,7 +79,7 @@ class Message:
     payload: Dict[str, Any] = field(default_factory=dict)
     topic: Optional[str] = None
     group: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     ttl: Optional[int] = None  # Durée de vie en secondes
     persistent: bool = False
 
@@ -126,7 +124,7 @@ class ConnectionManager:
             "total_messages_received": 0,
             "total_errors": 0,
             "peak_connections": 0,
-            "started_at": datetime.utcnow()
+            "started_at": datetime.now(timezone.utc).isoformat()
         }
         
         logger.info(f"ConnectionManager initialized: max_connections={max_connections}")
@@ -165,12 +163,13 @@ class ConnectionManager:
         # Accepter la connexion
         await websocket.accept()
         
+        now = datetime.now(timezone.utc)
         # Créer les informations du client
         client = ClientInfo(
             client_id=client_id,
             websocket=websocket,
-            connected_at=datetime.utcnow(),
-            last_activity=datetime.utcnow(),
+            connected_at=now,
+            last_activity=now,
             metadata=metadata or {},
             groups=set(),
             topics=set()
@@ -199,7 +198,7 @@ class ConnectionManager:
             "type": MessageType.CONNECTION.value,
             "status": ConnectionStatus.CONNECTED.value,
             "client_id": client_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "connection_count": len(self._clients)
         })
         
@@ -329,7 +328,7 @@ class ConnectionManager:
             "type": MessageType.SUBSCRIPTION.value,
             "status": "subscribed",
             "topics": topics,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
     
     async def unsubscribe(self, client_id: str, topics: Optional[List[str]] = None) -> None:
@@ -363,7 +362,7 @@ class ConnectionManager:
             "type": MessageType.SUBSCRIPTION.value,
             "status": "unsubscribed",
             "topics": topics or ["all"],
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
     
     # ==========================================================================
@@ -380,7 +379,7 @@ class ConnectionManager:
             group: Groupe du message (optionnel)
         """
         # Ajouter les métadonnées
-        message["timestamp"] = datetime.utcnow().isoformat()
+        message["timestamp"] = datetime.now(timezone.utc).isoformat()
         
         # Déterminer les destinataires
         recipients = set()
@@ -399,13 +398,10 @@ class ConnectionManager:
             # Envoyer à tous les clients
             recipients.update(self._clients.keys())
         
-        # Envoyer le message
+        # Envoyer le message (send_to_client gère déjà l'incrémentation de total_messages_sent)
         for client_id in recipients:
             if client_id in self._clients:
                 await self.send_to_client(client_id, message)
-        
-        # Statistiques
-        self._stats["total_messages_sent"] += len(recipients)
         
         logger.debug(f"Broadcast to {len(recipients)} clients (topic: {topic}, group: {group})")
     
@@ -428,7 +424,7 @@ class ConnectionManager:
         try:
             await client.websocket.send_json(message)
             client.message_count += 1
-            client.last_activity = datetime.utcnow()
+            client.last_activity = datetime.now(timezone.utc)
             self._stats["total_messages_sent"] += 1
             return True
         except Exception as e:
@@ -478,7 +474,7 @@ class ConnectionManager:
             "type": MessageType.EVENT.value,
             "event": event_type,
             "data": data,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         await self.broadcast(message, topic)
     
@@ -497,7 +493,7 @@ class ConnectionManager:
             "title": title,
             "message": message,
             "level": level,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         await self.broadcast(notification, topic)
     
@@ -515,7 +511,7 @@ class ConnectionManager:
             "task_id": task_id,
             "state": state,
             "data": data or {},
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         await self.broadcast(message, f"task.{task_id}")
         await self.broadcast(message, "tasks")
@@ -534,7 +530,7 @@ class ConnectionManager:
             "project_id": project_id,
             "status": status,
             "data": data or {},
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         await self.broadcast(message, f"project.{project_id}")
         await self.broadcast(message, "projects")
@@ -555,7 +551,7 @@ class ConnectionManager:
             "title": title,
             "description": description,
             "data": data or {},
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         await self.broadcast(message, "security")
     
@@ -573,7 +569,7 @@ class ConnectionManager:
             if not self._running:
                 break
             
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             
             for client_id, client in list(self._clients.items()):
                 try:
@@ -583,7 +579,7 @@ class ConnectionManager:
                         "timestamp": now.isoformat()
                     })
                     client.ping_count += 1
-                    client.last_activity = now
+                    # Note: last_activity n'est pas mis à jour ici pour permettre au timeout d'inactivité de fonctionner correctement.
                 except Exception:
                     # Erreur de ping => déconnecter
                     await self.disconnect(client_id, "Ping failed")
@@ -598,7 +594,7 @@ class ConnectionManager:
             if not self._running:
                 break
             
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             timeout = timedelta(seconds=self._timeout)
             
             for client_id, client in list(self._clients.items()):
@@ -617,7 +613,8 @@ class ConnectionManager:
         Returns:
             Dict: Statistiques
         """
-        uptime = (datetime.utcnow() - self._stats["started_at"]).total_seconds()
+        started_at = datetime.fromisoformat(self._stats["started_at"])
+        uptime = (datetime.now(timezone.utc) - started_at).total_seconds()
         
         return {
             **self._stats,
@@ -632,7 +629,9 @@ class ConnectionManager:
                     "status": client.status.value,
                     "groups": list(client.groups),
                     "topics": list(client.topics),
-                    "message_count": client.message_count
+                    "message_count": client.message_count,
+                    "ping_count": client.ping_count,
+                    "pong_count": client.pong_count
                 }
                 for client_id, client in self._clients.items()
             }
@@ -687,18 +686,24 @@ class ConnectionManager:
         if client_id not in self._clients:
             return 0
         
-        delivered = 0
+        client = self._clients[client_id]
+        messages_to_deliver = []
         
+        # Isoler la sélection des messages sous verrou pour éviter de bloquer sur les I/O réseau
         async with self._lock:
             for message in self._pending_messages[:]:
-                if message.topic and message.topic in self._clients[client_id].topics:
-                    if await self.send_to_client(client_id, message.payload):
-                        self._pending_messages.remove(message)
-                        delivered += 1
-                elif message.group and message.group in self._clients[client_id].groups:
-                    if await self.send_to_client(client_id, message.payload):
-                        self._pending_messages.remove(message)
-                        delivered += 1
+                matches_topic = message.topic and message.topic in client.topics
+                matches_group = message.group and message.group in client.groups
+                matches_global = not message.topic and not message.group
+                
+                if matches_topic or matches_group or matches_global:
+                    messages_to_deliver.append(message)
+                    self._pending_messages.remove(message)
+        
+        delivered = 0
+        for message in messages_to_deliver:
+            if await self.send_to_client(client_id, message.payload):
+                delivered += 1
         
         return delivered
 
@@ -720,12 +725,11 @@ async def websocket_endpoint(websocket: WebSocket):
     Endpoint WebSocket pour les notifications en temps réel.
     """
     # Générer un ID de client
-    import uuid
     client_id = f"client_{uuid.uuid4().hex[:8]}"
     
     # Métadonnées du client
     metadata = {
-        "connected_at": datetime.utcnow().isoformat(),
+        "connected_at": datetime.now(timezone.utc).isoformat(),
         "client_id": client_id,
         "user_agent": websocket.headers.get("user-agent", "unknown"),
         "ip": websocket.headers.get("x-forwarded-for", websocket.client.host if websocket.client else "unknown")
@@ -743,7 +747,7 @@ async def websocket_endpoint(websocket: WebSocket):
             try:
                 data = await websocket.receive_json()
                 manager._stats["total_messages_received"] += 1
-                client.last_activity = datetime.utcnow()
+                client.last_activity = datetime.now(timezone.utc)
                 
                 await _handle_websocket_message(client_id, data)
             except WebSocketDisconnect:
@@ -753,7 +757,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await manager.send_to_client(client_id, {
                     "type": MessageType.ERROR.value,
                     "message": "Invalid JSON received",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 })
             except Exception as e:
                 logger.error(f"Error in WebSocket loop for {client_id}: {str(e)}")
@@ -761,7 +765,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await manager.send_to_client(client_id, {
                     "type": MessageType.ERROR.value,
                     "message": f"Internal error: {str(e)}",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 })
     
     except WebSocketDisconnect:
@@ -780,6 +784,7 @@ async def _handle_websocket_message(client_id: str, data: Dict[str, Any]) -> Non
         data: Message reçu
     """
     action = data.get("action")
+    msg_type = data.get("type")
     
     if action == "subscribe":
         topics = data.get("topics", [])
@@ -799,37 +804,45 @@ async def _handle_websocket_message(client_id: str, data: Dict[str, Any]) -> Non
         if group:
             await manager.leave_group(client_id, group)
     
-    elif action == "ping":
+    elif action == "ping" or msg_type == MessageType.PING.value:
         await manager.send_to_client(client_id, {
             "type": MessageType.PONG.value,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
+    
+    elif action == "pong" or msg_type == MessageType.PONG.value:
+        client = manager._clients.get(client_id)
+        if client:
+            client.pong_count += 1
+            client.last_activity = datetime.now(timezone.utc)
     
     elif action == "get_status":
         await manager.send_to_client(client_id, {
             "type": MessageType.STATUS.value,
             "connections": manager.get_connection_count(),
             "client_id": client_id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
     
     elif action == "get_stats":
-        if client_id in manager._clients and manager._clients[client_id].metadata.get("admin", False):
+        # Vérifier les droits admin (via métadonnées)
+        client = manager._clients.get(client_id)
+        if client and client.metadata.get("admin", False):
             await manager.send_to_client(client_id, {
                 "type": MessageType.STATUS.value,
                 "stats": manager.get_stats(),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
         else:
             await manager.send_to_client(client_id, {
                 "type": MessageType.ERROR.value,
                 "message": "Unauthorized",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
     
     else:
         await manager.send_to_client(client_id, {
             "type": MessageType.ERROR.value,
             "message": f"Unknown action: {action}",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })

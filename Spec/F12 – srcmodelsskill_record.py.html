@@ -1,0 +1,84 @@
+<div class="spec-section" id="f12-skill-record-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/models/skill_record.py</code></h3>
+
+  <h4>1. Classes, Fonctions et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/models/skill_record.py</code> définit le modèle ORM SQLAlchemy pour la table <code>skill_records</code>, qui assure la persistance et la réutilisation des compétences expertes dynamiques (<i>BaseSkill</i>) à travers les différents projets du pipeline[cite: 11].</p>
+
+  <div class="model-group">
+    <h5>Énumérations Typées</h5>
+    <ul>
+      <li><code>SkillStatus</code> : Cycle de vie de la compétence (<code>DRAFT</code>, <code>ACTIVE</code>, <code>DEPRECATED</code>, <code>ARCHIVED</code>)[cite: 11].</li>
+      <li><code>SkillScope</code> : Portée de réutilisation (<code>GLOBAL</code>, <code>PROJECT</code>, <code>SESSION</code>)[cite: 11].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Modèle Principal <code>SkillRecordModel(Base)</code></h5>
+    <ul>
+      <li><strong>Colonnes &amp; Indexation :</strong> Identifiant unique <code>skill_id</code> (clé primaire), nom, version Semantic Versioning (ex: <code>1.0.0</code>), statut, scope, rattachement optionnel à un projet (<code>project_id</code>), règles de prompt, schémas JSON (entrée/sortie), code Python exécutable, dépendances, métadonnées de sécurité (<code>is_verified</code>) et statistiques d'usage[cite: 11].</li>
+      <li><strong>Indexation Avancée :</strong> 7 indexations simples et composites (dont <code>status + scope</code>, <code>usage_count</code>, <code>project_id</code>) optimisant les recherches rapides dans le registre de compétences[cite: 11].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Gestionnaires de Listes, JSON &amp; Métadonnées</h5>
+    <ul>
+      <li><code>get_dependencies()</code>, <code>set_dependencies(dependencies)</code>, <code>add_dependency(skill_id)</code>, <code>remove_dependency(skill_id)</code> : Manipulation sécurisée du graphe de dépendances au format JSON[cite: 11].</li>
+      <li><code>get_tags()</code>, <code>set_tags(tags)</code>, <code>add_tag(tag)</code>, <code>remove_tag(tag)</code>, <code>has_tag(tag)</code> : Gestion dynamique des étiquettes de catégorisation[cite: 11].</li>
+      <li><code>get_metadata()</code>, <code>set_metadata(metadata)</code>, <code>get_metadata_value(key, default)</code>, <code>set_metadata_value(key, value)</code> : Accès et modification sécurisés des attributs dynamiques JSON[cite: 11].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Statistiques, Contrôle d'État &amp; Sérialisation</h5>
+    <ul>
+      <li><code>increment_usage()</code> : Incrémentation atomique du compteur d'utilisation <code>usage_count</code> et horodatage <code>last_used_at</code> à l'instant présent UTC[cite: 11].</li>
+      <li><code>is_active()</code>, <code>is_deprecated()</code>, <code>is_archived()</code> : Prédicats d'état métier pour le filtrage par le moteur de résolution[cite: 11].</li>
+      <li><code>to_dict()</code> &amp; <code>to_short_dict()</code> : Conversion en dictionnaires complet ou allégé pour la sérialisation API et l'échange inter-agents[cite: 11].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Méthodes Usines (Factories <code>@classmethod</code>)</h5>
+    <ul>
+      <li><code>create_skill(...)</code> : Constructeur usine instanciant une compétence complète avec dépendances, tags et métadonnées initialisés[cite: 11].</li>
+      <li><code>create_from_skill_config(...)</code> : Instanciation directe à partir d'un objet de configuration <code>SkillConfig</code>[cite: 11].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Mixin d'Utilisation <code>SkillUsableMixin</code></h5>
+    <ul>
+      <li><code>set_skill_usage_callback(callback)</code> : Configuration du callback asynchrone pour enregistrer l'utilisation d'une compétence[cite: 11].</li>
+      <li><code>use_skill(skill_id, success)</code> : Notification asynchrone de l'exécution d'une compétence[cite: 11].</li>
+      <li><code>validate_skill_dependencies(...)</code> : Vérification de la présence des dépendances requises dans un registre[cite: 11].</li>
+      <li><code>get_skill_dependencies(...)</code> : Résolution récursive du graphe complet de dépendances avec protection contre les cycles d'appels infiniment récursifs[cite: 11].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Rétrocompatibilité et Tolérance JSON :</strong> Détection du type de donnée (<code>list</code>, <code>dict</code> ou <code>str</code> sérialisée) avec interception des erreurs <code>JSONDecodeError</code> pour éviter tout blocage à la désérialisation[cite: 11].</li>
+    <li><strong>Prévention des Dépendances Cycliques :</strong> Utilisation d'un ensemble <code>visited</code> dans l'exploration récursive <code>get_skill_dependencies</code> pour prévenir les boucles infinies dans le graphe de compétences[cite: 11].</li>
+    <li><strong>Encapsulation Granulaire des Données :</strong> Accès aux champs JSON complexes (tags, métadonnées, dépendances) via des méthodes explicites évitant la mutation directe non contrôlée de la base de données[cite: 11].</li>
+    <li><strong>Découplage Fonctionnel via Mixin :</strong> Le pattern <code>SkillUsableMixin</code> permet aux agents d'interagir avec le moteur de compétences sans couplage direct à l'ORM SQLAlchemy[cite: 11].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Dynamic Skill Engine Persistant :</strong> Mémorisation intégrale des compétences (prompt rules, Pydantic schemas, code Python executable) permettant leur réutilisation multi-projets sans ré-génération coûteuse via LLM[cite: 11].</li>
+    <li><strong>Sécurité et Audit Intégrés :</strong> Indicateur de confiance <code>is_verified</code> combiné au suivi d'attribution (<code>created_by</code>, <code>updated_by</code>) pour garantir l'exécution de compétences auditées[cite: 11].</li>
+    <li><strong>Résolution Récursive des Dépendances :</strong> Capacité à extraire l'intégralité de l'arbre des prérequis techniques d'une compétence en une seule passe pour préparer le contexte d'exécution des agents[cite: 11].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/models/skill_record.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Modèle ORM <code>SkillRecordModel</code> complet (21 colonnes) et 7 indexations composites/simples[cite: 11]</li>
+    <li>2 énumérations typées (<code>SkillStatus</code>, <code>SkillScope</code>)[cite: 11]</li>
+    <li>2 méthodes usines statiques (<code>create_skill</code>, <code>create_from_skill_config</code>)[cite: 11]</li>
+    <li>16 méthodes de gestion des attributs JSON (tags, metadata, dependencies), états et sérialisations[cite: 11]</li>
+    <li>Mixin <code>SkillUsableMixin</code> avec algorithme de parcours de graphe de dépendances anti-cycle[cite: 11]</li>
+    <li>Docstrings et typage complets au format standard Python[cite: 11]</li>
+  </ul>
+</div>

@@ -1,0 +1,129 @@
+<div class="spec-section" id="f05-models-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/core/models.py</code></h3>
+
+  <h4>1. Modèles de Données, Validateurs et Méthodes Implémentées</h4>
+  <p>Le fichier <code>src/core/models.py</code> définit l'ensemble des structures de données Pydantic, des énumérations typées et des méthodes applicatives utilisées par l'ensemble des composants du pipeline.</p>
+
+  <div class="model-group">
+    <h5>Énumérations Système (Enums)</h5>
+    <ul>
+      <li><code>Chain</code> : Blockchains supportées (<code>ETHEREUM</code>, <code>POLYGON</code>, <code>ARBITRUM</code>, <code>OPTIMISM</code>, <code>BASE</code>, <code>SOLANA</code>, <code>AVALANCHE</code>, <code>BSC</code>, <code>FANTOM</code>).</li>
+      <li><code>Severity</code> : Niveaux de sévérité de sécurité (<code>CRITICAL</code>, <code>HIGH</code>, <code>MEDIUM</code>, <code>LOW</code>, <code>INFO</code>).</li>
+      <li><code>TaskStatus</code> : Statuts d'exécution de tâche (<code>PENDING</code>, <code>RUNNING</code>, <code>SUCCESS</code>, <code>FAILED</code>, <code>REJECTED</code>, <code>CIRCUIT_BROKEN</code>, <code>BLOCKED</code>, <code>SKIPPED</code>, <code>WAITING_VALIDATION</code>).</li>
+      <li><code>SprintStatus</code> : Statuts du cycle de sprint (<code>PLANNED</code>, <code>RUNNING</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>CANCELLED</code>, <code>BLOCKED</code>).</li>
+      <li><code>ProxyPattern</code> : Design patterns d'upgrade Web3 (<code>UUPS</code>, <code>TRANSPARENT</code>, <code>DIAMOND</code>, <code>BEACON</code>).</li>
+      <li><code>NotificationLevel</code> &amp; <code>LogLevel</code> : Niveaux d'alerte et de logs (<code>DEBUG</code>, <code>INFO</code>, <code>SUCCESS</code>, <code>WARNING</code>, <code>ERROR</code>, <code>CRITICAL</code>).</li>
+      <li><code>EventType</code> : Événements du cycle de vie du pipeline (tâches, sprints, compétences, agents, circuit breaker, déploiements).</li>
+      <li><code>ArtifactType</code> : Nature des artefacts produits (<code>SOLIDITY</code>, <code>TEST</code>, <code>DOCUMENTATION</code>, <code>CONFIGURATION</code>, <code>SCRIPT</code>, <code>ABI</code>, <code>BYTECODE</code>, <code>REPORT</code>, <code>OTHER</code>).</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Classes Modèles &amp; Méthodes Utilitaires</h5>
+    <ul>
+      <li>
+        <strong><code>Skill</code></strong> (Compétence exécutable par agent)
+        <ul>
+          <li><code>validate_id(v)</code> (<code>@field_validator</code>) : Validation par regex de l'identifiant (alphanumérique, tirets, underscores).</li>
+          <li><code>validate_version(v)</code> (<code>@field_validator</code>) : Contrôle strict du format SemVer (X.Y.Z).</li>
+          <li><code>model_dump(**kwargs)</code> : Surcharge de la sérialisation pour purger dynamiquement les schémas optionnels non renseignés.</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>BestPractice</code></strong> (Règle de qualité/sécurité)
+        <ul>
+          <li><code>validate_domain(v)</code> (<code>@field_validator</code>) : Restricton aux domaines autorisés (Solidity, React, Security, DevOps, Python, etc.).</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>Task</code></strong> (Unité de travail DAG)
+        <ul>
+          <li><code>validate_dependencies(values)</code> (<code>@root_validator</code>) : Interdiction des auto-dépendances circulaires.</li>
+          <li><code>get_dependency_depth() -&gt; int</code> : Calcule la profondeur des dépendances pour le scheduling du DAG.</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>TaskResult</code></strong> (Résultat de l'exécution d'une tâche)
+        <ul>
+          <li><code>validate_duration(v)</code> (<code>@field_validator</code>) : Arrondi automatique de la durée à 3 décimales.</li>
+          <li><code>is_success() -&gt; bool</code> : Indique si le statut est au succès.</li>
+          <li><code>is_failed() -&gt; bool</code> : Identifie les échecs, rejets ou déclenchements du circuit breaker.</li>
+          <li><code>is_pending() -&gt; bool</code> : Vérifie si la tâche est en attente.</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>Sprint</code></strong> (Gestionnaire de tâches groupées)
+        <ul>
+          <li><code>validate_tasks(v)</code> (<code>@field_validator</code>) : Garantit l'unicité des IDs de tâches dans un sprint.</li>
+          <li><code>get_task_by_id(task_id) -&gt; Optional[Task]</code> : Recherche directe d'une tâche par identifiant.</li>
+          <li><code>get_tasks_by_status(status) -&gt; List[Task]</code> : Filtrage des tâches selon leur statut.</li>
+          <li><code>get_completion_rate() -&gt; float</code> : Calcule le pourcentage d'avancement du sprint.</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>ProjectConfig</code></strong> (Configuration globale chargée via YAML)
+        <ul>
+          <li>Inclut les sous-modèles : <code>QualityGates</code>, <code>DeploymentConfig</code>, <code>UpgradesConfig</code>, <code>MonitoringConfig</code>, <code>TeamRequirement</code>.</li>
+          <li><code>validate_version(v)</code> (<code>@field_validator</code>) : Vérification SemVer de la version du projet.</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>Artifact</code></strong> (Artefacts de code, rapports, ABI)
+        <ul>
+          <li><code>validate_content(v)</code> (<code>@field_validator</code>) : Rejette tout contenu vide ou constitué uniquement d'espaces.</li>
+          <li><code>to_text() -&gt; str</code> : Retourne le contenu sous forme textuelle brut.</li>
+          <li><code>to_dict() -&gt; dict</code> : Exporte un aperçu de l'artefact avec métadonnées et prévisualisation du contenu.</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>Feedback</code></strong> (Boucle de retour humain RLHF)
+        <ul>
+          <li><code>validate_comments(v)</code> (<code>@field_validator</code>) : Nettoyage et stripping automatique des retours d'utilisateurs.</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>PipelineStatus</code></strong> (Santé et télémétrie du système)
+        <ul>
+          <li><code>is_healthy() -&gt; bool</code> : Évalue l'état global et la viabilité des sous-composants.</li>
+          <li><code>get_completion_rate() -&gt; float</code> : Retourne le taux global de réussite des tâches.</li>
+        </ul>
+      </li>
+      <li>
+        <strong><code>Deployment</code></strong> (Suivi du déploiement on-chain)
+        <ul>
+          <li><code>validate_address(v)</code> (<code>@field_validator</code>) : Validation regex stricte du format d'adresse EVM (<code>0x...</code> 40 caractères hexadécimaux).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>Modèles Complémentaires :</strong> <code>Notification</code>, <code>Event</code>, <code>ErrorResponse</code>, <code>MetricPoint</code>, <code>MetricSeries</code>, <code>Webhook</code>.
+      </li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Typage et Validation Déclaratifs :</strong> Exploitation native des décorateurs Pydantic (<code>@field_validator</code>, <code>@root_validator</code>) assurant une validation immédiate à l'instanciation.</li>
+    <li><strong>Gestion des Alias API :</strong> Utilisation systématique de <code>alias="id"</code> (ex: <code>skill_id</code>, <code>task_id</code>, <code>sprint_id</code>) garantissant une compatibilité fluide entre l'API JSON externe et la convention Python (PEP8).</li>
+    <li><strong>Métadonnées Extensibles :</strong> Présence d'un dictionnaire <code>metadata: Dict[str, Any]</code> sur l'ensemble des modèles pour permettre l'extension sans casser les schémas existants.</li>
+    <li><strong>Gestion du Horodatage UTC :</strong> Valeurs par défaut générées dynamiquement via <code>Field(default_factory=datetime.utcnow)</code> évitant les biais liés aux fuseaux horaires.</li>
+    <li><strong>Immuabilité et Valeurs par Défaut Sécurisées :</strong> Emploi de <code>default_factory=list</code> et <code>default_factory=dict</code> pour éviter le piège des arguments par défaut mutables en Python.</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Compatibilité Multi-Chaines &amp; Web3 Native :</strong> Intégration de modèles spécifiques au cycle de vie Smart Contracts (Proxy Patterns UUPS/Diamond, contrôles d'adresses EVM, vérification Etherscan, Quality Gates Slither/Mythril).</li>
+    <li><strong>Sérialisation Intelligente :</strong> Méthode <code>model_dump()</code> surchargée pour optimiser la taille des payloads JSON transmis entre agents et microservices.</li>
+    <li><strong>Intégration RLHF &amp; Observabilité :</strong> Prise en charge native du suivi d'événements (<code>Event</code>), du monitoring (<code>MetricSeries</code>, <code>Webhook</code>) et des retours de validation humaine (<code>Feedback</code>).</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/core/models.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>Plus de 20 classes et modèles Pydantic pleinement validés</li>
+    <li>Des énumérations complètes pour tous les domaines fonctionnels (Chains, Statuts, Événements, Sécurité)</li>
+    <li>Validations avancées par Regex, SemVer et vérifications croisées de dépendances</li>
+    <li>Méthodes d'aide à la décision (<code>is_success</code>, <code>is_healthy</code>, <code>get_completion_rate</code>, <code>to_dict</code>)</li>
+    <li>Documentation exhaustive au format Docstrings Python pour chaque classe et méthode</li>
+    <li>Un bloc d'exécution autonome de test unitaire (<code>if __name__ == "__main__":</code>) validant l'instanciation des objets clés</li>
+  </ul>
+</div>

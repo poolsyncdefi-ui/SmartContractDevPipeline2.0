@@ -7,7 +7,7 @@
 #              Support des relations, des métriques et des événements.
 # ==============================================================================
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Generic, TypeVar, Union
 from datetime import datetime
 from enum import Enum

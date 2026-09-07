@@ -1,0 +1,76 @@
+<div class="spec-section" id="f23-message-models-impl">
+  <h3>Points Clés de l'Implémentation — <code>src/communication/message_models.py</code></h3>
+
+  <h4>1. Classes, Structures de Données et Méthodes Implémentées</h4>
+  <p>Le module <code>src/communication/message_models.py</code> définit l'ensemble des modèles de données Pydantic régissant la communication inter-agents sur le bus de messages, assurant le typage strict, la validation des payloads, la traçabilité des échanges et le contrôle du cycle de vie des messages[cite: 16].</p>
+
+  <div class="model-group">
+    <h5>Énumérations Systèmes de Communication</h5>
+    <ul>
+      <li><code>MessageType</code> : Énumération des typologies de messages (<code>TASK</code>, <code>RESULT</code>, <code>ERROR</code>, <code>PING</code>, <code>PONG</code>, <code>STATUS</code>, <code>NOTIFICATION</code>, <code>EVENT</code>, <code>COMMAND</code>, <code>QUERY</code>, <code>RESPONSE</code>, <code>ACKNOWLEDGMENT</code>, <code>HEARTBEAT</code>, <code>METRICS</code>, <code>LOG</code>, <code>CONFIG</code>, <code>PROGRESS</code>, <code>REGISTER</code>, <code>UNREGISTER</code>, <code>DISCOVERY</code>, <code>LEADER_ELECTION</code>, <code>CIRCUIT_BREAKER</code>, <code>RETRY</code>, <code>CANCEL</code>, <code>RESUME</code>)[cite: 16].</li>
+      <li><code>MessagePriority</code> : Énumération des niveaux de priorité (<code>CRITICAL</code>, <code>HIGH</code>, <code>NORMAL</code>, <code>LOW</code>, <code>BACKGROUND</code>)[cite: 16].</li>
+      <li><code>MessageStatus</code> : États du cycle de vie d'un message (<code>PENDING</code>, <code>SENT</code>, <code>DELIVERED</code>, <code>PROCESSING</code>, <code>PROCESSED</code>, <code>FAILED</code>, <code>EXPIRED</code>, <code>CANCELLED</code>)[cite: 16].</li>
+      <li><code>MessageDeliveryMode</code> : Modes d'acheminement réseau (<code>POINT_TO_POINT</code>, <code>PUBLISH_SUBSCRIBE</code>, <code>ROUND_ROBIN</code>, <code>BROADCAST</code>, <code>ANYCASTER</code>)[cite: 16].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Modèle Commun de Message : <code>BaseMessage</code></h5>
+    <ul>
+      <li><code>BaseMessage(BaseModel)</code> : Modèle Pydantic pivot encapsulant les métadonnées universelles (<code>id</code> UUID, <code>type</code>, <code>sender</code>, <code>recipient</code>, <code>delivery_mode</code>, <code>timestamp</code>, <code>correlation_id</code>, <code>parent_id</code>, <code>priority</code> 0-10, <code>ttl</code>, <code>status</code>, <code>retry_count</code>, <code>metadata</code>)[cite: 16].</li>
+      <li><strong>Validateurs intégrés :</strong> <code>validate_priority()</code>, <code>validate_ttl()</code>, <code>validate_sender()</code>, <code>validate_recipient()</code> (vérifiant notamment la présence du destinataire en point-à-point ou son absence en broadcast)[cite: 16].</li>
+      <li><strong>Méthodes d'utilité et de contrôle :</strong> <code>is_expired()</code>, <code>to_json()</code>, <code>from_json()</code>, <code>copy_with()</code>, <code>to_dict()</code>, <code>get_priority_level()</code>, <code>is_reply_to()</code>[cite: 16].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Messages Spécialisés &amp; Validation de Payloads</h5>
+    <ul>
+      <li><code>TaskMessage</code> : Encapsule une tâche (payload obligatoire : <code>task_id</code>, <code>action</code>) avec méthodes <code>get_task_id()</code>, <code>get_action()</code>, <code>get_parameters()</code>, <code>get_context()</code>[cite: 16].</li>
+      <li><code>ResultMessage</code> : Encapsule le résultat d'exécution (status <code>SUCCESS</code>, <code>FAILED</code>, <code>CIRCUIT_OPEN</code>) avec méthodes <code>is_success()</code>, <code>is_failure()</code>, <code>get_result()</code>, <code>get_error()</code>[cite: 16].</li>
+      <li><code>ErrorMessage</code> : Transporte les erreurs système (payload : <code>code</code>, <code>message</code>) avec méthodes <code>get_error_code()</code>, <code>get_error_message()</code>, <code>get_details()</code>[cite: 16].</li>
+      <li><code>NotificationMessage</code> : Transporte les notifications (payload : <code>title</code>, <code>message</code>) avec méthodes <code>get_title()</code>, <code>get_message()</code>, <code>get_level()</code>[cite: 16].</li>
+      <li><code>EventMessage</code> : Notifications d'événements système (payload : <code>event_type</code>, <code>data</code>) avec méthodes <code>get_event_type()</code>, <code>get_data()</code>[cite: 16].</li>
+      <li><code>QueryMessage</code> &amp; <code>ResponseMessage</code> : Modèles de requête/réponse synchrone avec accesseurs de données et vérifications d'erreurs[cite: 16].</li>
+      <li><code>AcknowledgmentMessage</code> : Accusé de réception confirmant le traitement via <code>get_message_id()</code> et <code>is_acknowledged()</code>[cite: 16].</li>
+      <li><code>HeartbeatMessage</code> : Signaux de vie des agents avec accesseurs de statut, métriques et capacités (<code>get_capabilities()</code>)[cite: 16].</li>
+      <li><code>ProgressMessage</code> : Suivi de la progression d'une tâche (validation stricte du pourcentage 0-100) avec accesseurs <code>get_progress()</code>, <code>get_remaining()</code>[cite: 16].</li>
+      <li><code>CircuitBreakerMessage</code> : Notification de changement d'état (<code>OPEN</code>, <code>CLOSED</code>, <code>HALF_OPEN</code>) des composants système[cite: 16].</li>
+      <li><code>CommandMessage</code>, <code>MetricsMessage</code> &amp; <code>ConfigMessage</code> : Messages d'administration pour l'exécution de commandes, la collecte de métriques et la mise à jour de configurations à chaud[cite: 16].</li>
+    </ul>
+  </div>
+
+  <div class="model-group">
+    <h5>Fabrique Centralisée : <code>MessageFactory</code></h5>
+    <ul>
+      <li><code>create_task_message()</code> : Génère de manière sécurisée un <code>TaskMessage</code> structuré[cite: 16].</li>
+      <li><code>create_result_message()</code> : Génère un <code>ResultMessage</code> en configurant automatiquement le statut et l'erreur éventuelle[cite: 16].</li>
+      <li><code>create_error_message()</code> : Instancie un <code>ErrorMessage</code> avec code et détails d'exception[cite: 16].</li>
+      <li><code>create_notification_message()</code> &amp; <code>create_event_message()</code> : Création simplifiée de notifications et événements système[cite: 16].</li>
+      <li><code>create_progress_message()</code> &amp; <code>create_response_message()</code> : Construction de réponses et d'états d'avancement corrélés[cite: 16].</li>
+    </ul>
+  </div>
+
+  <h4>2. Bonnes Pratiques Appliquées</h4>
+  <ul>
+    <li><strong>Validation Pydantic Rigoureuse :</strong> Utilisation systématique de <code>@validator</code> et <code>@root_validator</code> pour valider les contraintes de types, les plages numériques (ex: priorité 0-10, progression 0-100%) et la cohérence croisée des champs (ex: destinataire requis en point-à-point, interdit en broadcast)[cite: 16].</li>
+    <li><strong>Traçabilité et Corrélation des Conversations :</strong> Présence systématique des identifiants <code>id</code>, <code>correlation_id</code> et <code>parent_id</code> permettant de reconsituer intégralement les fils de discussion entre agents[cite: 16].</li>
+    <li><strong>Pattern Factory (MessageFactory) :</strong> Enkapsulation de la création des objets complexes afin de garantir l'intégrité des payloads et réduire l'emprunte de code répétitif chez l'expéditeur[cite: 16].</li>
+    <li><strong>Gestion Intégrée de l'Expiration (TTL) :</strong> Mécanisme dynamique de détection de péremption des messages (<code>is_expired()</code>) évitant l'encombrement du bus par des tâches caduques[cite: 16].</li>
+  </ul>
+
+  <h4>3. Points Remarquables</h4>
+  <ul>
+    <li><strong>Richesse Sémantique des Modes de Livraison :</strong> Support natif de 5 modes d'acheminement (Point-to-Point, Pub/Sub, Round-Robin, Broadcast, Anycast) adaptés aux topologies de systèmes distribués[cite: 16].</li>
+    <li><strong>Tolérance aux Pannes &amp; Circuit Breaker Natif :</strong> Messages dédiés à la propagation des états du Circuit Breaker pour isoler instantanément les services défaillants[cite: 16].</li>
+    <li><strong>Sérialisation / Désérialisation JSON Transparente :</strong> Méthodes <code>to_json()</code> et <code>from_json()</code> basées sur Pydantic V2 assurant un haut niveau de performance lors du transit réseau[cite: 16].</li>
+  </ul>
+
+  <h4>Vérification Finale</h4>
+  <p>Le fichier <code>src/communication/message_models.py</code> est <strong>TOTALEMENT IMPLÉMENTÉ</strong> avec :</p>
+  <ul>
+    <li>4 énumérations complètes de communication (<code>MessageType</code>, <code>MessagePriority</code>, <code>MessageStatus</code>, <code>MessageDeliveryMode</code>)[cite: 16]</li>
+    <li>1 modèle de base (<code>BaseMessage</code>) + 13 classes de messages spécialisés fortement typés[cite: 16]</li>
+    <li>1 classe <code>MessageFactory</code> fournissant 7 méthodes statiques de création centralisée[cite: 16]</li>
+  </ul>
+</div>
