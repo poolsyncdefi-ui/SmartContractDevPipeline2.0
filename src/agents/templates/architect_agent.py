@@ -15,6 +15,7 @@ L'Agent Architecte est le premier agent du pipeline. Il est responsable de:
 Cet agent agit comme le coordinateur principal du pipeline,
 assurant que toutes les taches sont correctement definies et
 que les competences necessaires sont disponibles.
+Version refactorisée avec intégration des nouveaux modules système.
 """
 from src.agents.base.abstract_agent import AbstractAgent
 from typing import Dict, Any, List, Optional, Set, Tuple, Type
@@ -29,6 +30,11 @@ from dataclasses import dataclass, field
 # Import des modules du pipeline
 from src.core.exceptions import PipelineError, LLMError, SkillNotFoundError
 from src.core.models import ProjectConfig, Skill
+from src.core.status_manager import normalize_status, status_manager
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.contract_validator import ContractValidator, validate_contract
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 from src.agents.factory.skill_registry import SkillRegistry, SkillMetadata, SkillScope
 from src.persistence.knowledge_base import KnowledgeBase
 
@@ -188,6 +194,8 @@ class ArchitectAgent(AbstractAgent):
         knowledge_base (Optional[KnowledgeBase]): Base de connaissances
         max_tasks (int): Nombre maximum de taches par DAG
         auto_create_skills (bool): Creer automatiquement les competences manquantes
+        _cache (IntelligentCache): Cache des analyses
+        _logger (StructuredLogger): Logger structure
     """
     
     def __init__(
@@ -199,7 +207,10 @@ class ArchitectAgent(AbstractAgent):
         knowledge_base: Optional[KnowledgeBase] = None,
         skill_registry: Optional[SkillRegistry] = None,
         max_tasks: int = 100,
-        auto_create_skills: bool = True
+        auto_create_skills: bool = True,
+        cache_enabled: bool = True,
+        cache_ttl: int = 3600,
+        log_callback=None
     ):
         """
         Initialise l'Agent Architecte.
@@ -213,16 +224,53 @@ class ArchitectAgent(AbstractAgent):
             skill_registry: Registre des competences (optionnel)
             max_tasks: Nombre maximum de taches par DAG (defaut: 100)
             auto_create_skills: Creer automatiquement les competences manquantes
+            cache_enabled: Activer le cache des analyses
+            cache_ttl: Duree de vie du cache en secondes
+            log_callback: Callback pour les logs
         """
-        super().__init__(agent_id=agent_id, name=name, skills=skills, llm_client=llm_client)
+        super().__init__(
+            agent_id=agent_id,
+            name=name,
+            skills=skills,
+            llm_client=llm_client,
+            knowledge_base=knowledge_base,
+            log_callback=log_callback
+        )
         self.knowledge_base = knowledge_base
         self.skill_registry = skill_registry or SkillRegistry()
         self.max_tasks = max_tasks
         self.auto_create_skills = auto_create_skills
         self._analysis_history: List[ProjectAnalysis] = []
         
+        # Cache intelligent pour les analyses
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=100,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+        
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name=f"ArchitectAgent_{agent_id}",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(agent_id=agent_id)
+        
+        # Système de retry pour les opérations LLM
+        self._retry_handler = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=30.0,
+            max_retries=3,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True
+        )
+        
         logger.info(f"ArchitectAgent initialized: {agent_id}")
     
+    @validate_contract(required_methods=["execute_task", "parse_yaml_spec", "generate_dag"])
     async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyse la specification et genere le DAG.
@@ -242,6 +290,12 @@ class ArchitectAgent(AbstractAgent):
             - 'missing_skills': Competences manquantes
         """
         start_time = datetime.now(timezone.utc)
+        self._logger.set_context(task_id=task_data.get("task_id", "unknown"))
+        self._logger.log_info(
+            "Starting architecture analysis",
+            "architect_started",
+            project_id=task_data.get("project_id")
+        )
         
         try:
             # 1. Extraction des donnees
@@ -252,32 +306,43 @@ class ArchitectAgent(AbstractAgent):
             if not yaml_content:
                 raise ValueError("No yaml_content provided")
             
-            # 2. Parsing de la specification YAML
+            # 2. Vérification du cache
+            cache_key = f"{project_id}_{hash(yaml_content)}"
+            cached_result = await self._cache.get(cache_key)
+            if cached_result is not None:
+                self._logger.log_info(
+                    "Cache hit for project analysis",
+                    "cache_hit",
+                    project_id=project_id
+                )
+                return cached_result
+            
+            # 3. Parsing de la specification YAML
             spec = self.parse_yaml_spec(yaml_content)
             if not spec:
                 raise ValueError("Invalid or empty YAML specification")
             
-            # 3. Validation de la specification
+            # 4. Validation de la specification
             self._validate_spec(spec)
             
-            # 4. Analyse de la complexite
+            # 5. Analyse de la complexite
             complexity = self._analyze_complexity(spec)
             
-            # 5. Generation du DAG
+            # 6. Generation du DAG
             dag = await self.generate_dag(spec, project_id)
             
-            # 6. Extraction des competences requises
+            # 7. Extraction des competences requises
             skills_required = self._extract_skills(spec, dag)
             
-            # 7. Verification des competences disponibles
+            # 8. Verification des competences disponibles
             missing_skills = self._check_available_skills(skills_required)
             
-            # 8. Creation dynamique des competences manquantes
+            # 9. Creation dynamique des competences manquantes
             initial_missing_count = len(missing_skills)
             if missing_skills and self.auto_create_skills:
                 missing_skills = await self._create_missing_skills(missing_skills, spec)
             
-            # 9. Construction de l'analyse
+            # 10. Construction de l'analyse
             analysis = ProjectAnalysis(
                 project_id=project_id,
                 name=project_name,
@@ -297,25 +362,35 @@ class ArchitectAgent(AbstractAgent):
                 }
             )
             
-            # 10. Persistance de l'analyse
+            # 11. Persistance de l'analyse
             self._analysis_history.append(analysis)
             
-            # 11. Logging de l'execution (via la methode de la classe mere)
+            # 12. Mise en cache
+            await self._cache.set(cache_key, analysis.to_dict(), ttl=3600, tags=[project_id])
+            
+            # 13. Logging de l'execution
             await self._log_execution(
                 task_data=task_data,
                 result={
                     "status": "success",
                     "tasks_count": len(dag),
-                    "skills_required": list(skills_required)
+                    "skills_required": list(skills_required),
+                    "complexity": complexity
                 },
                 success=True,
                 duration=(datetime.now(timezone.utc) - start_time).total_seconds()
             )
             
-            logger.info(f"Architect analysis complete: {len(dag)} tasks, {len(skills_required)} skills required")
+            self._logger.log_info(
+                f"Architect analysis complete: {len(dag)} tasks",
+                "architect_completed",
+                tasks_count=len(dag),
+                skills_required=len(skills_required),
+                missing_skills=len(missing_skills),
+                complexity=complexity
+            )
             
-            # Note: Les statuts sont en minuscules pour correspondre à l'Enum TaskStatus
-            return {
+            result = {
                 "status": "success",
                 "analysis": analysis.to_dict(),
                 "dag": [t.to_dict() for t in dag],
@@ -328,13 +403,22 @@ class ArchitectAgent(AbstractAgent):
                 }
             }
             
+            return result
+            
         except Exception as e:
-            logger.error(f"ArchitectAgent execution failed: {str(e)}")
+            self._logger.log_error(
+                f"ArchitectAgent execution failed: {str(e)}",
+                e,
+                "architect_failed",
+                project_id=task_data.get("project_id")
+            )
             return {
                 "status": "failed",
                 "error": str(e),
                 "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds()
             }
+        finally:
+            self._logger.clear_context()
     
     # =========================================================================
     # ANALYSE ET PARSING
@@ -353,14 +437,14 @@ class ArchitectAgent(AbstractAgent):
         try:
             spec = yaml.safe_load(yaml_text)
             if not spec:
-                logger.warning("Empty YAML specification")
+                self._logger.log_warning("Empty YAML specification", "yaml_empty")
                 return {}
             return spec
         except yaml.YAMLError as e:
-            logger.error(f"YAML parsing error: {str(e)}")
+            self._logger.log_error(f"YAML parsing error: {str(e)}", e, "yaml_error")
             raise ValueError(f"Invalid YAML: {str(e)}")
         except Exception as e:
-            logger.error(f"Unexpected error parsing YAML: {str(e)}")
+            self._logger.log_error(f"Unexpected error parsing YAML: {str(e)}", e, "yaml_parse_error")
             raise
     
     def _validate_spec(self, spec: Dict[str, Any]) -> None:
@@ -397,7 +481,7 @@ class ArchitectAgent(AbstractAgent):
             if "type" not in task:
                 raise ValueError(f"Task {i} missing 'type'")
         
-        logger.debug(f"Spec validation passed: {len(tasks)} tasks")
+        self._logger.log_debug(f"Spec validation passed: {len(tasks)} tasks", "spec_validated")
     
     def _analyze_complexity(self, spec: Dict[str, Any]) -> int:
         """
@@ -477,7 +561,12 @@ class ArchitectAgent(AbstractAgent):
                 task_type = TaskType(task_type_str)
             except ValueError:
                 task_type = TaskType.CUSTOM
-                logger.warning(f"Unknown task type '{task_type_str}' for {task_id}, using CUSTOM")
+                self._logger.log_warning(
+                    f"Unknown task type '{task_type_str}' for {task_id}, using CUSTOM",
+                    "unknown_type",
+                    task_id=task_id,
+                    task_type=task_type_str
+                )
             
             # Extraction des competences requises
             skills = self._extract_task_skills(task_spec)
@@ -563,7 +652,7 @@ class ArchitectAgent(AbstractAgent):
                 if dep not in all_task_ids:
                     raise ValueError(f"Task {node.task_id} depends on {dep} which does not exist")
         
-        logger.debug(f"DAG validation passed: {len(dag)} tasks, no cycles")
+        self._logger.log_debug(f"DAG validation passed: {len(dag)} tasks, no cycles", "dag_validated")
     
     def _topological_sort(self, dag: List[TaskNode]) -> List[TaskNode]:
         """
@@ -603,8 +692,10 @@ class ArchitectAgent(AbstractAgent):
         
         # Verification: tous les nœuds sont-ils inclus?
         if len(sorted_tasks) != len(dag):
-            logger.warning("Topological sort incomplete - possible cycle or missing nodes")
-            # Retourner l'ordre original en cas de probleme
+            self._logger.log_warning(
+                "Topological sort incomplete - possible cycle or missing nodes",
+                "topological_sort_incomplete"
+            )
             return dag
         
         return sorted_tasks
@@ -643,10 +734,14 @@ class ArchitectAgent(AbstractAgent):
                     if context_docs and len(context_docs) > 0:
                         node.description += f"\n\nContext: {context_docs[0][:200]}..."
                 
-                logger.info(f"DAG enriched with {len(context_docs)} RAG documents")
+                self._logger.log_info(
+                    f"DAG enriched with {len(context_docs)} RAG documents",
+                    "rag_enriched",
+                    document_count=len(context_docs)
+                )
         
         except Exception as e:
-            logger.warning(f"RAG enrichment failed: {str(e)}")
+            self._logger.log_warning(f"RAG enrichment failed: {str(e)}", "rag_failed")
         
         return dag
     
@@ -706,7 +801,7 @@ class ArchitectAgent(AbstractAgent):
                     if integration_type:
                         skills.add(f"integration_{integration_type}")
         
-        logger.debug(f"Extracted {len(skills)} required skills")
+        self._logger.log_debug(f"Extracted {len(skills)} required skills", "skills_extracted")
         return skills
     
     def _extract_task_skills(self, task_spec: Dict[str, Any]) -> List[str]:
@@ -771,7 +866,7 @@ class ArchitectAgent(AbstractAgent):
         for skill_id in required_skills:
             if not self.skill_registry.has_skill(skill_id):
                 missing.add(skill_id)
-                logger.debug(f"Skill {skill_id} is missing")
+                self._logger.log_debug(f"Skill {skill_id} is missing", "skill_missing")
         
         return missing
     
@@ -808,18 +903,31 @@ class ArchitectAgent(AbstractAgent):
                             tags={"auto_generated", "architect_created"}
                         )
                         self.skill_registry.register(skill_id, skill_class, metadata)
-                        logger.info(f"Auto-generated skill: {skill_id}")
+                        self._logger.log_info(f"Auto-generated skill: {skill_id}", "skill_auto_created")
                         continue
                     else:
-                        logger.warning(f"Skill synthesis failed for {skill_id}, marking as missing")
+                        self._logger.log_warning(
+                            f"Skill synthesis failed for {skill_id}, marking as missing",
+                            "skill_synthesis_failed",
+                            skill_id=skill_id
+                        )
                 else:
-                    logger.warning(f"No LLM client available, cannot synthesize skill {skill_id}")
+                    self._logger.log_warning(
+                        f"No LLM client available, cannot synthesize skill {skill_id}",
+                        "no_llm_available",
+                        skill_id=skill_id
+                    )
                 
                 # Si pas de LLM ou echec, on garde comme manquante
                 still_missing.add(skill_id)
                 
             except Exception as e:
-                logger.error(f"Failed to create skill {skill_id}: {str(e)}")
+                self._logger.log_error(
+                    f"Failed to create skill {skill_id}: {str(e)}",
+                    e,
+                    "skill_create_failed",
+                    skill_id=skill_id
+                )
                 still_missing.add(skill_id)
         
         return still_missing
@@ -840,7 +948,7 @@ class ArchitectAgent(AbstractAgent):
             Optional[type]: Classe de competence ou None
         """
         if not self.llm_client:
-            logger.debug(f"No LLM client for skill synthesis: {skill_id}")
+            self._logger.log_debug(f"No LLM client for skill synthesis: {skill_id}", "no_llm_synthesis")
             return None
         
         try:
@@ -860,14 +968,15 @@ class ArchitectAgent(AbstractAgent):
             Return only the Python class code.
             """
             
-            # Generation du code via LLM
-            response = await self.llm_client.generate(
+            # Generation du code via LLM avec retry
+            response = await self._retry_handler.execute_with_retry(
+                self.llm_client.generate,
                 prompt=prompt,
                 system_prompt="You are an expert at generating Python code for smart contract development skills.",
                 temperature=0.3
             )
             
-            logger.info(f"Skill generation response received for {skill_id}")
+            self._logger.log_debug(f"Skill generation response received for {skill_id}", "skill_generated")
             
             from src.agents.base.skill import BaseSkill
             from pydantic import BaseModel
@@ -880,7 +989,7 @@ class ArchitectAgent(AbstractAgent):
                 
                 async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
                     return {
-                        "status": "success",  # Statut en minuscules pour correspondre à TaskStatus
+                        "status": "success",
                         "result": f"Executed {skill_id} with params: {params}"
                     }
                 
@@ -890,7 +999,12 @@ class ArchitectAgent(AbstractAgent):
             return DynamicSkill
             
         except Exception as e:
-            logger.error(f"Skill synthesis failed for {skill_id}: {str(e)}")
+            self._logger.log_error(
+                f"Skill synthesis failed for {skill_id}: {str(e)}",
+                e,
+                "skill_synthesis_error",
+                skill_id=skill_id
+            )
             return None
     
     # =========================================================================
@@ -939,6 +1053,8 @@ class ArchitectAgent(AbstractAgent):
         total_tasks = sum(a.total_tasks for a in self._analysis_history)
         total_skills = sum(len(a.skills_required) for a in self._analysis_history)
         
+        cache_metrics = self._cache.get_metrics()
+        
         return {
             "total_analyses": total_analyses,
             "total_tasks": total_tasks,
@@ -949,6 +1065,7 @@ class ArchitectAgent(AbstractAgent):
             ),
             "average_tasks": total_tasks / total_analyses if total_analyses > 0 else 0,
             "analysis_history": [a.to_dict() for a in self._analysis_history[-5:]],
+            "cache_metrics": cache_metrics,
             **super().health_check()
         }
     
@@ -972,5 +1089,6 @@ class ArchitectAgent(AbstractAgent):
             "type": "ArchitectAgent",
             "analyses_count": len(self._analysis_history),
             "skills_count": len(self.skills),
-            "health": self.health_check()
+            "health": self.health_check(),
+            "cache_metrics": self._cache.get_metrics()
         }

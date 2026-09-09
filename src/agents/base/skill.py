@@ -4,6 +4,7 @@
 # Fichier: src/agents/base/skill.py
 # Description: Encapsule une compétence métier modulaire injectable avec support
 #              du RAG, mise en cache, validation Pydantic et exécution LLM.
+#              Version refactorisée avec intégration des nouveaux modules système.
 # ==============================================================================
 
 from abc import ABC, abstractmethod
@@ -19,6 +20,10 @@ import asyncio
 # Import des modules du pipeline
 from src.core.models import Skill as SkillConfig
 from src.core.exceptions import PipelineError, LLMError
+from src.core.status_manager import StatusManager, normalize_status, status_manager
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.contract_validator import ContractValidator, validate_contract
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
@@ -72,7 +77,8 @@ class BaseSkill(ABC):
         llm_client = None,
         knowledge_base = None,
         cache_enabled: bool = True,
-        max_retries: int = 3
+        max_retries: int = 3,
+        cache_ttl: int = 3600
     ):
         """
         Initialise une nouvelle compétence.
@@ -83,6 +89,7 @@ class BaseSkill(ABC):
             knowledge_base: Base de connaissances pour le RAG (optionnel)
             cache_enabled: Active la mise en cache (défaut: True)
             max_retries: Nombre maximum de tentatives (défaut: 3)
+            cache_ttl: Durée de vie du cache en secondes (défaut: 3600)
         """
         if not config or not config.skill_id:
             raise ValueError("Skill configuration is required with a valid skill_id")
@@ -91,7 +98,7 @@ class BaseSkill(ABC):
         self.name = config.name
         self.description = getattr(config, 'description', 'No description provided')
         
-        # Création du schéma dynamique
+        # Schéma dynamique (créé à partir de la configuration)
         self.input_schema = self._create_dynamic_schema(config)
         if self.input_schema:
             logger.info(f"Dynamic schema created for skill {self.skill_id}")
@@ -108,10 +115,43 @@ class BaseSkill(ABC):
             "cache_enabled": cache_enabled
         }
         self.execution_history: List[Dict] = []
-        self._cache: Dict[str, Any] = {}
         self._execution_count = 0
         
+        # Cache intelligent
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=1000,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        
+        # Logger structuré
+        self.logger = StructuredLogger(
+            component_name=f"Skill_{self.skill_id}",
+            log_level=LogLevel.INFO
+        )
+        self.logger.set_context(skill_id=self.skill_id)
+        
+        # Validation du contrat
+        self._validate_contract()
+        
         logger.info(f"Skill initialized: {self.skill_id} v{self.version}")
+
+    def _validate_contract(self) -> None:
+        """
+        Valide que la compétence implémente bien le contrat attendu.
+        """
+        # Vérifier que execute est implémentée
+        if not ContractValidator.validate_method_exists(self, 'execute'):
+            raise AttributeError(
+                f"Skill {self.skill_id} must implement execute method"
+            )
+        
+        # Vérifier que get_system_prompt_rules est implémentée
+        if not ContractValidator.validate_method_exists(self, 'get_system_prompt_rules'):
+            raise AttributeError(
+                f"Skill {self.skill_id} must implement get_system_prompt_rules method"
+            )
 
     @abstractmethod
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -137,6 +177,7 @@ class BaseSkill(ABC):
         """
         start_time = datetime.now(timezone.utc)
         self.status = SkillStatus.EXECUTING
+        self.logger.set_context(execution_id=f"exec_{int(start_time.timestamp())}")
         
         try:
             # 1. Validation des paramètres d'entrée
@@ -145,12 +186,18 @@ class BaseSkill(ABC):
             
             # 2. Vérification du cache
             cache_key = self._generate_cache_key(validated_params)
-            if self.cache_enabled and cache_key in self._cache:
-                logger.info(f"Cache hit for skill {self.skill_id}")
-                self.status = SkillStatus.CACHED
-                cached_result = self._cache[cache_key].copy()
-                cached_result["_from_cache"] = True
-                return cached_result
+            if self.cache_enabled:
+                cached_result = await self._cache.get(cache_key)
+                if cached_result is not None:
+                    logger.info(f"Cache hit for skill {self.skill_id}")
+                    self.status = SkillStatus.CACHED
+                    cached_result["_from_cache"] = True
+                    self.logger.log_info(
+                        f"Cache hit for skill {self.skill_id}",
+                        "cache_hit",
+                        cache_key=cache_key[:8]
+                    )
+                    return cached_result
             
             # 3. Exécution avec retry
             result = None
@@ -164,8 +211,9 @@ class BaseSkill(ABC):
                     if validate_output:
                         self._validate_output(result)
                     
+                    # Mise en cache
                     if self.cache_enabled:
-                        self._cache[cache_key] = result.copy()
+                        await self._cache.set(cache_key, result.copy(), tags=[self.skill_id])
                     
                     self.status = SkillStatus.COMPLETED
                     self._execution_count += 1
@@ -179,13 +227,24 @@ class BaseSkill(ABC):
                         "version": self.version
                     }
                     
+                    self.logger.log_info(
+                        f"Skill {self.skill_id} executed successfully",
+                        "skill_execution",
+                        duration=duration,
+                        attempt=attempt + 1,
+                        execution_count=self._execution_count
+                    )
+                    
                     logger.info(f"Skill {self.skill_id} executed successfully")
                     return result
                     
                 except (ValidationError, LLMError) as e:
                     last_error = str(e)
-                    logger.warning(
-                        f"Skill {self.skill_id} failed (attempt {attempt + 1}/{self.max_retries}): {last_error}"
+                    self.logger.log_warning(
+                        f"Skill {self.skill_id} failed (attempt {attempt + 1}/{self.max_retries}): {last_error}",
+                        "skill_retry",
+                        attempt=attempt + 1,
+                        max_retries=self.max_retries
                     )
                     
                     if attempt < self.max_retries - 1:
@@ -195,7 +254,12 @@ class BaseSkill(ABC):
                         raise
                         
                 except Exception as e:
-                    logger.error(f"Unexpected error in skill {self.skill_id}: {str(e)}")
+                    self.logger.log_error(
+                        f"Unexpected error in skill {self.skill_id}",
+                        e,
+                        "skill_error",
+                        attempt=attempt + 1
+                    )
                     raise PipelineError(f"Skill execution failed: {str(e)}")
             
             self.status = SkillStatus.FAILED
@@ -203,16 +267,23 @@ class BaseSkill(ABC):
             
         except Exception as e:
             self.status = SkillStatus.FAILED
-            # Log de l'erreur sans utiliser _log_execution (délégation à l'agent)
-            logger.error(f"Skill {self.skill_id} execution failed: {str(e)}")
+            self.logger.log_error(
+                f"Skill {self.skill_id} execution failed",
+                e,
+                "skill_failed"
+            )
             raise
         
         finally:
+            # Réinitialiser le contexte
+            self.logger.clear_context()
             if self.status != SkillStatus.FAILED:
                 self.status = SkillStatus.COMPLETED
 
     def validate_parameters(self, params: Dict[str, Any]) -> BaseModel:
-        """Valide les paramètres d'entrée avec le schéma Pydantic."""
+        """
+        Valide les paramètres d'entrée avec le schéma Pydantic.
+        """
         if not self.input_schema:
             logger.warning(f"No input schema defined for skill {self.skill_id}")
             return create_model("EmptyModel")(**{})
@@ -224,7 +295,12 @@ class BaseSkill(ABC):
             logger.debug(f"Parameters validated successfully for {self.skill_id}")
             return validated
         except ValidationError as e:
-            logger.error(f"Parameter validation failed for {self.skill_id}: {str(e)}")
+            self.logger.log_error(
+                f"Parameter validation failed for {self.skill_id}",
+                e,
+                "validation_error",
+                params=params
+            )
             raise
 
     def _validate_output(self, output: Dict[str, Any]) -> None:
@@ -241,13 +317,14 @@ class BaseSkill(ABC):
         if "status" not in output:
             raise ValidationError("Output must contain 'status' field")
         
-        # Statuts en minuscules pour correspondre à l'Enum TaskStatus
-        valid_statuses = ["success", "failed"]
-        if output["status"] not in valid_statuses:
-            raise ValidationError(f"Invalid status: {output['status']}. Allowed: {valid_statuses}")
+        # Utiliser StatusManager pour valider le statut
+        if not status_manager.validate_status(output["status"], {"success", "failed"}):
+            raise ValidationError(f"Invalid status: {output['status']}. Allowed: success, failed")
 
     def get_system_prompt_rules(self) -> str:
-        """Retourne les règles système pour le prompt."""
+        """
+        Retourne les règles système pour le prompt.
+        """
         return f"""
         You are using the skill '{self.name}' ({self.skill_id}).
         Description: {self.description}
@@ -261,35 +338,49 @@ class BaseSkill(ABC):
         """
 
     def set_llm_client(self, client) -> None:
-        """Injecte le client LLM."""
+        """
+        Injecte le client LLM.
+        """
         self.llm_client = client
         logger.debug(f"LLM client set for skill {self.skill_id}")
 
     def set_knowledge_base(self, kb) -> None:
-        """Injecte la base de connaissances."""
+        """
+        Injecte la base de connaissances.
+        """
         self.knowledge_base = kb
         logger.debug(f"Knowledge base set for skill {self.skill_id}")
 
     def enable_cache(self) -> None:
-        """Active la mise en cache des résultats."""
+        """
+        Active la mise en cache des résultats.
+        """
         self.cache_enabled = True
         logger.info(f"Cache enabled for skill {self.skill_id}")
 
     def disable_cache(self) -> None:
-        """Désactive la mise en cache des résultats."""
+        """
+        Désactive la mise en cache des résultats.
+        """
         self.cache_enabled = False
         logger.info(f"Cache disabled for skill {self.skill_id}")
 
-    def clear_cache(self) -> None:
-        """Vide le cache de la compétence."""
+    async def clear_cache(self) -> None:
+        """
+        Vide le cache de la compétence.
+        """
         cache_size = len(self._cache)
-        self._cache.clear()
+        await self._cache.clear()
         logger.info(f"Cache cleared for skill {self.skill_id} ({cache_size} entries)")
 
     def get_statistics(self) -> Dict[str, Any]:
-        """Retourne les statistiques d'exécution de la compétence."""
+        """
+        Retourne les statistiques d'exécution de la compétence.
+        """
         successful = [h for h in self.execution_history if h.get("success", False)]
         failed = [h for h in self.execution_history if not h.get("success", True)]
+        
+        cache_metrics = self._cache.get_metrics() if self.cache_enabled else {}
         
         return {
             "skill_id": self.skill_id,
@@ -300,14 +391,16 @@ class BaseSkill(ABC):
             "successful": len(successful),
             "failed": len(failed),
             "success_rate": len(successful) / len(self.execution_history) if self.execution_history else 0.0,
-            "cache_size": len(self._cache),
             "cache_enabled": self.cache_enabled,
+            "cache_metrics": cache_metrics,
             "execution_count": self._execution_count,
             "metadata": self.metadata
         }
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convertit la compétence en dictionnaire pour la sérialisation."""
+        """
+        Convertit la compétence en dictionnaire pour la sérialisation.
+        """
         return {
             "skill_id": self.skill_id,
             "name": self.name,
@@ -328,7 +421,7 @@ class BaseSkill(ABC):
             params: Paramètres validés (BaseModel)
             
         Returns:
-            Clé de cache SHA256
+            str: Clé de cache SHA256
         """
         try:
             # Utilisation de model_dump() pour Pydantic v2, fallback sur dict()
@@ -336,6 +429,9 @@ class BaseSkill(ABC):
                 param_dict = params.model_dump()
             else:
                 param_dict = params.dict() if hasattr(params, 'dict') else {}
+            
+            # Ajouter l'ID de la compétence pour éviter les collisions
+            param_dict["_skill_id"] = self.skill_id
             
             param_str = json.dumps(param_dict, sort_keys=True, default=str)
             return hashlib.sha256(param_str.encode()).hexdigest()
@@ -352,7 +448,7 @@ class BaseSkill(ABC):
             params: Paramètres validés (BaseModel)
             
         Returns:
-            Contexte d'exécution (dictionnaire)
+            Dict[str, Any]: Contexte d'exécution (dictionnaire)
         """
         # Conversion des paramètres en dictionnaire
         if hasattr(params, 'model_dump'):
@@ -364,7 +460,7 @@ class BaseSkill(ABC):
         if self.knowledge_base:
             try:
                 query = f"{self.name} {self.skill_id} {context.get('description', '')}"
-                relevant_docs = self.knowledge_base.query_context(query)
+                relevant_docs = self.knowledge_base.query_context(query, n_results=3)
                 if relevant_docs:
                     context["_rag_context"] = relevant_docs
                     logger.debug(f"RAG context added ({len(relevant_docs)} docs)")
@@ -381,7 +477,7 @@ class BaseSkill(ABC):
             config: Configuration de la compétence
             
         Returns:
-            Modèle Pydantic dynamique ou None si aucun schéma n'est défini
+            Optional[Type[BaseModel]]: Modèle Pydantic dynamique ou None
         """
         fields = {}
         schema = None
@@ -457,6 +553,15 @@ class BaseSkill(ABC):
             logger.error(f"Failed to create dynamic schema for {self.skill_id}: {str(e)}")
             return None
 
+    def get_cache_metrics(self) -> Dict[str, Any]:
+        """
+        Retourne les métriques du cache.
+        
+        Returns:
+            Dict[str, Any]: Métriques du cache
+        """
+        return self._cache.get_metrics() if self.cache_enabled else {}
+
     def __repr__(self) -> str:
         return f"<BaseSkill(skill_id='{self.skill_id}', name='{self.name}', status='{self.status.value}')>"
 
@@ -479,7 +584,9 @@ class BaseLLMSkill(BaseSkill):
         self.temperature = temperature
     
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Exécute la compétence avec le LLM."""
+        """
+        Exécute la compétence avec le LLM.
+        """
         if not self.llm_client:
             raise LLMError(f"No LLM client configured for skill {self.skill_id}")
         
@@ -501,7 +608,9 @@ class BaseLLMSkill(BaseSkill):
             raise LLMError(f"LLM execution failed: {str(e)}")
     
     def _format_prompt(self, params: Dict[str, Any]) -> str:
-        """Formate le prompt à partir des paramètres."""
+        """
+        Formate le prompt à partir des paramètres.
+        """
         prompt_parts = [
             f"Executing skill: {self.name} ({self.skill_id})",
             f"Description: {self.description}",

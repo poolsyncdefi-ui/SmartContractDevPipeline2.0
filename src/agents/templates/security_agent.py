@@ -16,6 +16,7 @@ L'Agent Securite est responsable de:
 
 Cet agent est le composant central du bouclier de securite multi-couches
 defini dans les specifications du pipeline.
+Version refactorisée avec intégration des nouveaux modules système.
 """
 from src.agents.base.abstract_agent import AbstractAgent
 from typing import Dict, Any, List, Optional, Set, Tuple
@@ -30,6 +31,11 @@ from dataclasses import dataclass, field
 
 # Import des modules du pipeline
 from src.core.exceptions import PipelineError
+from src.core.status_manager import normalize_status, status_manager
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.contract_validator import ContractValidator, validate_contract
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 from src.agents.base.best_practice import BaseBestPractice
 from src.llm.llm_client import LLMClient
 from src.persistence.knowledge_base import KnowledgeBase
@@ -203,6 +209,9 @@ class SecurityAgent(AbstractAgent):
         auto_fix (bool): Generer automatiquement des correctifs
         _audit_history (List[AuditReport]): Historique des audits
         _vuln_counter (int): Compteur pour les IDs de vulnerabilites
+        _cache (IntelligentCache): Cache des audits
+        _logger (StructuredLogger): Logger structure
+        _retry_handler (AdaptiveRetry): Systeme de retry
     """
 
     # Mapping des types de vulnerabilites Slither vers le systeme
@@ -259,7 +268,10 @@ class SecurityAgent(AbstractAgent):
         foundry_path: str = "forge",
         anvil_rpc_url: str = "http://localhost:8545",
         min_security_score: float = 80.0,
-        auto_fix: bool = False
+        auto_fix: bool = False,
+        cache_enabled: bool = True,
+        cache_ttl: int = 3600,
+        log_callback=None
     ):
         """
         Initialise l'Agent Securite.
@@ -277,8 +289,18 @@ class SecurityAgent(AbstractAgent):
             anvil_rpc_url: URL RPC pour Anvil
             min_security_score: Score minimum requis (defaut: 80.0)
             auto_fix: Generer automatiquement des correctifs (defaut: False)
+            cache_enabled: Activer le cache
+            cache_ttl: Duree de vie du cache en secondes
+            log_callback: Callback pour les logs
         """
-        super().__init__(agent_id=agent_id, name=name, skills=skills)
+        super().__init__(
+            agent_id=agent_id,
+            name=name,
+            skills=skills,
+            llm_client=llm_client,
+            knowledge_base=knowledge_base,
+            log_callback=log_callback
+        )
         self.llm_client = llm_client
         self.knowledge_base = knowledge_base
         self.best_practices = best_practices or []
@@ -292,8 +314,36 @@ class SecurityAgent(AbstractAgent):
         self._compilation_cache: Dict[str, Dict] = {}
         self._vuln_counter = 0
 
+        # Cache intelligent pour les audits
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=200,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name=f"SecurityAgent_{agent_id}",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(agent_id=agent_id)
+
+        # Système de retry adaptatif
+        self._retry_handler = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=30.0,
+            max_retries=3,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(subprocess.TimeoutExpired, PipelineError)
+        )
+
         logger.info(f"SecurityAgent initialized: {agent_id}")
 
+    @validate_contract(required_methods=["execute_task"])
     async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyse le code et detecte les vulnerabilites.
@@ -316,6 +366,7 @@ class SecurityAgent(AbstractAgent):
             - 'score': Score de securite (0-100)
         """
         start_time = datetime.now(timezone.utc)
+        self._logger.set_context(task_id=task_data.get("task_id", "unknown"))
 
         try:
             # 1. Extraction des parametres
@@ -333,9 +384,19 @@ class SecurityAgent(AbstractAgent):
                 level = AuditLevel(level_str.lower())
             except ValueError:
                 level = AuditLevel.FULL
-                logger.warning(f"Invalid audit level '{level_str}', using FULL")
+                self._logger.log_warning(
+                    f"Invalid audit level '{level_str}', using FULL",
+                    "invalid_audit_level"
+                )
 
-            # 3. Execution de l'audit
+            # 3. Vérification du cache
+            cache_key = f"{contract_name}_{hash(code)}_{level.value}"
+            cached_result = await self._cache.get(cache_key)
+            if cached_result is not None:
+                self._logger.log_info("Cache hit for audit", "cache_hit")
+                return cached_result
+
+            # 4. Execution de l'audit
             report = await self._run_audit(
                 code=code,
                 contract_name=contract_name,
@@ -344,46 +405,45 @@ class SecurityAgent(AbstractAgent):
                 halmos_report=halmos_report
             )
 
-            # 4. Enrichissement via RAG
+            # 5. Enrichissement via RAG
             if self.knowledge_base and report.vulnerabilities:
                 report = await self._enrich_with_rag(report)
 
-            # 5. Application des bonnes pratiques
+            # 6. Application des bonnes pratiques
             if self.best_practices:
                 report = await self._apply_best_practices(report, code)
 
-            # 6. Generation des correctifs
+            # 7. Generation des correctifs
             if self.auto_fix and report.vulnerabilities:
                 report = await self._generate_fixes(report)
 
-            # 7. Classification et scoring
+            # 8. Classification et scoring
             self._classify_vulnerabilities(report)
             report.score = self._calculate_security_score(report)
             report.passed = report.score >= self.min_security_score and report.critical_count == 0
 
-            # 8. Persistance de l'audit
+            # 9. Persistance de l'audit
             self._audit_history.append(report)
 
-            # 9. Generation du guide de remediation
+            # 10. Generation du guide de remediation
             guide = self.format_remediation_guide(report.vulnerabilities)
 
-            # 10. Logging de l'execution (via la methode de la classe mere)
+            # 11. Logging de l'execution
             await self._log_execution(
                 task_data=task_data,
                 result={
                     "status": "success",
                     "contract_name": contract_name,
                     "vulnerabilities_found": len(report.vulnerabilities),
-                    "score": report.score
+                    "score": report.score,
+                    "passed": report.passed
                 },
                 success=True,
                 duration=(datetime.now(timezone.utc) - start_time).total_seconds()
             )
 
-            logger.info(f"Security audit completed: {contract_name}, score={report.score:.1f}, passed={report.passed}")
-
-            # Note: Les statuts sont en minuscules pour correspondre à l'Enum TaskStatus
-            return {
+            # 12. Mise en cache
+            result = {
                 "status": "success",
                 "report": report.to_dict(),
                 "vulnerabilities": [v.to_dict() for v in report.vulnerabilities],
@@ -400,13 +460,37 @@ class SecurityAgent(AbstractAgent):
                 }
             }
 
+            await self._cache.set(
+                cache_key,
+                result,
+                ttl=3600,
+                tags=[contract_name, level.value]
+            )
+
+            self._logger.log_info(
+                f"Security audit completed: {contract_name}, score={report.score:.1f}",
+                "audit_completed",
+                score=report.score,
+                passed=report.passed,
+                vulnerabilities=len(report.vulnerabilities)
+            )
+
+            return result
+
         except Exception as e:
-            logger.error(f"SecurityAgent execution failed: {str(e)}")
+            self._logger.log_error(
+                f"SecurityAgent execution failed: {str(e)}",
+                e,
+                "audit_failed",
+                contract_name=task_data.get("contract_name", "unknown")
+            )
             return {
                 "status": "failed",
                 "error": str(e),
                 "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds()
             }
+        finally:
+            self._logger.clear_context()
 
     # =========================================================================
     # AUDIT PRINCIPAL
@@ -444,7 +528,7 @@ class SecurityAgent(AbstractAgent):
                 slither_vulns = await self.run_slither_analysis(code, contract_name)
             vulnerabilities.extend(slither_vulns)
             details["slither"] = {"vulnerabilities_found": len(slither_vulns)}
-            logger.info(f"Level 1 (Slither): {len(slither_vulns)} vulnerabilities found")
+            self._logger.log_info(f"Level 1 (Slither): {len(slither_vulns)} vulnerabilities found", "slither_completed")
 
         # Niveau 2: Fuzzing (Foundry/Echidna)
         if level in [AuditLevel.LEVEL_2, AuditLevel.FULL]:
@@ -452,7 +536,7 @@ class SecurityAgent(AbstractAgent):
             if fuzzing_results:
                 vulnerabilities.extend(fuzzing_results)
                 details["fuzzing"] = {"vulnerabilities_found": len(fuzzing_results)}
-                logger.info(f"Level 2 (Fuzzing): {len(fuzzing_results)} vulnerabilities found")
+                self._logger.log_info(f"Level 2 (Fuzzing): {len(fuzzing_results)} vulnerabilities found", "fuzzing_completed")
 
         # Niveau 3: Simulation d'attaques (Anvil)
         if level in [AuditLevel.LEVEL_3, AuditLevel.FULL]:
@@ -460,7 +544,7 @@ class SecurityAgent(AbstractAgent):
             if attack_results:
                 vulnerabilities.extend(attack_results)
                 details["threat_simulation"] = {"vulnerabilities_found": len(attack_results)}
-                logger.info(f"Level 3 (Threat Simulation): {len(attack_results)} vulnerabilities found")
+                self._logger.log_info(f"Level 3 (Threat Simulation): {len(attack_results)} vulnerabilities found", "threat_sim_completed")
 
         # Niveau 4: Verification formelle (Halmos)
         if level in [AuditLevel.LEVEL_4, AuditLevel.FULL]:
@@ -471,7 +555,7 @@ class SecurityAgent(AbstractAgent):
             if formal_results:
                 vulnerabilities.extend(formal_results)
                 details["formal_verification"] = {"vulnerabilities_found": len(formal_results)}
-                logger.info(f"Level 4 (Halmos): {len(formal_results)} vulnerabilities found")
+                self._logger.log_info(f"Level 4 (Halmos): {len(formal_results)} vulnerabilities found", "halmos_completed")
 
         # Deduplication des vulnerabilites
         vulnerabilities = self._deduplicate_vulnerabilities(vulnerabilities)
@@ -537,7 +621,7 @@ class SecurityAgent(AbstractAgent):
                 )
                 vulnerabilities.append(vulnerability)
 
-        logger.debug(f"Parsed {len(vulnerabilities)} vulnerabilities from Slither")
+        self._logger.log_debug(f"Parsed {len(vulnerabilities)} vulnerabilities from Slither", "slither_parsed")
         return vulnerabilities
 
     async def run_slither_analysis(self, code: str, contract_name: str) -> List[Vulnerability]:
@@ -576,11 +660,11 @@ class SecurityAgent(AbstractAgent):
                 except asyncio.TimeoutError:
                     process.kill()
                     await process.wait()
-                    logger.error("Slither analysis timed out (60s)")
+                    self._logger.log_error("Slither analysis timed out (60s)", None, "slither_timeout")
                     return []
 
                 if process.returncode != 0:
-                    logger.error(f"Slither execution failed: {stderr.decode('utf-8', errors='ignore')}")
+                    self._logger.log_error(f"Slither execution failed: {stderr.decode('utf-8', errors='ignore')}", None, "slither_execution_failed")
                     return []
 
                 # Parsing du resultat
@@ -588,7 +672,7 @@ class SecurityAgent(AbstractAgent):
                     slither_json = json.loads(stdout.decode('utf-8'))
                     return self.parse_slither_json(slither_json)
                 except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse Slither JSON: {str(e)}")
+                    self._logger.log_error(f"Failed to parse Slither JSON: {str(e)}", e, "slither_json_parse_failed")
                     return []
 
             finally:
@@ -596,7 +680,7 @@ class SecurityAgent(AbstractAgent):
                 os.unlink(filepath)
 
         except Exception as e:
-            logger.error(f"Slither analysis failed: {str(e)}")
+            self._logger.log_error(f"Slither analysis failed: {str(e)}", e, "slither_analysis_failed")
             return []
 
     # =========================================================================
@@ -676,7 +760,7 @@ contract {contract_name}Test is Test {{
                 except asyncio.TimeoutError:
                     process.kill()
                     await process.wait()
-                    logger.error("Fuzzing analysis timed out (120s)")
+                    self._logger.log_error("Fuzzing analysis timed out (120s)", None, "fuzzing_timeout")
                     return []
 
                 output = stdout.decode('utf-8', errors='ignore')
@@ -702,7 +786,7 @@ contract {contract_name}Test is Test {{
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
         except Exception as e:
-            logger.error(f"Fuzzing analysis failed: {str(e)}")
+            self._logger.log_error(f"Fuzzing analysis failed: {str(e)}", e, "fuzzing_failed")
 
         return vulnerabilities
 
@@ -755,7 +839,7 @@ contract {contract_name}Test is Test {{
                         vulnerabilities.append(vuln)
 
         except Exception as e:
-            logger.error(f"Threat simulation failed: {str(e)}")
+            self._logger.log_error(f"Threat simulation failed: {str(e)}", e, "threat_sim_failed")
 
         return vulnerabilities
 
@@ -914,25 +998,25 @@ contract {contract_name}Test is Test {{
                 except asyncio.TimeoutError:
                     process.kill()
                     await process.wait()
-                    logger.error("Halmos verification timed out (120s)")
+                    self._logger.log_error("Halmos verification timed out (120s)", None, "halmos_timeout")
                     return []
 
                 if process.returncode != 0:
-                    logger.error(f"Halmos execution failed: {stderr.decode('utf-8', errors='ignore')}")
+                    self._logger.log_error(f"Halmos execution failed: {stderr.decode('utf-8', errors='ignore')}", None, "halmos_execution_failed")
                     return []
 
                 try:
                     halmos_json = json.loads(stdout.decode('utf-8'))
                     return self.parse_halmos_json(halmos_json)
                 except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse Halmos JSON: {str(e)}")
+                    self._logger.log_error(f"Failed to parse Halmos JSON: {str(e)}", e, "halmos_json_parse_failed")
                     return []
 
             finally:
                 os.unlink(filepath)
 
         except Exception as e:
-            logger.error(f"Halmos verification failed: {str(e)}")
+            self._logger.log_error(f"Halmos verification failed: {str(e)}", e, "halmos_verification_failed")
             return []
 
     # =========================================================================
@@ -960,9 +1044,9 @@ contract {contract_name}Test is Test {{
                     vuln.references.extend(docs)
                     vuln.remediation += f"\n\nContext: {docs[0][:200]}..."
 
-            logger.info("Enriched audit with RAG context")
+            self._logger.log_info("Enriched audit with RAG context", "rag_enriched")
         except Exception as e:
-            logger.warning(f"RAG enrichment failed: {str(e)}")
+            self._logger.log_warning(f"RAG enrichment failed: {str(e)}", "rag_enrichment_failed")
 
         return report
 
@@ -996,7 +1080,7 @@ contract {contract_name}Test is Test {{
                         )
                         report.vulnerabilities.append(vuln)
             except Exception as e:
-                logger.warning(f"Best practice validation failed: {str(e)}")
+                self._logger.log_warning(f"Best practice validation failed: {str(e)}", "best_practice_failed")
 
         return report
 
@@ -1023,7 +1107,8 @@ contract {contract_name}Test is Test {{
                     Provide the fix as Solidity code.
                     """
 
-                    response = await self.llm_client.generate(
+                    response = await self._retry_handler.execute_with_retry(
+                        self.llm_client.generate,
                         prompt=prompt,
                         system_prompt="You are an expert at fixing smart contract vulnerabilities.",
                         temperature=0.2
@@ -1031,7 +1116,7 @@ contract {contract_name}Test is Test {{
 
                     vuln.remediation_code = self._extract_code_from_response(response)
                 except Exception as e:
-                    logger.warning(f"Failed to generate fix for {vuln.id}: {str(e)}")
+                    self._logger.log_warning(f"Failed to generate fix for {vuln.id}: {str(e)}", "fix_generation_failed")
 
         return report
 
@@ -1182,6 +1267,7 @@ contract {contract_name}Test is Test {{
         total_high = sum(r.high_count for r in self._audit_history)
 
         avg_score = sum(r.score for r in self._audit_history) / total_audits if total_audits > 0 else 0
+        cache_metrics = self._cache.get_metrics()
 
         return {
             "total_audits": total_audits,
@@ -1194,7 +1280,8 @@ contract {contract_name}Test is Test {{
             "total_high": total_high,
             "average_score": avg_score,
             "min_score": min((r.score for r in self._audit_history), default=0),
-            "max_score": max((r.score for r in self._audit_history), default=0)
+            "max_score": max((r.score for r in self._audit_history), default=0),
+            "cache_metrics": cache_metrics
         }
 
     def get_last_audit(self) -> Optional[AuditReport]:
@@ -1227,5 +1314,7 @@ contract {contract_name}Test is Test {{
             "audits_count": len(self._audit_history),
             "skills_count": len(self.skills),
             "min_security_score": self.min_security_score,
-            "auto_fix": self.auto_fix
+            "auto_fix": self.auto_fix,
+            "cache_metrics": self._cache.get_metrics(),
+            "health": self.health_check()
         }

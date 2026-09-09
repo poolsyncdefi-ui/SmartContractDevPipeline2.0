@@ -15,6 +15,7 @@ L'Agent Developpeur est responsable de:
 
 Cet agent utilise les competences du registre pour generer
 du code de qualite, securise et optimise.
+Version refactorisée avec intégration des nouveaux modules système.
 """
 from src.agents.base.abstract_agent import AbstractAgent
 from typing import Dict, Any, List, Optional, Tuple, Set
@@ -28,6 +29,11 @@ from dataclasses import dataclass, field
 # Import des modules du pipeline
 from src.core.exceptions import PipelineError, LLMError
 from src.core.models import Skill
+from src.core.status_manager import normalize_status, status_manager
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.contract_validator import ContractValidator, validate_contract
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 from src.agents.base.best_practice import BaseBestPractice, ValidationResult
 from src.llm.llm_client import LLMClient
 from src.persistence.knowledge_base import KnowledgeBase
@@ -122,6 +128,9 @@ class DeveloperAgent(AbstractAgent):
         generate_tests (bool): Generer les tests
         generate_documentation (bool): Generer la documentation
         _generation_history (List[GenerationResult]): Historique des generations
+        _cache (IntelligentCache): Cache des generations
+        _logger (StructuredLogger): Logger structure
+        _retry_handler (AdaptiveRetry): Systeme de retry
     """
 
     def __init__(
@@ -137,7 +146,10 @@ class DeveloperAgent(AbstractAgent):
         optimize_gas: bool = True,
         generate_tests: bool = True,
         generate_documentation: bool = True,
-        max_code_length: int = 5000
+        max_code_length: int = 5000,
+        cache_enabled: bool = True,
+        cache_ttl: int = 3600,
+        log_callback=None
     ):
         """
         Initialise l'Agent Developpeur.
@@ -155,8 +167,19 @@ class DeveloperAgent(AbstractAgent):
             generate_tests: Generer les tests (defaut: True)
             generate_documentation: Generer la documentation (defaut: True)
             max_code_length: Longueur maximale du code (defaut: 5000)
+            cache_enabled: Activer le cache
+            cache_ttl: Duree de vie du cache en secondes
+            log_callback: Callback pour les logs
         """
-        super().__init__(agent_id=agent_id, name=name, skills=skills)
+        super().__init__(
+            agent_id=agent_id,
+            name=name,
+            skills=skills,
+            llm_client=llm_client,
+            knowledge_base=knowledge_base,
+            max_retries=max_retries,
+            log_callback=log_callback
+        )
         self.llm_client = llm_client
         self.knowledge_base = knowledge_base
         self.best_practices = best_practices or []
@@ -168,9 +191,37 @@ class DeveloperAgent(AbstractAgent):
         self.max_code_length = max_code_length
         self._generation_history: List[GenerationResult] = []
         self._compilation_cache: Dict[str, Dict] = {}
+        
+        # Cache intelligent pour les generations
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=500,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+        
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name=f"DeveloperAgent_{agent_id}",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(agent_id=agent_id, language=language.value)
+        
+        # Système de retry adaptatif
+        self._retry_handler = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=30.0,
+            max_retries=3,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(LLMError, PipelineError)
+        )
 
         logger.info(f"DeveloperAgent initialized: {agent_id} (language={language.value})")
 
+    @validate_contract(required_methods=["execute_task"])
     async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute la tache de developpement.
@@ -192,6 +243,7 @@ class DeveloperAgent(AbstractAgent):
             - 'documentation': Documentation (si applicable)
         """
         start_time = datetime.now(timezone.utc)
+        self._logger.set_context(task_id=task_data.get("task_id", "unknown"))
 
         try:
             # 1. Extraction des parametres
@@ -202,7 +254,21 @@ class DeveloperAgent(AbstractAgent):
             language = task_data.get("language", self.language.value)
             language_enum = Language(language)
 
-            # 2. Generation du code selon le mode
+            self._logger.log_info(
+                f"Starting generation: mode={mode.value}",
+                "generation_started",
+                mode=mode.value,
+                language=language
+            )
+
+            # 2. Vérification du cache
+            cache_key = f"{mode.value}_{hash(str(spec))}_{hash(existing_code)}_{language}"
+            cached_result = await self._cache.get(cache_key)
+            if cached_result is not None:
+                self._logger.log_info("Cache hit for generation", "cache_hit")
+                return cached_result
+
+            # 3. Generation du code selon le mode
             result = await self._generate_by_mode(
                 mode=mode,
                 spec=spec,
@@ -211,36 +277,63 @@ class DeveloperAgent(AbstractAgent):
                 language=language_enum
             )
 
-            # 3. Application des bonnes pratiques
+            # 4. Application des bonnes pratiques
             if self.best_practices and result.code:
                 result = await self._apply_best_practices(result)
 
-            # 4. Validation du code
+            # 5. Validation du code
             if result.code:
                 validation = await self._validate_code(result.code, language_enum)
                 result.errors.extend(validation.get("errors", []))
                 result.warnings.extend(validation.get("warnings", []))
                 result.suggestions.extend(validation.get("suggestions", []))
 
-            # 5. Logging de l'execution (via la methode de la classe mere)
+            # 6. Logging de l'execution
             await self._log_execution(
                 task_data=task_data,
                 result={
                     "status": "success",
                     "code_length": len(result.code),
                     "mode": mode.value,
-                    "language": language_enum.value
+                    "language": language_enum.value,
+                    "errors_count": len(result.errors),
+                    "warnings_count": len(result.warnings)
                 },
                 success=True,
                 duration=(datetime.now(timezone.utc) - start_time).total_seconds()
             )
 
-            # 6. Persistance du resultat
+            # 7. Persistance du resultat
             self._generation_history.append(result)
 
-            logger.info(f"DeveloperAgent completed: mode={mode.value}, code_length={len(result.code)}")
+            # 8. Mise en cache
+            await self._cache.set(
+                cache_key,
+                {
+                    "status": "success",
+                    "result": result.to_dict(),
+                    "code": result.code,
+                    "tests": result.tests,
+                    "documentation": result.documentation,
+                    "metadata": {
+                        "mode": mode.value,
+                        "language": language_enum.value,
+                        "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds(),
+                        "errors_count": len(result.errors),
+                        "warnings_count": len(result.warnings)
+                    }
+                },
+                ttl=3600,
+                tags=[mode.value, language]
+            )
 
-            # Note: Les statuts sont en minuscules pour correspondre à l'Enum TaskStatus
+            self._logger.log_info(
+                f"Generation completed: mode={mode.value}",
+                "generation_completed",
+                code_length=len(result.code),
+                errors_count=len(result.errors)
+            )
+
             return {
                 "status": "success",
                 "result": result.to_dict(),
@@ -257,12 +350,19 @@ class DeveloperAgent(AbstractAgent):
             }
 
         except Exception as e:
-            logger.error(f"DeveloperAgent execution failed: {str(e)}")
+            self._logger.log_error(
+                f"DeveloperAgent execution failed: {str(e)}",
+                e,
+                "execution_failed",
+                mode=task_data.get("mode", "unknown")
+            )
             return {
                 "status": "failed",
                 "error": str(e),
                 "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds()
             }
+        finally:
+            self._logger.clear_context()
 
     # =========================================================================
     # GENERATION PAR MODE
@@ -296,7 +396,7 @@ class DeveloperAgent(AbstractAgent):
             if not existing_code:
                 raise ValueError("Existing code required for auto_fix mode")
             if not compiler_errors:
-                logger.warning("No compiler errors provided for auto_fix mode")
+                self._logger.log_warning("No compiler errors provided for auto_fix mode", "auto_fix_no_errors")
             return await self.apply_auto_fix(existing_code, compiler_errors, language)
 
         elif mode == GenerationMode.OPTIMIZATION:
@@ -336,7 +436,7 @@ class DeveloperAgent(AbstractAgent):
         Returns:
             GenerationResult: Resultat de la generation
         """
-        logger.info(f"Generating contract code for language: {language.value}")
+        self._logger.log_info(f"Generating contract code for language: {language.value}", "contract_generation_start")
 
         # Preparation du contexte RAG
         context = ""
@@ -346,9 +446,9 @@ class DeveloperAgent(AbstractAgent):
                 docs = self.knowledge_base.query_context(query, n_results=3)
                 if docs:
                     context = "\n".join(docs[:3])
-                    logger.debug(f"RAG context added ({len(docs)} docs)")
+                    self._logger.log_debug(f"RAG context added ({len(docs)} docs)", "rag_context_added")
             except Exception as e:
-                logger.warning(f"RAG query failed: {str(e)}")
+                self._logger.log_warning(f"RAG query failed: {str(e)}", "rag_query_failed")
 
         # Construction du prompt
         prompt = self._build_generation_prompt(spec, context, language)
@@ -356,7 +456,8 @@ class DeveloperAgent(AbstractAgent):
         # Generation via LLM
         try:
             if self.llm_client:
-                response = await self.llm_client.generate(
+                response = await self._retry_handler.execute_with_retry(
+                    self.llm_client.generate,
                     prompt=prompt,
                     system_prompt=self._get_system_prompt(language),
                     temperature=0.4
@@ -384,10 +485,10 @@ class DeveloperAgent(AbstractAgent):
             )
 
         except LLMError as e:
-            logger.error(f"LLM generation failed: {str(e)}")
+            self._logger.log_error(f"LLM generation failed: {str(e)}", e, "llm_generation_failed")
             raise
         except Exception as e:
-            logger.error(f"Code generation failed: {str(e)}")
+            self._logger.log_error(f"Code generation failed: {str(e)}", e, "code_generation_failed")
             raise
 
     async def generate_test_suite(
@@ -405,7 +506,7 @@ class DeveloperAgent(AbstractAgent):
         Returns:
             str: Code des tests
         """
-        logger.info(f"Generating test suite for language: {language.value}")
+        self._logger.log_info(f"Generating test suite for language: {language.value}", "test_generation_start")
 
         # Preparation du prompt
         prompt = f"""
@@ -426,7 +527,8 @@ class DeveloperAgent(AbstractAgent):
         # Generation via LLM
         try:
             if self.llm_client:
-                response = await self.llm_client.generate(
+                response = await self._retry_handler.execute_with_retry(
+                    self.llm_client.generate,
                     prompt=prompt,
                     system_prompt=f"You are an expert at writing tests for {language.value} smart contracts.",
                     temperature=0.3
@@ -439,7 +541,7 @@ class DeveloperAgent(AbstractAgent):
             return tests
 
         except Exception as e:
-            logger.error(f"Test generation failed: {str(e)}")
+            self._logger.log_error(f"Test generation failed: {str(e)}", e, "test_generation_failed")
             return f"// Test generation failed: {str(e)}"
 
     async def generate_documentation_code(
@@ -457,7 +559,7 @@ class DeveloperAgent(AbstractAgent):
         Returns:
             str: Documentation
         """
-        logger.info(f"Generating documentation for language: {language.value}")
+        self._logger.log_info(f"Generating documentation for language: {language.value}", "doc_generation_start")
 
         # Preparation du prompt
         prompt = f"""
@@ -478,7 +580,8 @@ class DeveloperAgent(AbstractAgent):
         # Generation via LLM
         try:
             if self.llm_client:
-                response = await self.llm_client.generate(
+                response = await self._retry_handler.execute_with_retry(
+                    self.llm_client.generate,
                     prompt=prompt,
                     system_prompt=f"You are an expert at documenting {language.value} code.",
                     temperature=0.3
@@ -488,7 +591,7 @@ class DeveloperAgent(AbstractAgent):
                 return "// Documentation generation not available"
 
         except Exception as e:
-            logger.error(f"Documentation generation failed: {str(e)}")
+            self._logger.log_error(f"Documentation generation failed: {str(e)}", e, "doc_generation_failed")
             return f"// Documentation generation failed: {str(e)}"
 
     async def apply_auto_fix(
@@ -508,7 +611,7 @@ class DeveloperAgent(AbstractAgent):
         Returns:
             GenerationResult: Resultat de la correction
         """
-        logger.info(f"Applying auto-fix for language: {language.value}")
+        self._logger.log_info(f"Applying auto-fix for language: {language.value}", "auto_fix_start")
 
         # Analyse des erreurs
         error_analysis = self._analyze_compiler_errors(compiler_errors, language)
@@ -541,7 +644,8 @@ class DeveloperAgent(AbstractAgent):
         for attempt in range(self.max_retries):
             try:
                 if self.llm_client:
-                    response = await self.llm_client.generate(
+                    response = await self._retry_handler.execute_with_retry(
+                        self.llm_client.generate,
                         prompt=prompt,
                         system_prompt=f"You are an expert at fixing {language.value} compilation errors.",
                         temperature=0.2
@@ -551,7 +655,7 @@ class DeveloperAgent(AbstractAgent):
                     # Verification de la correction
                     validation = await self._validate_code(fixed_code, language)
                     if not validation.get("errors"):
-                        logger.info(f"Auto-fix successful on attempt {attempt + 1}")
+                        self._logger.log_info(f"Auto-fix successful on attempt {attempt + 1}", "auto_fix_success")
                         break
                     else:
                         all_errors.extend(validation.get("errors", []))
@@ -563,7 +667,7 @@ class DeveloperAgent(AbstractAgent):
                     break
 
             except Exception as e:
-                logger.warning(f"Auto-fix attempt {attempt + 1} failed: {str(e)}")
+                self._logger.log_warning(f"Auto-fix attempt {attempt + 1} failed: {str(e)}", "auto_fix_attempt_failed")
                 if attempt == self.max_retries - 1:
                     raise
 
@@ -594,7 +698,7 @@ class DeveloperAgent(AbstractAgent):
         Returns:
             GenerationResult: Resultat de l'optimisation
         """
-        logger.info(f"Optimizing code for gas: {language.value}")
+        self._logger.log_info(f"Optimizing code for gas: {language.value}", "gas_optimization_start")
 
         # Analyse du code pour identifier les optimisations
         analysis = self._analyze_gas_usage(code, language)
@@ -620,7 +724,8 @@ class DeveloperAgent(AbstractAgent):
 
         try:
             if self.llm_client:
-                response = await self.llm_client.generate(
+                response = await self._retry_handler.execute_with_retry(
+                    self.llm_client.generate,
                     prompt=prompt,
                     system_prompt=f"You are an expert at optimizing {language.value} code for gas efficiency.",
                     temperature=0.3
@@ -635,7 +740,7 @@ class DeveloperAgent(AbstractAgent):
             )
 
         except Exception as e:
-            logger.error(f"Gas optimization failed: {str(e)}")
+            self._logger.log_error(f"Gas optimization failed: {str(e)}", e, "gas_optimization_failed")
             return GenerationResult(code=code, errors=[str(e)])
 
     async def refactor_code(
@@ -655,7 +760,7 @@ class DeveloperAgent(AbstractAgent):
         Returns:
             GenerationResult: Resultat du refactoring
         """
-        logger.info(f"Refactoring code: {language.value}")
+        self._logger.log_info(f"Refactoring code: {language.value}", "refactoring_start")
 
         prompt = f"""
         Refactor the following {language.value} code according to the specifications.
@@ -676,7 +781,8 @@ class DeveloperAgent(AbstractAgent):
 
         try:
             if self.llm_client:
-                response = await self.llm_client.generate(
+                response = await self._retry_handler.execute_with_retry(
+                    self.llm_client.generate,
                     prompt=prompt,
                     system_prompt=f"You are an expert at refactoring {language.value} code.",
                     temperature=0.3
@@ -691,7 +797,7 @@ class DeveloperAgent(AbstractAgent):
             )
 
         except Exception as e:
-            logger.error(f"Refactoring failed: {str(e)}")
+            self._logger.log_error(f"Refactoring failed: {str(e)}", e, "refactoring_failed")
             return GenerationResult(code=code, errors=[str(e)])
 
     # =========================================================================
@@ -733,7 +839,7 @@ class DeveloperAgent(AbstractAgent):
                             result.code = fixed_code
 
             except Exception as e:
-                logger.warning(f"Best practice validation failed: {str(e)}")
+                self._logger.log_warning(f"Best practice validation failed: {str(e)}", "best_practice_failed")
 
         return result
 
@@ -819,8 +925,7 @@ class DeveloperAgent(AbstractAgent):
         if "contract" not in code and "interface" not in code and "library" not in code:
             result["warnings"].append("No contract, interface, or library defined")
 
-        # Verifier les fonctions sans visibilite (Regex robuste corrigée)
-        # Utilisation d'un pattern plus robuste qui capture correctement les fonctions
+        # Verifier les fonctions sans visibilite
         functions = re.findall(r'\bfunction\s+\w+\s*\([^)]*\)\s*[^{]*\{', code)
         for func in functions:
             if not any(vis in func for vis in ["public", "external", "internal", "private"]):
@@ -1269,14 +1374,15 @@ contract TemplateTest is Test {
 
         try:
             if self.llm_client:
-                response = await self.llm_client.generate(
+                response = await self._retry_handler.execute_with_retry(
+                    self.llm_client.generate,
                     prompt=prompt,
                     system_prompt="You are an expert at fixing code issues.",
                     temperature=0.2
                 )
                 return self._extract_code_from_response(response, Language.SOLIDITY)
         except Exception as e:
-            logger.warning(f"Failed to apply fixes from validation: {str(e)}")
+            self._logger.log_warning(f"Failed to apply fixes from validation: {str(e)}", "validation_fix_failed")
 
         return None
 
@@ -1295,6 +1401,7 @@ contract TemplateTest is Test {
         successful = sum(1 for g in self._generation_history if not g.errors)
 
         total_code_length = sum(len(g.code) for g in self._generation_history)
+        cache_metrics = self._cache.get_metrics()
 
         return {
             "total_generations": total_generations,
@@ -1308,6 +1415,7 @@ contract TemplateTest is Test {
             "optimize_gas": self.optimize_gas,
             "generate_tests": self.generate_tests,
             "generate_documentation": self.generate_documentation,
+            "cache_metrics": cache_metrics
         }
 
     def get_last_generation(self) -> Optional[GenerationResult]:
@@ -1344,5 +1452,6 @@ contract TemplateTest is Test {
             "optimize_gas": self.optimize_gas,
             "generate_tests": self.generate_tests,
             "generate_documentation": self.generate_documentation,
+            "cache_metrics": self._cache.get_metrics(),
             "health": self.health_check()
         }

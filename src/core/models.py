@@ -5,6 +5,7 @@
 # Description: Modèles de données Pydantic pour l'ensemble du pipeline.
 #              Validation automatique, sérialisation JSON compatible Pydantic v2.
 #              Tous les modèles incluent des validations et des méthodes utilitaires.
+#              Version refactorisée avec horodatages timezone-aware.
 # ==============================================================================
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -155,6 +156,8 @@ class Skill(BaseModel):
     is_dynamic: bool = Field(default=False, description="Générée dynamiquement")
     tags: List[str] = Field(default_factory=list, description="Tags pour la recherche")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées supplémentaires")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de mise à jour")
     
     @field_validator('skill_id')
     @classmethod
@@ -205,6 +208,8 @@ class BestPractice(BaseModel):
     validation_fn: Optional[str] = Field(None, description="Nom de la fonction de validation dans le code")
     enabled: bool = Field(default=True, description="Active ou désactive la pratique")
     custom_params: Dict[str, Any] = Field(default_factory=dict, description="Paramètres personnalisés")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de mise à jour")
 
     @field_validator('domain')
     @classmethod
@@ -236,6 +241,8 @@ class Task(BaseModel):
     priority: int = Field(default=0, ge=0, le=10, description="Priorité (0=bas, 10=élevé)")
     status: TaskStatus = Field(default=TaskStatus.PENDING, description="Statut de la tâche")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées supplémentaires")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de mise à jour")
 
     @model_validator(mode='after')
     def validate_dependencies(self) -> 'Task':
@@ -403,6 +410,8 @@ class ProjectConfig(BaseModel):
     upgrades: UpgradesConfig = Field(default_factory=UpgradesConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de mise à jour")
 
     @field_validator('version')
     @classmethod
@@ -580,6 +589,7 @@ class Webhook(BaseModel):
     enabled: bool = Field(default=True, description="Webhook actif")
     retry_count: int = Field(default=3, ge=0, le=10, description="Nombre de tentatives")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de mise à jour")
 
 
 # ==============================================================================
@@ -645,6 +655,10 @@ class Deployment(BaseModel):
 # ==============================================================================
 
 if __name__ == "__main__":
+    print("=" * 60)
+    print("Smart Contract Dev Pipeline 2.0 - Core Models (Pydantic v2)")
+    print("=" * 60)
+    
     # Création d'un skill de test
     skill = Skill(
         skill_id="erc20_generator",
@@ -721,4 +735,11 @@ if __name__ == "__main__":
     )
     print(f"✅ Notification créée: {notification.title}")
     
-    print("\n✅ Tous les modèles fonctionnent correctement avec Pydantic v2.")
+    # Vérification des horodatages (timezone-aware)
+    print("\n📋 Vérification des horodatages:")
+    print(f"  Skill created_at: {skill.created_at}")
+    print(f"  Task created_at: {task.created_at}")
+    print(f"  Sprint created_at: {sprint.created_at}")
+    print(f"  Result timestamp: {result.timestamp}")
+    
+    print("\n✅ Tous les modèles fonctionnent correctement avec Pydantic v2 et horodatages timezone-aware.")

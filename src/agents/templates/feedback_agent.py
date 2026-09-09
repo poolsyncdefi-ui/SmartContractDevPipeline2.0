@@ -15,6 +15,7 @@ L'Agent Feedback est responsable de:
 
 Cet agent est le composant central du processus HITL (Human-In-The-Loop)
 permettant l'integration des retours humains dans le pipeline.
+Version refactorisée avec intégration des nouveaux modules système.
 """
 from src.agents.base.abstract_agent import AbstractAgent
 from typing import Dict, Any, List, Optional, Set, Tuple
@@ -27,6 +28,11 @@ from dataclasses import dataclass, field
 
 # Import des modules du pipeline
 from src.core.exceptions import PipelineError, LLMError
+from src.core.status_manager import normalize_status, status_manager
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.contract_validator import ContractValidator, validate_contract
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 from src.agents.base.best_practice import BaseBestPractice
 from src.llm.llm_client import LLMClient
 from src.persistence.knowledge_base import KnowledgeBase
@@ -174,6 +180,9 @@ class FeedbackAgent(AbstractAgent):
         auto_apply_low_severity (bool): Appliquer automatiquement les retours faibles
         _feedback_history (List[Feedback]): Historique des retours
         _feedback_results (List[FeedbackResult]): Historique des resultats
+        _cache (IntelligentCache): Cache des analyses
+        _logger (StructuredLogger): Logger structure
+        _retry_handler (AdaptiveRetry): Systeme de retry
     """
 
     # Patterns pour l'analyse des retours
@@ -251,7 +260,10 @@ class FeedbackAgent(AbstractAgent):
         best_practices: Optional[List[BaseBestPractice]] = None,
         max_loop_iterations: int = 5,
         require_validation: bool = True,
-        auto_apply_low_severity: bool = False
+        auto_apply_low_severity: bool = False,
+        cache_enabled: bool = True,
+        cache_ttl: int = 3600,
+        log_callback=None
     ):
         """
         Initialise l'Agent Feedback.
@@ -266,8 +278,18 @@ class FeedbackAgent(AbstractAgent):
             max_loop_iterations: Nombre maximum d'iterations de retroaction
             require_validation: Valider les modifications (defaut: True)
             auto_apply_low_severity: Appliquer automatiquement les retours faibles
+            cache_enabled: Activer le cache
+            cache_ttl: Duree de vie du cache en secondes
+            log_callback: Callback pour les logs
         """
-        super().__init__(agent_id=agent_id, name=name, skills=skills)
+        super().__init__(
+            agent_id=agent_id,
+            name=name,
+            skills=skills,
+            llm_client=llm_client,
+            knowledge_base=knowledge_base,
+            log_callback=log_callback
+        )
         self.llm_client = llm_client
         self.knowledge_base = knowledge_base
         self.best_practices = best_practices or []
@@ -278,8 +300,36 @@ class FeedbackAgent(AbstractAgent):
         self._feedback_results: List[FeedbackResult] = []
         self._feedback_loop_count = 0
 
+        # Cache intelligent
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=200,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name=f"FeedbackAgent_{agent_id}",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(agent_id=agent_id)
+
+        # Système de retry adaptatif
+        self._retry_handler = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=30.0,
+            max_retries=3,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(LLMError, PipelineError)
+        )
+
         logger.info(f"FeedbackAgent initialized: {agent_id}")
 
+    @validate_contract(required_methods=["execute_task"])
     async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyse le retour humain et applique les modifications.
@@ -301,6 +351,7 @@ class FeedbackAgent(AbstractAgent):
             - 'feedback_ignored': Retours ignores
         """
         start_time = datetime.now(timezone.utc)
+        self._logger.set_context(task_id=task_data.get("task_id", "unknown"))
 
         try:
             # 1. Extraction des parametres
@@ -315,34 +366,41 @@ class FeedbackAgent(AbstractAgent):
             if not code:
                 raise ValueError("No code provided")
 
-            # 2. Analyse du retour
+            # 2. Vérification du cache
+            cache_key = f"{hash(feedback_content)}_{hash(code)}_{source}"
+            cached_result = await self._cache.get(cache_key)
+            if cached_result is not None:
+                self._logger.log_info("Cache hit for feedback analysis", "cache_hit")
+                return cached_result
+
+            # 3. Analyse du retour
             feedback = await self._analyze_feedback(
                 content=feedback_content,
                 source=source,
                 context=context
             )
 
-            # 3. Sauvegarde du retour
+            # 4. Sauvegarde du retour
             self._feedback_history.append(feedback)
 
-            # 4. Application du retour
+            # 5. Application du retour
             result = await self._apply_feedback(
                 feedback=feedback,
                 code=code
             )
 
-            # 5. Validation des modifications
+            # 6. Validation des modifications
             if self.require_validation:
                 result = await self._validate_result(result)
 
-            # 6. Application des bonnes pratiques
+            # 7. Application des bonnes pratiques
             if self.best_practices:
                 result = await self._apply_best_practices(result)
 
-            # 7. Persistance du resultat
+            # 8. Persistance du resultat
             self._feedback_results.append(result)
 
-            # 8. Logging de l'execution (via la methode de la classe mere)
+            # 9. Logging de l'execution
             await self._log_execution(
                 task_data=task_data,
                 result={
@@ -355,10 +413,8 @@ class FeedbackAgent(AbstractAgent):
                 duration=(datetime.now(timezone.utc) - start_time).total_seconds()
             )
 
-            logger.info(f"Feedback applied: {len(result.feedback_applied)} changes, passed={result.validation_passed}")
-
-            # Note: Les statuts sont en minuscules pour correspondre à l'Enum TaskStatus
-            return {
+            # 10. Mise en cache
+            result_dict = {
                 "status": "success",
                 "result": result.to_dict(),
                 "code": result.modified_code,
@@ -375,13 +431,35 @@ class FeedbackAgent(AbstractAgent):
                 }
             }
 
+            await self._cache.set(
+                cache_key,
+                result_dict,
+                ttl=3600,
+                tags=[feedback.type.value, source]
+            )
+
+            self._logger.log_info(
+                f"Feedback applied: {len(result.feedback_applied)} changes",
+                "feedback_applied",
+                changes=len(result.feedback_applied),
+                passed=result.validation_passed
+            )
+
+            return result_dict
+
         except Exception as e:
-            logger.error(f"FeedbackAgent execution failed: {str(e)}")
+            self._logger.log_error(
+                f"FeedbackAgent execution failed: {str(e)}",
+                e,
+                "execution_failed"
+            )
             return {
                 "status": "failed",
                 "error": str(e),
                 "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds()
             }
+        finally:
+            self._logger.clear_context()
 
     # =========================================================================
     # ANALYSE DU RETOUR
@@ -429,7 +507,12 @@ class FeedbackAgent(AbstractAgent):
             }
         )
 
-        logger.info(f"Feedback analyzed: type={feedback_type.value}, severity={severity.value}")
+        self._logger.log_info(
+            f"Feedback analyzed: type={feedback_type.value}, severity={severity.value}",
+            "feedback_analyzed",
+            feedback_type=feedback_type.value,
+            severity=severity.value
+        )
 
         return feedback
 
@@ -545,7 +628,8 @@ class FeedbackAgent(AbstractAgent):
 
                 Return the fix as code. If no specific fix is mentioned, return 'none'.
                 """
-                response = await self.llm_client.generate(
+                response = await self._retry_handler.execute_with_retry(
+                    self.llm_client.generate,
                     prompt=prompt,
                     system_prompt="You are an expert at extracting code fixes from feedback.",
                     temperature=0.2
@@ -554,7 +638,7 @@ class FeedbackAgent(AbstractAgent):
                 if response and response.strip().lower() != 'none':
                     return response.strip()
             except Exception as e:
-                logger.warning(f"Failed to extract fix via LLM: {str(e)}")
+                self._logger.log_warning(f"Failed to extract fix via LLM: {str(e)}", "fix_extraction_failed")
 
         return None
 
@@ -623,7 +707,8 @@ class FeedbackAgent(AbstractAgent):
                 if feedback.suggested_fix:
                     prompt += f"\n\nSuggested fix:\n{feedback.suggested_fix}"
 
-                response = await self.llm_client.generate(
+                response = await self._retry_handler.execute_with_retry(
+                    self.llm_client.generate,
                     prompt=prompt,
                     system_prompt="You are an expert at applying feedback to code.",
                     temperature=0.3
@@ -642,7 +727,7 @@ class FeedbackAgent(AbstractAgent):
                     fix_applied = True
 
             except Exception as e:
-                logger.error(f"LLM application failed: {str(e)}")
+                self._logger.log_error(f"LLM application failed: {str(e)}", e, "llm_apply_failed")
 
         # 3. Fallback: si le LLM n'est pas disponible ou a échoué mais qu'un suggested_fix existe
         if not fix_applied and feedback.suggested_fix:
@@ -810,7 +895,7 @@ class FeedbackAgent(AbstractAgent):
                             })
                     result.quality_score = min(result.quality_score, validation.get("score", 100))
             except Exception as e:
-                logger.warning(f"Best practice validation failed: {str(e)}")
+                self._logger.log_warning(f"Best practice validation failed: {str(e)}", "best_practice_failed")
 
         return result
 
@@ -865,6 +950,8 @@ class FeedbackAgent(AbstractAgent):
             by_type[f.type.value] = by_type.get(f.type.value, 0) + 1
             by_severity[f.severity.value] = by_severity.get(f.severity.value, 0) + 1
 
+        cache_metrics = self._cache.get_metrics()
+
         return {
             "total_feedback": total_feedback,
             "applied_feedback": applied_feedback,
@@ -873,7 +960,8 @@ class FeedbackAgent(AbstractAgent):
             "by_severity": by_severity,
             "total_results": len(self._feedback_results),
             "average_quality_score": sum(r.quality_score for r in self._feedback_results) / len(self._feedback_results) if self._feedback_results else 0,
-            "feedback_loop_count": self._feedback_loop_count
+            "feedback_loop_count": self._feedback_loop_count,
+            "cache_metrics": cache_metrics
         }
 
     # =========================================================================
@@ -899,7 +987,9 @@ class FeedbackAgent(AbstractAgent):
             "skills_count": len(self.skills),
             "max_loop_iterations": self.max_loop_iterations,
             "require_validation": self.require_validation,
-            "auto_apply_low_severity": self.auto_apply_low_severity
+            "auto_apply_low_severity": self.auto_apply_low_severity,
+            "cache_metrics": self._cache.get_metrics(),
+            "health": self.health_check()
         }
 
     # =========================================================================
