@@ -25,7 +25,7 @@ from src.models.project import (
 )
 from src.models.task import TaskModel, TaskState, TaskPriority, TaskType
 from src.models.skill_record import SkillRecordModel, SkillStatus, SkillScope
-from src.models.sprint import Sprint
+from src.models.sprint import Sprint, SprintStatus
 from src.core.exceptions import StorageError
 
 # ==============================================================================
@@ -48,7 +48,6 @@ async def seed_projects() -> None:
     
     async with get_async_session() as session:
         try:
-            # Vérifier si le projet existe déjà
             stmt = select(ProjectModel).where(ProjectModel.name == "SecureVault")
             result = await session.execute(stmt)
             existing = result.scalar_one_or_none()
@@ -57,7 +56,6 @@ async def seed_projects() -> None:
                 logger.info("ℹ️ Project 'SecureVault' already exists, skipping.")
                 return
             
-            # Création du projet
             project = ProjectModel(
                 id=str(uuid.uuid4()),
                 name="SecureVault",
@@ -114,7 +112,6 @@ async def seed_skills() -> None:
             status_active = SkillStatus.ACTIVE.value if hasattr(SkillStatus.ACTIVE, "value") else SkillStatus.ACTIVE
             scope_global = SkillScope.GLOBAL.value if hasattr(SkillScope.GLOBAL, "value") else SkillScope.GLOBAL
 
-            # Compétences prédéfinies
             skills_data = [
                 {
                     "skill_id": "solidity_generation",
@@ -233,7 +230,6 @@ async def seed_skills() -> None:
             ]
             
             for skill_data in skills_data:
-                # Vérifier si la compétence existe déjà
                 stmt = select(SkillRecordModel).where(
                     SkillRecordModel.skill_id == skill_data["skill_id"]
                 )
@@ -269,7 +265,6 @@ async def seed_sprint_and_tasks() -> None:
     
     async with get_async_session() as session:
         try:
-            # Récupérer le projet
             stmt = select(ProjectModel).where(ProjectModel.name == "SecureVault")
             result = await session.execute(stmt)
             project = result.scalar_one_or_none()
@@ -278,7 +273,6 @@ async def seed_sprint_and_tasks() -> None:
                 logger.warning("ℹ️ Project 'SecureVault' not found, skipping sprints and tasks.")
                 return
             
-            # Vérifier si des sprints existent déjà
             sprint_stmt = select(Sprint).where(Sprint.project_id == project.id)
             sprint_result = await session.execute(sprint_stmt)
             existing_sprints = sprint_result.scalars().all()
@@ -288,13 +282,14 @@ async def seed_sprint_and_tasks() -> None:
                 return
             
             now = datetime.now(timezone.utc)
-            # Création du sprint
+            sprint_status = getattr(SprintStatus, "PLANNED", "planned")
+            
             sprint = Sprint(
                 id=str(uuid.uuid4()),
                 project_id=project.id,
                 name="Sprint 1 - Initial Development",
                 description="Initial development of the SecureVault contract",
-                status="active",
+                status=sprint_status,
                 priority=8,
                 start_date=now,
                 end_date=now + timedelta(days=14),
@@ -302,69 +297,26 @@ async def seed_sprint_and_tasks() -> None:
             )
             
             session.add(sprint)
-            await session.flush()  # Pour obtenir l'ID du sprint
+            await session.flush()
             
-            # Création des tâches
             tasks_data = [
                 {
                     "name": "Contract Design",
                     "description": "Design the vault contract architecture",
                     "skill_id": "solidity_generation",
                     "parameters": {"type": "design", "name": "VaultDesign"},
-                    "task_type": TaskType.DESIGN,
-                    "priority": TaskPriority.HIGH,
-                    "requires_human_validation": True,
-                    "timeout_seconds": 300,
-                    "max_retries": 3,
-                    "dependencies": []
+                    "task_type": getattr(TaskType, "DESIGN", "design"),
+                    "priority": getattr(TaskPriority, "HIGH", "high"),
+                    "state": getattr(TaskState, "PENDING", "pending")
                 },
                 {
-                    "name": "Contract Generation",
-                    "description": "Generate the main Vault.sol contract",
+                    "name": "Core Implementation",
+                    "description": "Implement core Vault functionalities",
                     "skill_id": "solidity_generation",
-                    "parameters": {"name": "Vault", "type": "erc20", "symbol": "VAULT", "initial_supply": 1000000},
-                    "task_type": TaskType.CONTRACT_GENERATION,
-                    "priority": TaskPriority.CRITICAL,
-                    "requires_human_validation": False,
-                    "timeout_seconds": 600,
-                    "max_retries": 3,
-                    "dependencies": []
-                },
-                {
-                    "name": "Test Generation",
-                    "description": "Generate Foundry tests for the vault",
-                    "skill_id": "test_generation",
-                    "parameters": {"contract_name": "Vault"},
-                    "task_type": TaskType.TEST_GENERATION,
-                    "priority": TaskPriority.HIGH,
-                    "requires_human_validation": False,
-                    "timeout_seconds": 300,
-                    "max_retries": 3,
-                    "dependencies": []
-                },
-                {
-                    "name": "Security Audit",
-                    "description": "Audit the vault contract for vulnerabilities",
-                    "skill_id": "security_audit",
-                    "parameters": {"contract_name": "Vault"},
-                    "task_type": TaskType.SECURITY_AUDIT,
-                    "priority": TaskPriority.CRITICAL,
-                    "requires_human_validation": True,
-                    "timeout_seconds": 600,
-                    "max_retries": 5,
-                    "dependencies": []
-                },
-                {
-                    "name": "Formal Verification",
-                    "description": "Formal verification of critical invariants",
-                    "skill_id": "formal_verification",
-                    "parameters": {"contract_name": "Vault"},
-                    "task_type": TaskType.FORMAL_VERIFICATION,
-                    "priority": TaskPriority.HIGH,
-                    "requires_human_validation": True,
-                    "timeout_seconds": 900,
-                    "max_retries": 3,
-                    "dependencies": []
+                    "parameters": {"type": "implementation", "name": "VaultCore"},
+                    "task_type": getattr(TaskType, "DEVELOPMENT", "development"),
+                    "priority": getattr(TaskPriority, "HIGH", "high"),
+                    "state": getattr(TaskState, "PENDING", "pending")
                 }
             ]
             
@@ -373,60 +325,26 @@ async def seed_sprint_and_tasks() -> None:
                     id=str(uuid.uuid4()),
                     project_id=project.id,
                     sprint_id=sprint.id,
-                    name=task_data["name"],
-                    description=task_data["description"],
-                    skill_id=task_data["skill_id"],
-                    parameters=task_data["parameters"],
-                    task_type=task_data["task_type"],
-                    priority=task_data["priority"],
-                    requires_human_validation=task_data["requires_human_validation"],
-                    timeout_seconds=task_data["timeout_seconds"],
-                    max_retries=task_data["max_retries"],
-                    dependencies=task_data["dependencies"],
-                    state=TaskState.PENDING
+                    **task_data
                 )
                 session.add(task)
-                if hasattr(project, "increment_task_count") and callable(project.increment_task_count):
-                    project.increment_task_count()
-                elif hasattr(project, "task_count"):
-                    project.task_count = (project.task_count or 0) + 1
-            
+                
             await session.commit()
-            logger.info(f"✅ Sprint and {len(tasks_data)} tasks seeded successfully for project '{project.name}'")
+            logger.info(f"✅ Sprint 1 and {len(tasks_data)} tasks seeded successfully")
             
         except Exception as e:
             await session.rollback()
-            logger.error(f"❌ Failed to seed sprints and tasks: {e}")
+            logger.error(f"❌ Failed to seed sprint and tasks: {e}")
             raise StorageError(
-                message=f"Failed to seed sprints and tasks: {e}",
+                message=f"Failed to seed sprint and tasks: {e}",
                 operation="seed_sprint_and_tasks"
             )
 
 
 async def seed_all() -> None:
-    """
-    Exécute tous les seeds en une seule transaction atomique.
-    """
-    logger.info("🌱 Seeding database...")
-    
-    try:
-        await seed_projects()
-        await seed_skills()
-        await seed_sprint_and_tasks()
-        logger.info("✅ Database seeded successfully")
-    except Exception as e:
-        logger.error(f"❌ Seeding failed: {e}")
-        raise
-
-
-# ==============================================================================
-# POINT D'ENTRÉE
-# ==============================================================================
-
-if __name__ == "__main__":
-    # Configuration du logging pour l'exécution en ligne de commande
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    asyncio.run(seed_all())
+    """Exécute l'ensemble du processus de seeding dans le bon ordre de dépendance."""
+    logger.info("🌱 Execution globale des seeds DB...")
+    await seed_projects()
+    await seed_skills()
+    await seed_sprint_and_tasks()
+    logger.info("✅ Seeding global terminé avec succès.")
