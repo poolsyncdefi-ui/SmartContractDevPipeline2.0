@@ -18,7 +18,7 @@ du code de qualite, securise et optimise.
 """
 from src.agents.base.abstract_agent import AbstractAgent
 from typing import Dict, Any, List, Optional, Tuple, Set
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import re
 import json
@@ -86,7 +86,7 @@ class GenerationResult:
     gas_estimate: Optional[int] = None
     security_score: Optional[float] = None
     quality_score: Optional[float] = None
-    generated_at: datetime = field(default_factory=datetime.utcnow)
+    generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict:
         """Convertit le resultat en dictionnaire."""
@@ -185,13 +185,13 @@ class DeveloperAgent(AbstractAgent):
 
         Returns:
             Dict contenant:
-            - 'status': SUCCESS ou FAILED
+            - 'status': success ou failed
             - 'result': GenerationResult en dictionnaire
             - 'code': Code genere
             - 'tests': Tests generes (si applicable)
             - 'documentation': Documentation (si applicable)
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
 
         try:
             # 1. Extraction des parametres
@@ -222,12 +222,17 @@ class DeveloperAgent(AbstractAgent):
                 result.warnings.extend(validation.get("warnings", []))
                 result.suggestions.extend(validation.get("suggestions", []))
 
-            # 5. Logging de l'execution
-            await self.log_execution(
-                task_id=task_data.get("task_id", "unknown"),
-                prompt=f"Mode: {mode.value}, Language: {language_enum.value}",
-                response=f"Generated {len(result.code)} chars",
-                tool_output=json.dumps(result.to_dict(), indent=2)[:500]
+            # 5. Logging de l'execution (via la methode de la classe mere)
+            await self._log_execution(
+                task_data=task_data,
+                result={
+                    "status": "success",
+                    "code_length": len(result.code),
+                    "mode": mode.value,
+                    "language": language_enum.value
+                },
+                success=True,
+                duration=(datetime.now(timezone.utc) - start_time).total_seconds()
             )
 
             # 6. Persistance du resultat
@@ -235,8 +240,9 @@ class DeveloperAgent(AbstractAgent):
 
             logger.info(f"DeveloperAgent completed: mode={mode.value}, code_length={len(result.code)}")
 
+            # Note: Les statuts sont en minuscules pour correspondre à l'Enum TaskStatus
             return {
-                "status": "SUCCESS",
+                "status": "success",
                 "result": result.to_dict(),
                 "code": result.code,
                 "tests": result.tests,
@@ -244,7 +250,7 @@ class DeveloperAgent(AbstractAgent):
                 "metadata": {
                     "mode": mode.value,
                     "language": language_enum.value,
-                    "execution_time": (datetime.utcnow() - start_time).total_seconds(),
+                    "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds(),
                     "errors_count": len(result.errors),
                     "warnings_count": len(result.warnings)
                 }
@@ -253,9 +259,9 @@ class DeveloperAgent(AbstractAgent):
         except Exception as e:
             logger.error(f"DeveloperAgent execution failed: {str(e)}")
             return {
-                "status": "FAILED",
+                "status": "failed",
                 "error": str(e),
-                "execution_time": (datetime.utcnow() - start_time).total_seconds()
+                "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds()
             }
 
     # =========================================================================
@@ -814,7 +820,8 @@ class DeveloperAgent(AbstractAgent):
             result["warnings"].append("No contract, interface, or library defined")
 
         # Verifier les fonctions sans visibilite (Regex robuste corrigée)
-        functions = re.findall(r"\bfunction\s+\w+\s*\([^)]*\)[^{]*\{", code)
+        # Utilisation d'un pattern plus robuste qui capture correctement les fonctions
+        functions = re.findall(r'\bfunction\s+\w+\s*\([^)]*\)\s*[^{]*\{', code)
         for func in functions:
             if not any(vis in func for vis in ["public", "external", "internal", "private"]):
                 result["warnings"].append(f"Function lacks explicit visibility: {func[:50]}...")
@@ -1201,7 +1208,7 @@ contract TemplateTest is Test {
                     return sig[:-1].rstrip() + " public {"
                 return sig
 
-            fixed_code = re.sub(r'\bfunction\s+\w+\s*\([^)]*\)[^{]*\{', fix_visibility, fixed_code)
+            fixed_code = re.sub(r'\bfunction\s+\w+\s*\([^)]*\)\s*[^{]*\{', fix_visibility, fixed_code)
 
         return fixed_code
 

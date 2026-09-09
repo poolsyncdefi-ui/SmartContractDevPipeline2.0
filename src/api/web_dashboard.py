@@ -169,9 +169,17 @@ async def lifespan(app: FastAPI):
         notifier.manager._running = False
         if notifier.manager._ping_task:
             notifier.manager._ping_task.cancel()
+            try:
+                await notifier.manager._ping_task
+            except asyncio.CancelledError:
+                pass
             notifier.manager._ping_task = None
         if notifier.manager._cleanup_task:
             notifier.manager._cleanup_task.cancel()
+            try:
+                await notifier.manager._cleanup_task
+            except asyncio.CancelledError:
+                pass
             notifier.manager._cleanup_task = None
         
         # Déconnecter tous les clients actifs

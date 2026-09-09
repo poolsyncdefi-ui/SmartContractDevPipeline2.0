@@ -9,7 +9,7 @@
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Dict, Optional, Any, Union, Set, Literal
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 import re
 import uuid
@@ -266,7 +266,7 @@ class TaskResult(BaseModel):
     error: Optional[str] = Field(None, description="Message d'erreur si échec")
     validation_results: Optional[List[Dict[str, Any]]] = Field(None, description="Résultats de validation")
     duration_seconds: float = Field(default=0.0, ge=0.0, description="Durée en secondes")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Horodatage")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Horodatage")
     logs: List[str] = Field(default_factory=list, description="Logs d'exécution")
     gist_url: Optional[str] = Field(None, description="URL du Gist si publié")
     retry_count: int = Field(default=0, ge=0, description="Nombre de tentatives")
@@ -307,8 +307,8 @@ class Sprint(BaseModel):
     status: SprintStatus = Field(default=SprintStatus.PLANNED, description="Statut du sprint")
     start_date: Optional[datetime] = Field(None, description="Date de début")
     end_date: Optional[datetime] = Field(None, description="Date de fin")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Date de création")
-    updated_at: datetime = Field(default_factory=datetime.utcnow, description="Date de mise à jour")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de mise à jour")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées supplémentaires")
 
     @field_validator('tasks')
@@ -439,7 +439,7 @@ class Artifact(BaseModel):
     content: str = Field(..., description="Contenu textuel")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées")
     vector: Optional[List[float]] = Field(None, description="Embedding vectoriel")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Date de création")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
     tags: List[str] = Field(default_factory=list, description="Tags pour la recherche")
     source_task_id: Optional[str] = Field(None, description="ID de la tâche source")
     version: str = Field(default="1.0.0", description="Version de l'artefact")
@@ -483,7 +483,7 @@ class Feedback(BaseModel):
     approved: bool = Field(..., description="Approbation ou rejet")
     comments: str = Field(default="", description="Commentaires textuels")
     suggested_changes: Optional[str] = Field(None, description="Changements suggérés")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Date de création")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées supplémentaires")
 
     @field_validator('comments')
@@ -507,7 +507,7 @@ class Notification(BaseModel):
     message: str = Field(..., min_length=1, description="Message de la notification")
     user_id: str = Field(..., description="ID de l'utilisateur cible")
     read: bool = Field(default=False, description="Notification lue")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Date de création")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées supplémentaires")
 
 
@@ -523,7 +523,7 @@ class Event(BaseModel):
     type: EventType = Field(..., description="Type d'événement")
     source: str = Field(..., description="Source de l'événement")
     data: Dict[str, Any] = Field(default_factory=dict, description="Données de l'événement")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Date de création")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Métadonnées supplémentaires")
 
 
@@ -538,7 +538,7 @@ class ErrorResponse(BaseModel):
     code: str = Field(..., description="Code d'erreur")
     message: str = Field(..., description="Message d'erreur")
     details: Optional[Dict[str, Any]] = Field(None, description="Détails de l'erreur")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Horodatage")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Horodatage")
     path: Optional[str] = Field(None, description="Chemin de la requête")
     method: Optional[str] = Field(None, description="Méthode HTTP")
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="ID de la requête")
@@ -552,7 +552,7 @@ class MetricPoint(BaseModel):
     """Point de métrique."""
     name: str = Field(..., description="Nom de la métrique")
     value: float = Field(..., description="Valeur de la métrique")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Horodatage")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Horodatage")
     tags: Dict[str, str] = Field(default_factory=dict, description="Tags de la métrique")
 
 
@@ -579,7 +579,7 @@ class Webhook(BaseModel):
     secret: Optional[str] = Field(None, description="Secret pour la signature")
     enabled: bool = Field(default=True, description="Webhook actif")
     retry_count: int = Field(default=3, ge=0, le=10, description="Nombre de tentatives")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Date de création")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de création")
 
 
 # ==============================================================================
@@ -597,7 +597,7 @@ class PipelineStatus(BaseModel):
     total_tasks: int = Field(default=0, description="Nombre total de tâches")
     completed_tasks: int = Field(default=0, description="Tâches terminées")
     failed_tasks: int = Field(default=0, description="Tâches échouées")
-    last_update: datetime = Field(default_factory=datetime.utcnow, description="Dernière mise à jour")
+    last_update: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Dernière mise à jour")
     components: Dict[str, bool] = Field(default_factory=dict, description="État des composants")
 
     def is_healthy(self) -> bool:
@@ -625,7 +625,7 @@ class Deployment(BaseModel):
     chain_id: int = Field(..., description="ID de la chaîne")
     tx_hash: str = Field(..., description="Hash de la transaction")
     block_number: int = Field(..., description="Numéro du bloc")
-    deployed_at: datetime = Field(default_factory=datetime.utcnow, description="Date de déploiement")
+    deployed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Date de déploiement")
     verified: bool = Field(default=False, description="Vérifié sur Etherscan")
     abi: Optional[List[Dict]] = Field(None, description="ABI du contrat")
     bytecode: Optional[str] = Field(None, description="Bytecode déployé")
@@ -676,7 +676,7 @@ if __name__ == "__main__":
         name="Generate ERC20",
         agent_id="developer_agent",
         action="erc20_generator",
-        parameters={"name": "MyToken", "symbol": "MTK", "initial_sync": 1000000},
+        parameters={"name": "MyToken", "symbol": "MTK", "initial_supply": 1000000},
         depends_on=[],
         priority=5,
         status=TaskStatus.PENDING

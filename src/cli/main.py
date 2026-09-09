@@ -13,7 +13,7 @@ import sys
 import asyncio
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import json
 import time

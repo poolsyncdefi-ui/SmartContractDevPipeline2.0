@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_, func, desc
 from sqlalchemy.exc import SQLAlchemyError
 from typing import List, Dict, Optional, Any, Union, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 import logging
 import json
 from functools import wraps
@@ -144,7 +144,7 @@ class ProjectState:
         """
         if cache_key not in self._cache_timestamps:
             return False
-        age = (datetime.utcnow() - self._cache_timestamps[cache_key]).total_seconds()
+        age = (datetime.now(timezone.utc) - self._cache_timestamps[cache_key]).total_seconds()
         return age < self.cache_ttl
 
     def _get_from_cache(self, cache_key: str) -> Optional[Any]:
@@ -179,7 +179,7 @@ class ProjectState:
             return
 
         self._cache[cache_key] = data
-        self._cache_timestamps[cache_key] = datetime.utcnow()
+        self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
 
     def _invalidate_cache(self, prefix: Optional[str] = None) -> None:
         """
@@ -230,13 +230,13 @@ class ProjectState:
             raise ValueError("Project name is required")
 
         db_project = ProjectModel(
-            id=project_id or str(datetime.utcnow().timestamp()),
+            id=project_id or str(datetime.now(timezone.utc).timestamp()),
             name=name,
             description=description,
             spec_yaml=json.dumps(config or {}),
             status="active",
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
         )
 
         self.session.add(db_project)
@@ -306,7 +306,7 @@ class ProjectState:
             if hasattr(db_project, key):
                 setattr(db_project, key, value)
 
-        db_project.updated_at = datetime.utcnow()
+        db_project.updated_at = datetime.now(timezone.utc)
 
         await self.session.commit()
         await self.session.refresh(db_project)
@@ -393,14 +393,14 @@ class ProjectState:
             raise ValueError(f"Project {sprint.project_id} not found")
 
         # Génération d'un ID si absent (gestion sécurisée pour les modèles Pydantic immuables/gelés)
-        sprint_id = sprint.id or f"sprint_{datetime.utcnow().timestamp()}"
+        sprint_id = sprint.id or f"sprint_{datetime.now(timezone.utc).timestamp()}"
         if sprint.id != sprint_id:
             sprint = sprint.model_copy(update={"id": sprint_id})
 
         # Stockage en mémoire
         sprint_data = sprint.model_dump()
-        sprint_data["created_at"] = (sprint.created_at or datetime.utcnow()).isoformat()
-        sprint_data["updated_at"] = datetime.utcnow().isoformat()
+        sprint_data["created_at"] = (sprint.created_at or datetime.now(timezone.utc)).isoformat()
+        sprint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         self._sprint_store[sprint_id] = sprint_data
 
         # Invalidation du cache
@@ -460,7 +460,7 @@ class ProjectState:
         for key, value in data.items():
             if key in sprint_data:
                 sprint_data[key] = value
-        sprint_data["updated_at"] = datetime.utcnow().isoformat()
+        sprint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         # Invalidation du cache
         self._invalidate_cache(sprint_id)
@@ -587,13 +587,13 @@ class ProjectState:
             raise ValueError(f"Sprint {result.sprint_id} not found")
 
         # Génération d'un ID si absent (gestion sécurisée des modèles Pydantic)
-        result_id = result.id or f"res_{datetime.utcnow().timestamp()}"
+        result_id = result.id or f"res_{datetime.now(timezone.utc).timestamp()}"
         if result.id != result_id:
             result = result.model_copy(update={"id": result_id})
 
         # Stockage en mémoire
         result_data = result.model_dump()
-        result_data["timestamp"] = (result.timestamp or datetime.utcnow()).isoformat()
+        result_data["timestamp"] = (result.timestamp or datetime.now(timezone.utc)).isoformat()
         self._result_store[result_id] = result_data
 
         # Invalidation du cache
@@ -745,15 +745,15 @@ class ProjectState:
         Returns:
             dict: Artefact sauvegarde
         """
-        artifact_id = f"art_{datetime.utcnow().timestamp()}"
+        artifact_id = f"art_{datetime.now(timezone.utc).timestamp()}"
         artifact_data = {
             "id": artifact_id,
             "type": artifact_type,
-            "name": name or f"{artifact_type}_{datetime.utcnow().timestamp()}",
+            "name": name or f"{artifact_type}_{datetime.now(timezone.utc).timestamp()}",
             "content": content,
             "metadata": metadata or {},
             "task_id": task_id,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.now(timezone.utc).isoformat()
         }
         self._artifact_store[artifact_id] = artifact_data
 

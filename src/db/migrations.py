@@ -14,7 +14,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 
 # ==============================================================================
@@ -185,12 +185,13 @@ async def set_current_version(version: str, description: str = "", applied_by: s
             
             # Insérer l'historique
             await conn.execute(text(f"""
-                INSERT INTO {MIGRATION_HISTORY_TABLE} (version, description, applied_by)
-                VALUES (:version, :description, :applied_by)
+                INSERT INTO {MIGRATION_HISTORY_TABLE} (version, description, applied_by, applied_at)
+                VALUES (:version, :description, :applied_by, :applied_at)
             """), {
                 "version": version,
                 "description": description,
-                "applied_by": applied_by
+                "applied_by": applied_by,
+                "applied_at": datetime.now(timezone.utc)
             })
             
             # Mettre à jour la table alembic_version si elle existe (en nettoyant les anciennes entrées)

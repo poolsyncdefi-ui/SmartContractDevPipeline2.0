@@ -378,9 +378,13 @@ class BaseBestPractice(ABC):
     def _check_pattern(self, content: str, pattern: str) -> List[Tuple[int, str]]:
         """Vérifie un pattern dans le contenu."""
         matches = []
-        for match in re.finditer(pattern, content, re.MULTILINE):
-            line_number = content[:match.start()].count('\n') + 1
-            matches.append((line_number, match.group()))
+        try:
+            compiled = re.compile(pattern, re.MULTILINE)
+            for match in compiled.finditer(content):
+                line_number = content[:match.start()].count('\n') + 1
+                matches.append((line_number, match.group()))
+        except re.error as e:
+            logger.warning(f"Invalid regex pattern '{pattern}': {str(e)}")
         return matches
     
     def _apply_auto_fix(self, content: str, violations: List[Dict]) -> str:
@@ -396,6 +400,10 @@ class BaseBestPractice(ABC):
             if rule and rule.fix_suggestion:
                 if rule_id == "BP001":
                     fixed_content = re.sub(r"\s+$", "", fixed_content, flags=re.MULTILINE)
+                elif rule_id == "JS004":
+                    fixed_content = re.sub(r"(?<![=!])=(?!=)", "===", fixed_content)
+                elif rule_id == "JS001":
+                    fixed_content = re.sub(r"\bvar\s+", "const ", fixed_content)
         
         return fixed_content
     
@@ -507,6 +515,26 @@ class SolidityBestPractice(BaseBestPractice):
                 pattern=r"function\s+\w+\s*\([^)]*\)\s+(?:public|internal|external)\s+{",
                 message="Using function as constructor (pre-0.4.22 style)",
                 fix_suggestion="Use 'constructor()' instead"
+            ),
+            ValidationRule(
+                rule_id="SOL006",
+                name="No SafeMath for Solidity 0.8+",
+                description="SafeMath is not needed in Solidity 0.8+",
+                category=ValidationCategory.PERFORMANCE,
+                severity=ValidationSeverity.LOW,
+                pattern=r"import\s+.*SafeMath",
+                message="SafeMath is deprecated in Solidity 0.8+",
+                fix_suggestion="Remove SafeMath import, use built-in overflow checks"
+            ),
+            ValidationRule(
+                rule_id="SOL007",
+                name="Explicit data location",
+                description="Data location must be specified for array/struct",
+                category=ValidationCategory.STYLE,
+                severity=ValidationSeverity.MEDIUM,
+                pattern=r"(?:uint\[]|string\[]|struct\s+\w+\s+)\s+\w+",
+                message="Data location not specified for reference type",
+                fix_suggestion="Add 'memory' or 'storage' data location"
             )
         ]
         
@@ -551,6 +579,11 @@ class JavaScriptBestPractice(BaseBestPractice):
                         else:
                             result.add_warning(rule, context)
         
+        if self.auto_fix and result.violations:
+            code_fixed = self._apply_auto_fix(code, result.violations)
+            result.details["fixed_code"] = code_fixed
+            result.details["fix_applied"] = True
+        
         return result.to_dict()
     
     def _load_js_rules(self) -> None:
@@ -592,7 +625,7 @@ class JavaScriptBestPractice(BaseBestPractice):
                 description="Use strict equality (===) instead of loose (==)",
                 category=ValidationCategory.STYLE,
                 severity=ValidationSeverity.MEDIUM,
-                pattern=r"==(?!=)",
+                pattern=r"(?<![=!])=(?!=)",
                 message="Use strict equality (===) instead of loose equality (==)",
                 fix_suggestion="Replace '==' with '==='"
             ),
@@ -605,12 +638,35 @@ class JavaScriptBestPractice(BaseBestPractice):
                 pattern=r"console\.log\s*\(",
                 message="console.log should not be used in production code",
                 fix_suggestion="Remove or replace with proper logging"
+            ),
+            ValidationRule(
+                rule_id="JS006",
+                name="No unused variables",
+                description="Variables should not be declared but unused",
+                category=ValidationCategory.MAINTAINABILITY,
+                severity=ValidationSeverity.MEDIUM,
+                pattern=r"(?:const|let)\s+(\w+)\s*=\s*[^;]+;\s*(?!\1\b)",
+                message="Variable may be unused",
+                fix_suggestion="Remove or use the variable"
+            ),
+            ValidationRule(
+                rule_id="JS007",
+                name="Use optional chaining",
+                description="Prefer optional chaining for nested object access",
+                category=ValidationCategory.PERFORMANCE,
+                severity=ValidationSeverity.LOW,
+                pattern=r"\&\&\\s*[^.]+\\.\\w+\\s*\\?",
+                message="Consider using optional chaining (?.) instead of &&",
+                fix_suggestion="Replace with '?. operator'"
             )
         ]
         
         for rule in js_rules:
             if self.is_category_enabled(rule.category):
                 self.add_rule(rule)
+    
+    def __repr__(self) -> str:
+        return f"<JavaScriptBestPractice(practice_id='{self.config.practice_id}')>"
 
 
 class CompositeBestPractice(BaseBestPractice):
@@ -645,8 +701,9 @@ class CompositeBestPractice(BaseBestPractice):
                 except ValueError:
                     pass
                 
-                if result_dict.get("score", 100.0) < combined_result.score:
-                    combined_result.score = result_dict.get("score", 100.0)
+                score = result_dict.get("score", 100.0)
+                if score < combined_result.score:
+                    combined_result.score = score
                 
                 details = result_dict.get("details", {})
                 if details:
@@ -655,6 +712,7 @@ class CompositeBestPractice(BaseBestPractice):
             except Exception as e:
                 logger.error(f"Validator {validator.config.practice_id} failed: {str(e)}")
                 combined_result.details[f"error_{validator.config.practice_id}"] = str(e)
+                combined_result.passed = False
         
         return combined_result.to_dict()
     
@@ -668,3 +726,55 @@ class CompositeBestPractice(BaseBestPractice):
         initial_count = len(self.validators)
         self.validators = [v for v in self.validators if v.config.practice_id != practice_id]
         return len(self.validators) < initial_count
+    
+    async def validate_with_context(
+        self,
+        output: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> ValidationResult:
+        """Valide avec contexte en combinant tous les validateurs."""
+        combined_result = ValidationResult()
+        
+        for validator in self.validators:
+            try:
+                result = await validator.validate_with_context(output, context)
+                
+                combined_result.violations.extend(result.violations)
+                combined_result.warnings.extend(result.warnings)
+                combined_result.suggestions.extend(result.suggestions)
+                
+                if not result.passed:
+                    combined_result.passed = False
+                
+                if ValidationResult._get_severity_order(result.severity) < ValidationResult._get_severity_order(combined_result.severity):
+                    combined_result.severity = result.severity
+                
+                if result.score < combined_result.score:
+                    combined_result.score = result.score
+                
+                if result.details:
+                    combined_result.details[f"validator_{validator.config.practice_id}"] = result.details
+                
+            except Exception as e:
+                logger.error(f"Validator {validator.config.practice_id} failed: {str(e)}")
+                combined_result.details[f"error_{validator.config.practice_id}"] = str(e)
+                combined_result.passed = False
+        
+        return combined_result
+    
+    def __repr__(self) -> str:
+        return f"<CompositeBestPractice(validators={len(self.validators)})>"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convertit le validateur composite en dictionnaire."""
+        return {
+            "practice_id": self.config.practice_id,
+            "title": self.config.title,
+            "level": self.level.value,
+            "strict_mode": self.strict_mode,
+            "auto_fix": self.auto_fix,
+            "enabled_categories": [c.value for c in self.enabled_categories],
+            "rules_count": len(self.rules),
+            "validators_count": len(self.validators),
+            "validators": [v.to_dict() for v in self.validators]
+        }

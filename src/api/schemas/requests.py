@@ -2,14 +2,14 @@
 # Smart Contract Dev Pipeline 2.0 - API Request Schemas
 # ==============================================================================
 # Fichier: src/api/schemas/requests.py
-# Description: Schémas Pydantic pour les requêtes API[cite: 15].
-#              Validation automatique des données entrantes[cite: 15].
-#              Support de la pagination, du filtrage, du tri et des relations[cite: 15].
+# Description: Schémas Pydantic pour les requêtes API.
+#              Validation automatique des données entrantes.
+#              Support de la pagination, du filtrage, du tri et des relations.
 # ==============================================================================
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Dict, Any, Union, Literal
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from enum import Enum
 import re
 import yaml
@@ -20,13 +20,13 @@ import yaml
 # ==============================================================================
 
 class SortOrder(str, Enum):
-    """Ordre de tri[cite: 15]."""
+    """Ordre de tri."""
     ASC = "asc"
     DESC = "desc"
 
 
 class SortField(str, Enum):
-    """Champs de tri disponibles[cite: 15]."""
+    """Champs de tri disponibles."""
     CREATED_AT = "created_at"
     UPDATED_AT = "updated_at"
     NAME = "name"
@@ -41,21 +41,21 @@ class SortField(str, Enum):
 # ==============================================================================
 
 class PaginationParams(BaseModel):
-    """Paramètres de pagination[cite: 15]."""
+    """Paramètres de pagination."""
     page: int = Field(default=1, ge=1, description="Numéro de page")
     page_size: int = Field(default=20, ge=1, le=100, description="Taille de page")
     
     def get_offset(self) -> int:
-        """Retourne l'offset pour la requête SQL[cite: 15]."""
+        """Retourne l'offset pour la requête SQL."""
         return (self.page - 1) * self.page_size
     
     def get_limit(self) -> int:
-        """Retourne la limite pour la requête SQL[cite: 15]."""
+        """Retourne la limite pour la requête SQL."""
         return self.page_size
 
 
 class FilterParams(BaseModel):
-    """Paramètres de filtrage[cite: 15]."""
+    """Paramètres de filtrage."""
     search: Optional[str] = Field(None, description="Recherche textuelle")
     status: Optional[List[str]] = Field(None, description="Filtre par statut")
     from_date: Optional[datetime] = Field(None, description="Date de début")
@@ -65,26 +65,26 @@ class FilterParams(BaseModel):
     @field_validator('search')
     @classmethod
     def validate_search(cls, v: Optional[str]) -> Optional[str]:
-        """Valide et nettoie la recherche[cite: 15]."""
+        """Valide et nettoie la recherche."""
         if v is not None:
             return v.strip()[:200]
         return v
 
 
 class SortParams(BaseModel):
-    """Paramètres de tri[cite: 15]."""
+    """Paramètres de tri."""
     field: SortField = Field(default=SortField.CREATED_AT, description="Champ de tri")
     order: SortOrder = Field(default=SortOrder.DESC, description="Ordre de tri")
 
 
 class DateRangeParams(BaseModel):
-    """Paramètres de plage de dates[cite: 15]."""
+    """Paramètres de plage de dates."""
     start_date: Optional[datetime] = Field(None, description="Date de début")
     end_date: Optional[datetime] = Field(None, description="Date de fin")
     
     @model_validator(mode='after')
     def validate_date_range(self) -> 'DateRangeParams':
-        """Valide que la date de début est avant la date de fin (corrigé avec mode='after')[cite: 15]."""
+        """Valide que la date de début est avant la date de fin."""
         if self.start_date and self.end_date and self.start_date > self.end_date:
             raise ValueError("start_date must be before end_date")
         return self
@@ -95,7 +95,7 @@ class DateRangeParams(BaseModel):
 # ==============================================================================
 
 class CreateProjectRequest(BaseModel):
-    """Requête de création de projet[cite: 15]."""
+    """Requête de création de projet."""
     name: str = Field(..., min_length=1, max_length=100, description="Nom du projet")
     description: str = Field(default="", max_length=1000, description="Description du projet")
     spec_yaml: str = Field(..., description="Spécification YAML du projet")
@@ -108,7 +108,7 @@ class CreateProjectRequest(BaseModel):
     @field_validator('spec_yaml')
     @classmethod
     def validate_spec_yaml(cls, v: str) -> str:
-        """Valide que la spécification YAML est valide[cite: 15]."""
+        """Valide que la spécification YAML est valide."""
         if not v or len(v.strip()) < 1:
             raise ValueError("Specification cannot be empty")
         try:
@@ -120,7 +120,7 @@ class CreateProjectRequest(BaseModel):
     @field_validator('priority')
     @classmethod
     def validate_priority(cls, v: str) -> str:
-        """Valide la priorité[cite: 15]."""
+        """Valide la priorité."""
         valid = ["low", "medium", "high", "critical"]
         if v not in valid:
             raise ValueError(f"Invalid priority. Must be one of: {valid}")
@@ -129,7 +129,7 @@ class CreateProjectRequest(BaseModel):
     @field_validator('category')
     @classmethod
     def validate_category(cls, v: str) -> str:
-        """Valide la catégorie[cite: 15]."""
+        """Valide la catégorie."""
         valid = ["defi", "nft", "gaming", "dao", "infrastructure", "tooling", "bridge", "other"]
         if v not in valid:
             raise ValueError(f"Invalid category. Must be one of: {valid}")
@@ -138,7 +138,7 @@ class CreateProjectRequest(BaseModel):
     @field_validator('chain')
     @classmethod
     def validate_chain(cls, v: str) -> str:
-        """Valide la blockchain[cite: 15]."""
+        """Valide la blockchain."""
         valid = ["ethereum", "polygon", "arbitrum", "optimism", "base", "solana", "bsc", "avalanche", "fantom"]
         if v not in valid:
             raise ValueError(f"Invalid chain. Must be one of: {valid}")
@@ -147,7 +147,7 @@ class CreateProjectRequest(BaseModel):
     @field_validator('tags')
     @classmethod
     def validate_tags(cls, v: Optional[List[str]]) -> Optional[List[str]]:
-        """Valide les tags[cite: 15]."""
+        """Valide les tags."""
         if v:
             for tag in v:
                 if not re.match(r'^[a-zA-Z0-9_\-]+$', tag):
@@ -156,7 +156,7 @@ class CreateProjectRequest(BaseModel):
 
 
 class UpdateProjectRequest(BaseModel):
-    """Requête de mise à jour de projet[cite: 15]."""
+    """Requête de mise à jour de projet."""
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="Nom du projet")
     description: Optional[str] = Field(None, max_length=1000, description="Description du projet")
     status: Optional[str] = Field(None, description="Nouveau statut")
@@ -170,7 +170,7 @@ class UpdateProjectRequest(BaseModel):
     @field_validator('status')
     @classmethod
     def validate_status(cls, v: Optional[str]) -> Optional[str]:
-        """Valide le statut[cite: 15]."""
+        """Valide le statut."""
         if v is not None:
             valid = ["CREATED", "IN_PROGRESS", "COMPLETED", "FAILED", "PAUSED", "ARCHIVED", "CANCELLED", "ON_HOLD"]
             if v not in valid:
@@ -180,7 +180,7 @@ class UpdateProjectRequest(BaseModel):
     @field_validator('priority')
     @classmethod
     def validate_priority(cls, v: Optional[str]) -> Optional[str]:
-        """Valide la priorité[cite: 15]."""
+        """Valide la priorité."""
         if v is not None:
             valid = ["low", "medium", "high", "critical"]
             if v not in valid:
@@ -189,7 +189,7 @@ class UpdateProjectRequest(BaseModel):
 
 
 class ListProjectsRequest(PaginationParams, FilterParams, SortParams):
-    """Requête de liste de projets[cite: 15]."""
+    """Requête de liste de projets."""
     priority: Optional[str] = Field(None, description="Filtrer par priorité")
     category: Optional[str] = Field(None, description="Filtrer par catégorie")
     chain: Optional[str] = Field(None, description="Filtrer par blockchain")
@@ -202,7 +202,7 @@ class ListProjectsRequest(PaginationParams, FilterParams, SortParams):
 # ==============================================================================
 
 class CreateTaskRequest(BaseModel):
-    """Requête de création de tâche[cite: 15]."""
+    """Requête de création de tâche."""
     name: str = Field(..., min_length=1, max_length=100, description="Nom de la tâche")
     description: str = Field(default="", max_length=1000, description="Description de la tâche")
     skill_id: str = Field(..., description="ID de la compétence")
@@ -218,7 +218,7 @@ class CreateTaskRequest(BaseModel):
     @field_validator('priority')
     @classmethod
     def validate_priority(cls, v: str) -> str:
-        """Valide la priorité[cite: 15]."""
+        """Valide la priorité."""
         valid = ["low", "normal", "high", "critical"]
         if v not in valid:
             raise ValueError(f"Invalid priority. Must be one of: {valid}")
@@ -227,7 +227,7 @@ class CreateTaskRequest(BaseModel):
     @field_validator('task_type')
     @classmethod
     def validate_task_type(cls, v: str) -> str:
-        """Valide le type de tâche[cite: 15]."""
+        """Valide le type de tâche."""
         valid = ["contract_generation", "test_generation", "security_audit", "formal_verification", 
                  "deployment", "documentation", "review", "analysis", "optimization", "custom"]
         if v not in valid:
@@ -237,7 +237,7 @@ class CreateTaskRequest(BaseModel):
     @field_validator('depends_on')
     @classmethod
     def validate_depends_on(cls, v: Optional[List[str]]) -> Optional[List[str]]:
-        """Valide les dépendances[cite: 15]."""
+        """Valide les dépendances."""
         if v:
             if len(v) != len(set(v)):
                 raise ValueError("Dependencies contain duplicates")
@@ -245,7 +245,7 @@ class CreateTaskRequest(BaseModel):
 
 
 class UpdateTaskRequest(BaseModel):
-    """Requête de mise à jour de tâche[cite: 15]."""
+    """Requête de mise à jour de tâche."""
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="Nom de la tâche")
     description: Optional[str] = Field(None, max_length=1000, description="Description de la tâche")
     state: Optional[str] = Field(None, description="Nouvel état")
@@ -257,7 +257,7 @@ class UpdateTaskRequest(BaseModel):
     @field_validator('state')
     @classmethod
     def validate_state(cls, v: Optional[str]) -> Optional[str]:
-        """Valide l'état[cite: 15]."""
+        """Valide l'état."""
         if v is not None:
             valid = ["PENDING", "READY", "RUNNING", "AUTO_TESTING", "WAITING_HUMAN_VALIDATION", 
                      "SUCCESS", "FAILED", "CIRCUIT_BROKEN", "CANCELLED", "BLOCKED", "SKIPPED"]
@@ -267,14 +267,14 @@ class UpdateTaskRequest(BaseModel):
 
 
 class HumanValidationRequest(BaseModel):
-    """Requête de validation humaine[cite: 15]."""
+    """Requête de validation humaine."""
     approved: bool = Field(..., description="Approbation ou rejet")
     comments: Optional[str] = Field(None, max_length=2000, description="Commentaires")
     suggested_changes: Optional[str] = Field(None, max_length=5000, description="Changements suggérés")
 
 
 class ListTasksRequest(PaginationParams, FilterParams, SortParams):
-    """Requête de liste de tâches[cite: 15]."""
+    """Requête de liste de tâches."""
     project_id: Optional[str] = Field(None, description="Filtrer par projet")
     skill_id: Optional[str] = Field(None, description="Filtrer par compétence")
     priority: Optional[str] = Field(None, description="Filtrer par priorité")
@@ -284,13 +284,13 @@ class ListTasksRequest(PaginationParams, FilterParams, SortParams):
 
 
 class RetryTaskRequest(BaseModel):
-    """Requête de réessai de tâche[cite: 15]."""
+    """Requête de réessai de tâche."""
     force: bool = Field(default=False, description="Forcer le réessai même si max_retries atteint")
     reset_retry_count: bool = Field(default=False, description="Réinitialiser le compteur de tentatives")
 
 
 class BatchTaskRequest(BaseModel):
-    """Requête de création en masse de tâches[cite: 15]."""
+    """Requête de création en masse de tâches."""
     tasks: List[CreateTaskRequest] = Field(..., min_length=1, max_length=50, description="Liste des tâches")
     project_id: str = Field(..., description="ID du projet")
 
@@ -300,7 +300,7 @@ class BatchTaskRequest(BaseModel):
 # ==============================================================================
 
 class CreateSprintRequest(BaseModel):
-    """Requête de création de sprint[cite: 15]."""
+    """Requête de création de sprint."""
     name: str = Field(..., min_length=1, max_length=100, description="Nom du sprint")
     description: str = Field(default="", max_length=1000, description="Description du sprint")
     tasks: List[CreateTaskRequest] = Field(default_factory=list, description="Tâches du sprint")
@@ -311,14 +311,14 @@ class CreateSprintRequest(BaseModel):
     
     @model_validator(mode='after')
     def validate_dates(self) -> 'CreateSprintRequest':
-        """Valide que les dates sont cohérentes (corrigé avec mode='after')[cite: 15]."""
+        """Valide que les dates sont cohérentes."""
         if self.start_date and self.end_date and self.start_date > self.end_date:
             raise ValueError("start_date must be before end_date")
         return self
 
 
 class UpdateSprintRequest(BaseModel):
-    """Requête de mise à jour de sprint[cite: 15]."""
+    """Requête de mise à jour de sprint."""
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="Nom du sprint")
     description: Optional[str] = Field(None, max_length=1000, description="Description du sprint")
     status: Optional[str] = Field(None, description="Nouveau statut")
@@ -330,7 +330,7 @@ class UpdateSprintRequest(BaseModel):
     @field_validator('status')
     @classmethod
     def validate_status(cls, v: Optional[str]) -> Optional[str]:
-        """Valide le statut[cite: 15]."""
+        """Valide le statut."""
         if v is not None:
             valid = ["planned", "active", "completed", "cancelled", "blocked"]
             if v not in valid:
@@ -339,7 +339,7 @@ class UpdateSprintRequest(BaseModel):
 
 
 class ListSprintsRequest(PaginationParams, FilterParams, SortParams):
-    """Requête de liste de sprints[cite: 15]."""
+    """Requête de liste de sprints."""
     project_id: Optional[str] = Field(None, description="Filtrer par projet")
 
 
@@ -348,7 +348,7 @@ class ListSprintsRequest(PaginationParams, FilterParams, SortParams):
 # ==============================================================================
 
 class CreateArtifactRequest(BaseModel):
-    """Requête de création d'artefact[cite: 15]."""
+    """Requête de création d'artefact."""
     type: str = Field(..., description="Type d'artefact")
     name: str = Field(..., min_length=1, max_length=100, description="Nom de l'artefact")
     content: str = Field(..., description="Contenu de l'artefact")
@@ -360,7 +360,7 @@ class CreateArtifactRequest(BaseModel):
     @field_validator('type')
     @classmethod
     def validate_type(cls, v: str) -> str:
-        """Valide le type d'artefact[cite: 15]."""
+        """Valide le type d'artefact."""
         valid = ["solidity", "test", "doc", "config", "script", "abi", "bytecode", "report", "other"]
         if v not in valid:
             raise ValueError(f"Invalid artifact type. Must be one of: {valid}")
@@ -368,7 +368,7 @@ class CreateArtifactRequest(BaseModel):
 
 
 class UpdateArtifactRequest(BaseModel):
-    """Requête de mise à jour d'artefact[cite: 15]."""
+    """Requête de mise à jour d'artefact."""
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="Nom de l'artefact")
     content: Optional[str] = Field(None, description="Contenu de l'artefact")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Métadonnées")
@@ -377,7 +377,7 @@ class UpdateArtifactRequest(BaseModel):
 
 
 class ListArtifactsRequest(PaginationParams, FilterParams, SortParams):
-    """Requête de liste d'artefacts[cite: 15]."""
+    """Requête de liste d'artefacts."""
     type: Optional[str] = Field(None, description="Filtrer par type")
     task_id: Optional[str] = Field(None, description="Filtrer par tâche")
     project_id: Optional[str] = Field(None, description="Filtrer par projet")
@@ -388,7 +388,7 @@ class ListArtifactsRequest(PaginationParams, FilterParams, SortParams):
 # ==============================================================================
 
 class ExecuteWorkflowRequest(BaseModel):
-    """Requête d'exécution de workflow[cite: 15]."""
+    """Requête d'exécution de workflow."""
     project_id: str = Field(..., description="ID du projet")
     sprint_id: Optional[str] = Field(None, description="ID du sprint (optionnel)")
     tasks: Optional[List[str]] = Field(None, description="IDs des tâches à exécuter (optionnel)")
@@ -399,13 +399,13 @@ class ExecuteWorkflowRequest(BaseModel):
 
 
 class PauseWorkflowRequest(BaseModel):
-    """Requête de pause de workflow[cite: 15]."""
+    """Requête de pause de workflow."""
     workflow_id: str = Field(..., description="ID du workflow")
     reason: Optional[str] = Field(None, description="Raison de la pause")
 
 
 class ResumeWorkflowRequest(BaseModel):
-    """Requête de reprise de workflow[cite: 15]."""
+    """Requête de reprise de workflow."""
     workflow_id: str = Field(..., description="ID du workflow")
 
 
@@ -414,7 +414,7 @@ class ResumeWorkflowRequest(BaseModel):
 # ==============================================================================
 
 class SecurityAuditRequest(BaseModel):
-    """Requête d'audit de sécurité[cite: 15]."""
+    """Requête d'audit de sécurité."""
     code: str = Field(..., description="Code à auditer")
     contract_name: str = Field(default="unknown", description="Nom du contrat")
     level: str = Field(default="full", description="Niveau d'audit")
@@ -424,7 +424,7 @@ class SecurityAuditRequest(BaseModel):
     @field_validator('level')
     @classmethod
     def validate_level(cls, v: str) -> str:
-        """Valide le niveau d'audit[cite: 15]."""
+        """Valide le niveau d'audit."""
         valid = ["level_1", "level_2", "level_3", "level_4", "full"]
         if v not in valid:
             raise ValueError(f"Invalid level. Must be one of: {valid}")
@@ -432,7 +432,7 @@ class SecurityAuditRequest(BaseModel):
 
 
 class ThreatSimulationRequest(BaseModel):
-    """Requête de simulation de menace[cite: 15]."""
+    """Requête de simulation de menace."""
     target_address: str = Field(..., description="Adresse du contrat cible")
     attack_type: str = Field(default="full", description="Type d'attaque")
     amount: Optional[int] = Field(None, description="Montant pour l'attaque")
@@ -442,7 +442,7 @@ class ThreatSimulationRequest(BaseModel):
     @field_validator('attack_type')
     @classmethod
     def validate_attack_type(cls, v: str) -> str:
-        """Valide le type d'attaque[cite: 15]."""
+        """Valide le type d'attaque."""
         valid = ["flash_loan", "oracle_manipulation", "mev", "reentrancy", "full"]
         if v not in valid:
             raise ValueError(f"Invalid attack type. Must be one of: {valid}")
@@ -450,7 +450,7 @@ class ThreatSimulationRequest(BaseModel):
 
 
 class FormalVerificationRequest(BaseModel):
-    """Requête de vérification formelle[cite: 15]."""
+    """Requête de vérification formelle."""
     contract_path: str = Field(..., description="Chemin du contrat")
     properties: Optional[List[str]] = Field(None, description="Propriétés à vérifier")
     timeout: Optional[int] = Field(default=300, ge=60, description="Timeout en secondes")
@@ -462,7 +462,7 @@ class FormalVerificationRequest(BaseModel):
 # ==============================================================================
 
 class SubmitFeedbackRequest(BaseModel):
-    """Requête de soumission de feedback[cite: 15]."""
+    """Requête de soumission de feedback."""
     task_id: str = Field(..., description="ID de la tâche")
     approved: bool = Field(..., description="Approbation ou rejet")
     comments: str = Field(default="", max_length=2000, description="Commentaires")
@@ -472,7 +472,7 @@ class SubmitFeedbackRequest(BaseModel):
 
 
 class ListFeedbackRequest(PaginationParams, FilterParams, SortParams):
-    """Requête de liste de feedback[cite: 15]."""
+    """Requête de liste de feedback."""
     task_id: Optional[str] = Field(None, description="Filtrer par tâche")
     user_id: Optional[str] = Field(None, description="Filtrer par utilisateur")
     approved: Optional[bool] = Field(None, description="Filtrer par approbation")
@@ -483,7 +483,7 @@ class ListFeedbackRequest(PaginationParams, FilterParams, SortParams):
 # ==============================================================================
 
 class CreateNotificationRequest(BaseModel):
-    """Requête de création de notification[cite: 15]."""
+    """Requête de création de notification."""
     type: str = Field(..., description="Type de notification")
     title: str = Field(..., min_length=1, max_length=200, description="Titre")
     message: str = Field(..., min_length=1, max_length=5000, description="Message")
@@ -493,7 +493,7 @@ class CreateNotificationRequest(BaseModel):
     @field_validator('type')
     @classmethod
     def validate_type(cls, v: str) -> str:
-        """Valide le type de notification[cite: 15]."""
+        """Valide le type de notification."""
         valid = ["info", "success", "warning", "error", "critical"]
         if v not in valid:
             raise ValueError(f"Invalid notification type. Must be one of: {valid}")
@@ -501,12 +501,12 @@ class CreateNotificationRequest(BaseModel):
 
 
 class UpdateNotificationRequest(BaseModel):
-    """Requête de mise à jour de notification[cite: 15]."""
+    """Requête de mise à jour de notification."""
     read: Optional[bool] = Field(None, description="Marquer comme lue")
 
 
 class ListNotificationsRequest(PaginationParams, FilterParams, SortParams):
-    """Requête de liste de notifications[cite: 15]."""
+    """Requête de liste de notifications."""
     user_id: Optional[str] = Field(None, description="Filtrer par utilisateur")
     type: Optional[str] = Field(None, description="Filtrer par type")
     read: Optional[bool] = Field(None, description="Filtrer par lecture")
@@ -517,7 +517,7 @@ class ListNotificationsRequest(PaginationParams, FilterParams, SortParams):
 # ==============================================================================
 
 class CreateWebhookRequest(BaseModel):
-    """Requête de création de webhook[cite: 15]."""
+    """Requête de création de webhook."""
     url: str = Field(..., description="URL du webhook")
     events: List[str] = Field(..., min_length=1, description="Événements déclencheurs")
     headers: Optional[Dict[str, str]] = Field(default_factory=dict, description="Headers HTTP")
@@ -528,7 +528,7 @@ class CreateWebhookRequest(BaseModel):
     @field_validator('url')
     @classmethod
     def validate_url(cls, v: str) -> str:
-        """Valide l'URL[cite: 15]."""
+        """Valide l'URL."""
         if not re.match(r'^https?://', v):
             raise ValueError("URL must start with http:// or https://")
         return v
@@ -536,7 +536,7 @@ class CreateWebhookRequest(BaseModel):
     @field_validator('events')
     @classmethod
     def validate_events(cls, v: List[str]) -> List[str]:
-        """Valide les événements (synchronisé avec les événements système globaux)[cite: 15]."""
+        """Valide les événements (synchronisé avec les événements système globaux)."""
         valid = [
             "task_started", "task_completed", "task_failed", 
             "sprint_started", "sprint_completed", "sprint_failed", 
@@ -553,7 +553,7 @@ class CreateWebhookRequest(BaseModel):
 
 
 class UpdateWebhookRequest(BaseModel):
-    """Requête de mise à jour de webhook[cite: 15]."""
+    """Requête de mise à jour de webhook."""
     url: Optional[str] = Field(None, description="URL du webhook")
     events: Optional[List[str]] = Field(None, description="Événements déclencheurs")
     headers: Optional[Dict[str, str]] = Field(None, description="Headers HTTP")
@@ -563,7 +563,7 @@ class UpdateWebhookRequest(BaseModel):
 
 
 class ListWebhooksRequest(PaginationParams, FilterParams, SortParams):
-    """Requête de liste de webhooks[cite: 15]."""
+    """Requête de liste de webhooks."""
     enabled: Optional[bool] = Field(None, description="Filtrer par activation")
 
 
@@ -572,7 +572,7 @@ class ListWebhooksRequest(PaginationParams, FilterParams, SortParams):
 # ==============================================================================
 
 class MetricsRequest(DateRangeParams):
-    """Requête de métriques[cite: 15]."""
+    """Requête de métriques."""
     metric_type: str = Field(default="all", description="Type de métrique")
     aggregation: str = Field(default="sum", description="Agrégation (sum, avg, min, max)")
     group_by: Optional[str] = Field(None, description="Groupement (day, hour, project, task)")
@@ -580,7 +580,7 @@ class MetricsRequest(DateRangeParams):
     @field_validator('metric_type')
     @classmethod
     def validate_metric_type(cls, v: str) -> str:
-        """Valide le type de métrique[cite: 15]."""
+        """Valide le type de métrique."""
         valid = ["all", "tasks", "projects", "sprints", "executions", "errors", "duration"]
         if v not in valid:
             raise ValueError(f"Invalid metric type. Must be one of: {valid}")
@@ -592,14 +592,14 @@ class MetricsRequest(DateRangeParams):
 # ==============================================================================
 
 class ListEventsRequest(PaginationParams, FilterParams, SortParams):
-    """Requête de liste d'événements[cite: 15]."""
+    """Requête de liste d'événements."""
     event_type: Optional[str] = Field(None, description="Filtrer par type d'événement")
     source: Optional[str] = Field(None, description="Filtrer par source")
     
     @field_validator('event_type')
     @classmethod
     def validate_event_type(cls, v: Optional[str]) -> Optional[str]:
-        """Valide le type d'événement[cite: 15]."""
+        """Valide le type d'événement."""
         if v is not None:
             valid = ["task_started", "task_completed", "task_failed", "sprint_started", 
                      "sprint_completed", "sprint_failed", "skill_registered", "skill_executed",

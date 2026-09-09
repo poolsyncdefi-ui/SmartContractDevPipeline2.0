@@ -748,7 +748,7 @@ class SecurityShield:
         """
         Vide le cache.
         """
-      cache_size = len(self._cache)
+        cache_size = len(self._cache)
         self._cache.clear()
         logger.info(f"Cache cleared ({cache_size} entries)")
 

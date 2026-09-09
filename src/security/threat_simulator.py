@@ -20,7 +20,7 @@ Le ThreatSimulator est un composant du bouclier de securite multi-couches,
 operant au niveau 3 (simulation d'attaques).
 """
 from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import json
 import asyncio
@@ -139,7 +139,7 @@ class ThreatReport:
         passed (bool): Le contrat a-t-il passe le test ?
         recommendations (List[str]): Recommandations
     """
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     target_address: str = ""
     chain_id: int = 0
     block_number: int = 0

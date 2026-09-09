@@ -334,13 +334,18 @@ if not hasattr(TaskModel, 'artifacts'):
         lazy="selectin"
     )
 
-if not hasattr(TaskModel, 'logs'):
-    TaskModel.logs = relationship(
+if not hasattr(TaskModel, 'execution_logs'):
+    TaskModel.execution_logs = relationship(
         "ExecutionLogModel",
-        backref="task",
+        back_populates="task",
         cascade="all, delete-orphan",
         lazy="selectin"
     )
+    
+    # Ajouter la relation inverse (backref) pour ExecutionLogModel
+    if not hasattr(ExecutionLogModel, 'task'):
+        # La relation est déjà définie dans execution_log.py avec task = relationship(...)
+        pass
 
 
 # =============================================================================

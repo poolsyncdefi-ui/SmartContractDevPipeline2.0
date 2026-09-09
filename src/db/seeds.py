@@ -348,3 +348,18 @@ async def seed_all() -> None:
     await seed_skills()
     await seed_sprint_and_tasks()
     logger.info("✅ Seeding global terminé avec succès.")
+
+
+# ==============================================================================
+# POINT D'ENTRÉE POUR L'EXÉCUTION DIRECTE
+# ==============================================================================
+
+if __name__ == "__main__":
+    async def main():
+        print("=" * 60)
+        print("Smart Contract Dev Pipeline 2.0 - Database Seeds")
+        print("=" * 60)
+        await seed_all()
+        print("\n✅ Seeding complet.")
+
+    asyncio.run(main())

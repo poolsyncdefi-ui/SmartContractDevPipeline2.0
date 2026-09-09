@@ -20,7 +20,7 @@ Le Circuit Breaker est utilise par le WorkflowEngine et les agents
 pour prevenir les boucles infinies de correction automatique.
 """
 from typing import Dict, Optional, List, Any, Set, Callable, Awaitable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import json
 import asyncio
@@ -194,7 +194,7 @@ class CircuitBreaker:
 
             if state == CircuitBreakerState.OPEN:
                 # Verifier si le timeout d'ouverture est depasse
-                if last_change and (datetime.utcnow() - last_change).total_seconds() >= self.timeout:
+                if last_change and (datetime.now(timezone.utc) - last_change).total_seconds() >= self.timeout:
                     # Passage en semi-ouvert
                     self._set_state(task_id, CircuitBreakerState.HALF_OPEN)
                     self._half_open_retries[task_id] = 0
@@ -204,7 +204,7 @@ class CircuitBreaker:
 
             if state == CircuitBreakerState.HALF_OPEN:
                 # Verifier si le timeout du semi-ouvert est depasse
-                if last_change and (datetime.utcnow() - last_change).total_seconds() >= self.half_open_timeout:
+                if last_change and (datetime.now(timezone.utc) - last_change).total_seconds() >= self.half_open_timeout:
                     self._set_state(task_id, CircuitBreakerState.OPEN)
                     await self._emit_event(CircuitBreakerEvent.OPENED, task_id, {"reason": "half_open_timeout"})
                     return False
@@ -234,12 +234,12 @@ class CircuitBreaker:
         async with self._lock:
             current = self._failures.get(task_id, 0) + 1
             self._failures[task_id] = current
-            self._last_failure_time[task_id] = datetime.utcnow()
+            self._last_failure_time[task_id] = datetime.now(timezone.utc)
 
             # Mise a jour des statistiques
             stats = self._get_stats(task_id)
             stats.total_failures += 1
-            stats.last_failure = datetime.utcnow()
+            stats.last_failure = datetime.now(timezone.utc)
             stats.current_retries = current
 
             # Verifier si on doit ouvrir le circuit
@@ -265,7 +265,7 @@ class CircuitBreaker:
             # Mise a jour des statistiques
             stats = self._get_stats(task_id)
             stats.total_successes += 1
-            stats.last_success = datetime.utcnow()
+            stats.last_success = datetime.now(timezone.utc)
 
             if state == CircuitBreakerState.HALF_OPEN:
                 # Succes en semi-ouvert -> fermeture du circuit
@@ -412,7 +412,7 @@ class CircuitBreaker:
         """Definit l'etat d'une tache (interne)."""
         old_state = self._get_state(task_id)
         self._state[task_id] = state
-        self._last_state_change[task_id] = datetime.utcnow()
+        self._last_state_change[task_id] = datetime.now(timezone.utc)
 
         # Mise a jour des statistiques
         if state == CircuitBreakerState.OPEN:
@@ -494,7 +494,7 @@ class CircuitBreaker:
             "state": self._get_state(task_id).value,
             "failures": self._failures.get(task_id, 0),
             "max_retries": self.max_retries,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         if data:
             event_data.update(data)
@@ -523,7 +523,7 @@ class CircuitBreaker:
             int: Nombre de taches nettoyees
         """
         cleaned = 0
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         async with self._lock:
             for task_id in list(self._state.keys()):

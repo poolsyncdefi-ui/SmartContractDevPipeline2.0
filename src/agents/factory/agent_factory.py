@@ -21,7 +21,7 @@ Le processus de creation suit les etapes:
 5. Application des bonnes pratiques et validations
 """
 from typing import List, Type, Dict, Any, Optional, Set
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import asyncio
 from enum import Enum
@@ -91,7 +91,7 @@ class AgentCreationResult:
         error (Optional[str]): Message d'erreur si echec
     """
     agent: Optional[AbstractAgent] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     duration: float = 0.0
     skills_used: List[str] = field(default_factory=list)
     practices_applied: List[str] = field(default_factory=list)
@@ -198,7 +198,8 @@ class AgentFactory:
             for skill_id in default_skills:
                 if skill_id not in self._skill_configs:
                     # Creer une configuration par defaut si elle n'existe pas
-                    self._skill_configs[skill_id] = SkillConfig(
+                    from src.core.models import SkillConfig as SkillConfigModel
+                    self._skill_configs[skill_id] = SkillConfigModel(
                         skill_id=skill_id,
                         name=skill_id,
                         description=f"Default skill for {role_name}",
@@ -298,14 +299,16 @@ class AgentFactory:
             SkillNotFoundError: Si une competence n'existe pas
             PipelineError: Pour les autres erreurs de creation
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         context = context or AgentCreationContext()
         
         # Mise a jour des statistiques
         self._creation_stats["total_creations"] += 1
         
-        # Verification du cache (corrigé pour prendre en compte les pratiques par défaut)
-        cache_key = self._generate_cache_key(role_name, skill_ids, practice_ids)
+        # Verification du cache
+        practice_key = sorted(practice_ids) if practice_ids else []
+        cache_key = self._generate_cache_key(role_name, skill_ids, practice_key)
+        
         if use_cache and self.cache_enabled and cache_key in self._cache:
             self._creation_stats["cache_hits"] += 1
             logger.debug(f"Agent {agent_id} returned from cache")
@@ -344,7 +347,7 @@ class AgentFactory:
             if context.message_bus or self.message_bus:
                 self._notify_agent_creation(agent, context)
             
-            # 7. Mise en cache
+            # 7. Mise en cache (correction: on stocke d'abord l'agent, puis on l'ajoute au cache)
             if use_cache and self.cache_enabled:
                 self._cache[cache_key] = agent
                 self._cache[agent_id] = agent  # Index par ID aussi
@@ -355,7 +358,7 @@ class AgentFactory:
             for skill_id in skill_ids:
                 self._creation_stats["by_skill"][skill_id] = self._creation_stats["by_skill"].get(skill_id, 0) + 1
             
-            duration = (datetime.utcnow() - start_time).total_seconds()
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             logger.info(f"Agent {agent_id} created in {duration:.2f}s with {len(skills)} skills")
             
             return agent
@@ -456,7 +459,9 @@ class AgentFactory:
             AgentRole.ARCHITECT: ["project_analysis", "task_planning"],
             AgentRole.DEVELOPER: ["solidity_generation", "test_generation"],
             AgentRole.SECURITY: ["security_audit", "formal_verification"],
-            AgentRole.FEEDBACK: ["code_review", "optimization"]
+            AgentRole.FEEDBACK: ["code_review", "optimization"],
+            AgentRole.TESTER: ["test_generation", "test_execution"],
+            AgentRole.DEPLOYER: ["deployment_script", "verification"]
         }
         
         agents = {}
@@ -513,9 +518,9 @@ class AgentFactory:
         """
         agent = self._cache.get(agent_id)
         if agent:
-            # Supprimer l'entrée directe par ID
+            # Supprimer l'entree directe par ID
             del self._cache[agent_id]
-            # Supprimer également toutes les clés de cache dérivées pointant vers cet agent (Correction du bug de nettoyage)
+            # Supprimer egalement toutes les cles de cache derivees pointant vers cet agent
             keys_to_remove = [k for k, v in self._cache.items() if v is agent]
             for key in keys_to_remove:
                 del self._cache[key]
@@ -535,20 +540,21 @@ class AgentFactory:
             Dict: Statistiques detaillees
         """
         stats = self._creation_stats.copy()
+        total_attempts = stats["cache_hits"] + stats["cache_misses"]
         stats.update({
             "cache_size": len(self._cache),
             "templates_available": len(self._templates),
             "skills_available": len(self._skill_configs),
             "practices_available": len(self._practice_instances),
             "cache_hit_rate": (
-                stats["cache_hits"] / (stats["cache_hits"] + stats["cache_misses"])
-                if stats["cache_hits"] + stats["cache_misses"] > 0
-                else 0
+                stats["cache_hits"] / total_attempts
+                if total_attempts > 0
+                else 0.0
             ),
             "success_rate": (
                 stats["successful_creations"] / stats["total_creations"]
                 if stats["total_creations"] > 0
-                else 0
+                else 0.0
             )
         })
         return stats
@@ -583,7 +589,8 @@ class AgentFactory:
                 
                 if not skill_config:
                     # Creer une configuration par defaut
-                    skill_config = SkillConfig(
+                    from src.core.models import SkillConfig as SkillConfigModel
+                    skill_config = SkillConfigModel(
                         skill_id=skill_id,
                         name=skill_id,
                         description=f"Skill: {skill_id}",
@@ -604,6 +611,9 @@ class AgentFactory:
             except SkillNotFoundError:
                 missing_skills.append(skill_id)
                 logger.warning(f"Skill {skill_id} not found in registry")
+            except Exception as e:
+                logger.error(f"Error instantiating skill {skill_id}: {str(e)}")
+                raise
         
         if missing_skills:
             raise ValueError(f"Missing skills: {', '.join(missing_skills)}")
@@ -643,7 +653,7 @@ class AgentFactory:
                             f"Skill {skill.skill_id} depends on {dep_id} which is not registered"
                         )
             except SkillNotFoundError:
-                # Si la metadata n'existe pas, on ignore la vérification des dépendances
+                # Si la metadata n'existe pas, on ignore la verification des dependances
                 logger.warning(f"Metadata not found for skill {skill.skill_id}, skipping dependency check")
     
     def _prepare_practices(
@@ -685,11 +695,9 @@ class AgentFactory:
             practices: Liste des pratiques a appliquer
         """
         # Les pratiques sont stockees dans les metadonnees de l'agent
-        if hasattr(agent, '_practices'):
-            agent._practices = practices
-        else:
-            # Ajouter dynamiquement l'attribut
-            setattr(agent, '_practices', practices)
+        if not hasattr(agent, '_practices'):
+            setattr(agent, '_practices', [])
+        agent._practices = practices
         
         logger.info(f"Applied {len(practices)} practices to agent {agent.agent_id}")
     
@@ -708,6 +716,17 @@ class AgentFactory:
         message_bus = context.message_bus or self.message_bus
         if message_bus:
             try:
+                # Publication d'un événement de création d'agent
+                event = {
+                    "type": "agent_created",
+                    "agent_id": agent.agent_id,
+                    "role": agent.name,
+                    "project_id": context.project_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+                # Si le message_bus a une méthode publish, l'utiliser
+                if hasattr(message_bus, 'publish'):
+                    asyncio.create_task(message_bus.publish("agent.events", event))
                 logger.debug(f"Agent creation notified: {agent.agent_id}")
             except Exception as e:
                 logger.error(f"Failed to notify agent creation: {str(e)}")
@@ -716,7 +735,7 @@ class AgentFactory:
         self,
         role_name: str,
         skill_ids: List[str],
-        practice_ids: Optional[List[str]]
+        practice_ids: List[str]
     ) -> str:
         """
         Genere une cle de cache pour un agent.
@@ -729,8 +748,7 @@ class AgentFactory:
         Returns:
             str: Cle de cache
         """
-        practices_to_use = practice_ids if practice_ids is not None else list(self._default_practices)
-        practice_key = ','.join(sorted(practices_to_use))
+        practice_key = ','.join(sorted(practice_ids)) if practice_ids else ''
         return f"{role_name}_{','.join(sorted(skill_ids))}_{practice_key}"
     
     def _get_default_skills_for_role(self, role_name: str) -> List[str]:
@@ -767,8 +785,18 @@ class AgentFactory:
         Returns:
             Optional[BaseBestPractice]: Instance de pratique ou None
         """
-        logger.debug(f"Practice instance creation not implemented for {config.practice_id}")
-        return None
+        # Implementation par defaut - peut etre etendue par les sous-classes
+        practice_type = config.type if hasattr(config, 'type') else None
+        
+        if practice_type == "solidity":
+            from src.agents.base.best_practice import SolidityBestPractice
+            return SolidityBestPractice(config)
+        elif practice_type == "javascript":
+            from src.agents.base.best_practice import JavaScriptBestPractice
+            return JavaScriptBestPractice(config)
+        else:
+            logger.warning(f"Unknown practice type: {practice_type}")
+            return None
     
     # =========================================================================
     # REPRESENTATION

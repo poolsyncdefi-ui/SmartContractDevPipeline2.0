@@ -19,7 +19,7 @@ defini dans les specifications du pipeline.
 """
 from src.agents.base.abstract_agent import AbstractAgent
 from typing import Dict, Any, List, Optional, Set, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import json
 import re
@@ -156,7 +156,7 @@ class AuditReport:
         score (float): Score de securite (0-100)
         details (Dict): Details supplementaires
     """
-    audited_at: datetime = field(default_factory=datetime.utcnow)
+    audited_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     contract_name: str = ""
     level: AuditLevel = AuditLevel.FULL
     vulnerabilities: List[Vulnerability] = field(default_factory=list)
@@ -290,7 +290,7 @@ class SecurityAgent(AbstractAgent):
         self.auto_fix = auto_fix
         self._audit_history: List[AuditReport] = []
         self._compilation_cache: Dict[str, Dict] = {}
-        self._vuln_counter = 0  # Compteur pour IDs uniques
+        self._vuln_counter = 0
 
         logger.info(f"SecurityAgent initialized: {agent_id}")
 
@@ -308,14 +308,14 @@ class SecurityAgent(AbstractAgent):
 
         Returns:
             Dict contenant:
-            - 'status': SUCCESS ou FAILED
+            - 'status': success ou failed
             - 'report': AuditReport en dictionnaire
             - 'vulnerabilities': Liste des vulnerabilites
             - 'guide': Guide de correction
             - 'secure': Bool indiquant si le code est securise
             - 'score': Score de securite (0-100)
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
 
         try:
             # 1. Extraction des parametres
@@ -348,7 +348,7 @@ class SecurityAgent(AbstractAgent):
             if self.knowledge_base and report.vulnerabilities:
                 report = await self._enrich_with_rag(report)
 
-            # 5. Application des bonnes pratiques (Correction : transmission du code source réel)
+            # 5. Application des bonnes pratiques
             if self.best_practices:
                 report = await self._apply_best_practices(report, code)
 
@@ -367,18 +367,24 @@ class SecurityAgent(AbstractAgent):
             # 9. Generation du guide de remediation
             guide = self.format_remediation_guide(report.vulnerabilities)
 
-            # 10. Logging de l'execution
-            await self.log_execution(
-                task_id=task_data.get("task_id", "unknown"),
-                prompt=f"Audit {contract_name} (level={level.value})",
-                response=f"Found {len(report.vulnerabilities)} vulnerabilities, score={report.score:.1f}",
-                tool_output=json.dumps(report.to_dict(), indent=2)[:500]
+            # 10. Logging de l'execution (via la methode de la classe mere)
+            await self._log_execution(
+                task_data=task_data,
+                result={
+                    "status": "success",
+                    "contract_name": contract_name,
+                    "vulnerabilities_found": len(report.vulnerabilities),
+                    "score": report.score
+                },
+                success=True,
+                duration=(datetime.now(timezone.utc) - start_time).total_seconds()
             )
 
             logger.info(f"Security audit completed: {contract_name}, score={report.score:.1f}, passed={report.passed}")
 
+            # Note: Les statuts sont en minuscules pour correspondre à l'Enum TaskStatus
             return {
-                "status": "SUCCESS",
+                "status": "success",
                 "report": report.to_dict(),
                 "vulnerabilities": [v.to_dict() for v in report.vulnerabilities],
                 "guide": guide,
@@ -387,7 +393,7 @@ class SecurityAgent(AbstractAgent):
                 "passed": report.passed,
                 "level": level.value,
                 "metadata": {
-                    "execution_time": (datetime.utcnow() - start_time).total_seconds(),
+                    "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds(),
                     "vulnerabilities_count": len(report.vulnerabilities),
                     "critical_count": report.critical_count,
                     "high_count": report.high_count
@@ -397,9 +403,9 @@ class SecurityAgent(AbstractAgent):
         except Exception as e:
             logger.error(f"SecurityAgent execution failed: {str(e)}")
             return {
-                "status": "FAILED",
+                "status": "failed",
                 "error": str(e),
-                "execution_time": (datetime.utcnow() - start_time).total_seconds()
+                "execution_time": (datetime.now(timezone.utc) - start_time).total_seconds()
             }
 
     # =========================================================================
@@ -973,7 +979,7 @@ contract {contract_name}Test is Test {{
         """
         for practice in self.best_practices:
             try:
-                # Validation du code réel (Correction du bug de transmission de report.contract_name)
+                # Validation du code réel
                 validation = await practice.validate({"code": code})
                 if not validation.get("passed", True):
                     # Ajout des suggestions

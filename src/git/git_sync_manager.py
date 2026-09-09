@@ -99,24 +99,14 @@ class GitSyncManager:
             sign_commits: Signer les commits
         """
         # Valeurs par défaut sécurisées avec vérification d'attribut
-        default_workspace = getattr(settings.pipeline, 'default_workspace', Path('./workspace')) if hasattr(settings, 'pipeline') else Path('./workspace')
+        if hasattr(settings, 'pipeline') and hasattr(settings.pipeline, 'default_workspace'):
+            default_workspace = settings.pipeline.default_workspace
+        else:
+            default_workspace = Path('./workspace')
         self.workspace_path = workspace_path or default_workspace
         
         # Token GitHub robuste (compatible SecretStr et str)
-        if token:
-            self.token = token
-        elif hasattr(settings, 'github_token') and settings.github_token:
-            token_val = settings.github_token
-            if hasattr(token_val, 'get_secret_value'):
-                try:
-                    self.token = token_val.get_secret_value()
-                except Exception:
-                    self.token = str(token_val)
-            else:
-                self.token = str(token_val)
-        else:
-            self.token = None
-        
+        self.token = self._extract_token(token)
         self.username = username or getattr(settings, 'github_username', 'unknown')
         self.email = email or f"{self.username}@users.noreply.github.com"
         self.gpg_key = gpg_key
@@ -139,6 +129,36 @@ class GitSyncManager:
         }
         
         logger.info(f"GitSyncManager initialized: workspace={self.workspace_path}, username={self.username}")
+    
+    def _extract_token(self, token: Optional[str] = None) -> Optional[str]:
+        """
+        Extrait le token GitHub de manière robuste.
+        
+        Args:
+            token: Token à extraire (peut être str, SecretStr ou None)
+            
+        Returns:
+            Optional[str]: Token extrait
+        """
+        if token:
+            if hasattr(token, 'get_secret_value'):
+                try:
+                    return token.get_secret_value()
+                except Exception:
+                    return str(token)
+            return str(token)
+        
+        # Essayer de récupérer depuis les settings
+        if hasattr(settings, 'github_token') and settings.github_token:
+            token_val = settings.github_token
+            if hasattr(token_val, 'get_secret_value'):
+                try:
+                    return token_val.get_secret_value()
+                except Exception:
+                    return str(token_val)
+            return str(token_val)
+        
+        return None
     
     async def _ensure_github_client(self) -> None:
         """

@@ -18,7 +18,7 @@ Le registre est un Singleton garantissant un point d'acces unique
 a toutes les competences du systeme.
 """
 from typing import Dict, List, Type, Optional, Any, Set, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 import hashlib
@@ -86,8 +86,8 @@ class SkillMetadata:
     version: str = "1.0.0"
     status: SkillStatus = SkillStatus.REGISTERED
     scope: SkillScope = SkillScope.GLOBAL
-    registered_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    registered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     registered_by: str = "system"
     project_id: Optional[str] = None
     tags: Set[str] = field(default_factory=set)
@@ -330,7 +330,7 @@ class SkillRegistry:
         # Mise a jour des metadonnees
         if skill_id in self._metadata:
             self._metadata[skill_id].usage_count += 1
-            self._metadata[skill_id].last_used = datetime.utcnow()
+            self._metadata[skill_id].last_used = datetime.now(timezone.utc)
         
         return self._skill_classes[skill_id]
     
@@ -381,7 +381,7 @@ class SkillRegistry:
             
             # Mise a jour des metadonnees
             self._metadata[skill_id].usage_count += 1
-            self._metadata[skill_id].last_used = datetime.utcnow()
+            self._metadata[skill_id].last_used = datetime.now(timezone.utc)
             
             logger.debug(f"Skill instance created: {skill_id}")
             return instance
@@ -681,7 +681,7 @@ class SkillRegistry:
                     record.project_id = metadata.project_id
                     record.usage_count = metadata.usage_count
                     record.last_used_at = metadata.last_used
-                    record.updated_at = datetime.utcnow()
+                    record.updated_at = datetime.now(timezone.utc)
                     # Note: prompt_rules, input_schema_json devraient etre mis a jour
                     # depuis la classe de competence reelle
                 else:
@@ -802,6 +802,14 @@ class SkillRegistry:
         if self._message_bus:
             try:
                 # Emission asynchrone simplifiee
+                # Si message_bus a une methode publish, l'utiliser
+                if hasattr(self._message_bus, 'publish'):
+                    import asyncio
+                    asyncio.create_task(self._message_bus.publish("skill_registry.events", {
+                        "event_type": event_type,
+                        "data": data,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }))
                 logger.debug(f"Event emitted: {event_type}")
             except Exception as e:
                 logger.error(f"Failed to emit event {event_type}: {str(e)}")
@@ -828,7 +836,7 @@ class SkillRegistry:
             
             async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
                 return {
-                    "status": "SUCCESS",
+                    "status": "success",  # Statut en minuscules pour correspondre à TaskStatus
                     "result": f"Executing {self.skill_id} with params: {params}"
                 }
             

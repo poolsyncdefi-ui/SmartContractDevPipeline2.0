@@ -23,7 +23,7 @@ import json
 import asyncio
 import inspect
 from typing import Callable, Awaitable, Dict, List, Optional, Set, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import re
 
@@ -274,7 +274,7 @@ class RedisMessageBus(MessageBus):
             # Mise à jour des statistiques
             self._update_stats(message)
             self._redis_stats["messages_published"] += 1
-            self._redis_stats["last_activity"] = datetime.utcnow()
+            self._redis_stats["last_activity"] = datetime.now(timezone.utc)
 
             logger.debug(f"Message published: {message.type.value} on {topic}")
 
@@ -464,7 +464,7 @@ class RedisMessageBus(MessageBus):
                 return
 
             self._redis_stats["messages_received"] += 1
-            self._redis_stats["last_activity"] = datetime.utcnow()
+            self._redis_stats["last_activity"] = datetime.now(timezone.utc)
 
             if msg.is_expired():
                 logger.debug(f"Message {msg.id} expired, skipping")
@@ -516,7 +516,7 @@ class RedisMessageBus(MessageBus):
                         await res
 
                 sub.message_count += 1
-                sub.last_message_at = datetime.utcnow()
+                sub.last_message_at = datetime.now(timezone.utc)
 
                 if self._stats:
                     self._stats.total_delivered += 1

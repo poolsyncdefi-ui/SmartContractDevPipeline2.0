@@ -121,7 +121,7 @@ class AgentMetrics:
         
         self.max_duration = max(self.max_duration, duration)
         self.min_duration = min(self.min_duration, duration)
-        self.average_duration = self.total_duration / self.total_executions
+        self.average_duration = self.total_duration / self.total_executions if self.total_executions > 0 else 0.0
         self.success_rate = self.successful_executions / self.total_executions if self.total_executions > 0 else 0.0
         
         now_utc = datetime.now(timezone.utc)
@@ -256,7 +256,7 @@ class AbstractAgent(ABC, LoggableMixin):
         async with self._execution_lock:
             if self._cancelled:
                 return {
-                    "status": "CANCELLED",
+                    "status": "cancelled",
                     "error": "Task cancelled",
                     "retry_count": 0,
                     "duration": 0.0
@@ -275,7 +275,7 @@ class AbstractAgent(ABC, LoggableMixin):
                     "threshold": self._circuit_breaker_threshold
                 })
                 return {
-                    "status": "CIRCUIT_OPEN",
+                    "status": "circuit_broken",
                     "error": "Circuit breaker is open. Please reset or wait.",
                     "retry_count": self.retry_count,
                     "duration": (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -290,7 +290,7 @@ class AbstractAgent(ABC, LoggableMixin):
             # Récupération des IDs des compétences utilisées
             skill_ids = [s.skill_id for s in self.skills]
             
-            while self.retry_count < self.max_retries:
+            while self.retry_count < self.max_retries and not self._cancelled:
                 try:
                     # Validation des entrées
                     self._validate_task_data(task_data)
@@ -368,15 +368,16 @@ class AbstractAgent(ABC, LoggableMixin):
                         })
                         
                         return {
-                            "status": "FAILED",
+                            "status": "failed",
                             "error": error_msg,
                             "retry_count": self.retry_count,
                             "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
                             "last_error": "Timeout"
                         }
                     
+                    # Attente avant retry avec vérification d'annulation
                     wait_time = 2 ** self.retry_count
-                    await asyncio.sleep(wait_time)
+                    await self._wait_with_cancellation(wait_time)
                     
                 except (PipelineError, LLMError, TaskExecutionError) as e:
                     self.retry_count += 1
@@ -406,7 +407,7 @@ class AbstractAgent(ABC, LoggableMixin):
                         })
                         
                         return {
-                            "status": "FAILED",
+                            "status": "failed",
                             "error": error_msg,
                             "retry_count": self.retry_count,
                             "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
@@ -420,9 +421,9 @@ class AbstractAgent(ABC, LoggableMixin):
                         "max_retries": self.max_retries
                     })
                     
-                    # Attente avant retry (backoff exponentiel)
+                    # Attente avant retry avec vérification d'annulation
                     wait_time = 2 ** self.retry_count
-                    await asyncio.sleep(wait_time)
+                    await self._wait_with_cancellation(wait_time)
                     
                 except Exception as e:
                     logger.error(f"Unexpected error in agent {self.agent_id}: {str(e)}")
@@ -436,19 +437,43 @@ class AbstractAgent(ABC, LoggableMixin):
                     })
                     
                     return {
-                        "status": "FAILED",
+                        "status": "failed",
                         "error": f"Unexpected error: {str(e)}",
                         "retry_count": self.retry_count,
                         "duration": (datetime.now(timezone.utc) - start_time).total_seconds()
                     }
             
+            # Si annulation détectée
+            if self._cancelled:
+                self.status = AgentStatus.CANCELLED
+                return {
+                    "status": "cancelled",
+                    "error": "Task cancelled",
+                    "retry_count": self.retry_count,
+                    "duration": (datetime.now(timezone.utc) - start_time).total_seconds()
+                }
+            
             # Fallback
             return {
-                "status": "FAILED",
+                "status": "failed",
                 "error": "Unknown error in circuit breaker",
                 "retry_count": self.retry_count,
                 "duration": (datetime.now(timezone.utc) - start_time).total_seconds()
             }
+    
+    async def _wait_with_cancellation(self, wait_time: float, check_interval: float = 0.5) -> None:
+        """
+        Attend avec vérification périodique du flag d'annulation.
+        
+        Args:
+            wait_time: Temps total d'attente en secondes
+            check_interval: Intervalle de vérification en secondes
+        """
+        elapsed = 0.0
+        while elapsed < wait_time and not self._cancelled:
+            remaining = min(check_interval, wait_time - elapsed)
+            await asyncio.sleep(remaining)
+            elapsed += remaining
     
     # =========================================================================
     # GESTION DES COMPÉTENCES
@@ -659,8 +684,10 @@ class AbstractAgent(ABC, LoggableMixin):
         if "status" not in result:
             raise ValueError("Result missing 'status' field")
         
-        if result["status"] not in ["SUCCESS", "FAILED", "CIRCUIT_OPEN"]:
-            raise ValueError(f"Invalid status: {result['status']}")
+        # Statuts en minuscules pour correspondre à l'Enum TaskStatus
+        valid_statuses = ["success", "failed", "circuit_broken", "cancelled"]
+        if result["status"] not in valid_statuses:
+            raise ValueError(f"Invalid status: {result['status']}. Allowed: {valid_statuses}")
     
     # =========================================================================
     # CIRCUIT BREAKER (CONTRÔLE)

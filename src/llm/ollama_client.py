@@ -72,9 +72,14 @@ class OllamaClient(LLMClient):
             cache_ttl: Durée de vie du cache en secondes
         """
         # Valeurs par défaut sécurisées avec getattr
-        default_model = getattr(settings.llm, 'default_model', 'llama2') if hasattr(settings, 'llm') else 'llama2'
-        embedding_model_default = getattr(settings.llm, 'embedding_model', 'nomic-embed-text') if hasattr(settings, 'llm') else 'nomic-embed-text'
-        ollama_url_default = getattr(settings.llm, 'ollama_url', 'http://localhost:11434') if hasattr(settings, 'llm') else 'http://localhost:11434'
+        if hasattr(settings, 'llm'):
+            default_model = getattr(settings.llm, 'default_model', 'llama2')
+            embedding_model_default = getattr(settings.llm, 'embedding_model', 'nomic-embed-text')
+            ollama_url_default = getattr(settings.llm, 'ollama_url', 'http://localhost:11434')
+        else:
+            default_model = 'llama2'
+            embedding_model_default = 'nomic-embed-text'
+            ollama_url_default = 'http://localhost:11434'
         
         super().__init__(
             model=model or default_model,
@@ -123,7 +128,7 @@ class OllamaClient(LLMClient):
         if self._client:
             await self._client.aclose()
         
-        # Configuration des timeouts granulaires (utilisation de pool_timeout au lieu de pool)
+        # Configuration des timeouts granulaires
         timeout_config = httpx.Timeout(
             timeout=self.timeout,
             connect=self.connect_timeout,

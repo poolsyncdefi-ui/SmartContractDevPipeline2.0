@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc, asc
 from sqlalchemy.orm import selectinload
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import uuid
 
@@ -515,7 +515,7 @@ async def update_task(
             task.metadata = request.metadata
             changes["metadata"] = request.metadata
 
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(timezone.utc)
 
         await session.commit()
         await session.refresh(task)
@@ -781,7 +781,7 @@ async def retry_task(
         else:
             task.retry_count = (task.retry_count or 0) + 1
         task.is_retry = True
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(timezone.utc)
 
         await session.commit()
         await session.refresh(task)
@@ -1043,8 +1043,7 @@ async def get_project_tasks_stats(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting project tasks stats {project_id}: {str(e)}"
-        )
+        logger.error(f"Error getting project tasks stats {project_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get project tasks stats: {str(e)}"

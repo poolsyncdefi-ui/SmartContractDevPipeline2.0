@@ -9,7 +9,7 @@
 
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Generic, TypeVar, Union
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -40,7 +40,7 @@ class BaseResponse(BaseModel):
     """Réponse de base."""
     success: bool = Field(..., description="Succès de l'opération")
     message: str = Field(..., description="Message")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Horodatage")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Horodatage")
     
     def model_dump(self, **kwargs) -> Dict[str, Any]:
         """Convertit la réponse en dictionnaire avec timestamp ISO."""

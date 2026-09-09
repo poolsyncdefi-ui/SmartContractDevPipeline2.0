@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc, asc
 from sqlalchemy.orm import selectinload
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import uuid
 import yaml
@@ -396,7 +396,7 @@ async def update_project(
             project.spec_yaml = request.spec_yaml
             changes["spec_yaml"] = request.spec_yaml
         
-        project.updated_at = datetime.utcnow()
+        project.updated_at = datetime.now(timezone.utc)
         
         await session.commit()
         await session.refresh(project)
@@ -721,7 +721,7 @@ async def archive_project(
             )
         
         project.update_status(ProjectStatus.ARCHIVED)
-        project.archived_at = datetime.utcnow()
+        project.archived_at = datetime.now(timezone.utc)
         
         await session.commit()
         

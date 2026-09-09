@@ -33,7 +33,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship, backref
 from sqlalchemy.ext.hybrid import hybrid_property
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import enum
 import json
@@ -79,8 +79,8 @@ class Sprint(Base):
     # Dates
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Metadonnees (Utilisation de meta_data pour eviter le conflit avec Base.metadata)
     meta_data = Column('metadata', JSON, nullable=True, default=dict)
@@ -174,7 +174,7 @@ class TaskResult(Base):
     cpu_usage = Column(Float, nullable=True)  # CPU utilise en %
 
     # Dates
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     # Metadonnees (Utilisation de meta_data pour eviter le conflit avec Base.metadata)
     meta_data = Column('metadata', JSON, nullable=True, default=dict)
@@ -248,7 +248,7 @@ class Artifact(Base):
     version = Column(String, nullable=True, default="1.0.0")
 
     # Dates
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     # Relation
     task = relationship("TaskModel", back_populates="artifacts", lazy="selectin")
@@ -333,10 +333,10 @@ if not hasattr(TaskModel, 'artifacts'):
         lazy="selectin"
     )
 
-if not hasattr(TaskModel, 'logs'):
-    TaskModel.logs = relationship(
+if not hasattr(TaskModel, 'execution_logs'):
+    TaskModel.execution_logs = relationship(
         "ExecutionLogModel",
-        backref="task",
+        back_populates="task",
         cascade="all, delete-orphan",
         lazy="selectin"
     )

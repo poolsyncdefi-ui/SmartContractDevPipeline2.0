@@ -3,6 +3,7 @@
     "naming-convention",
     "events-access"
   ],
+  "detectors_to_run": [],
   "filter_paths": [
     "lib",
     "test",
@@ -19,5 +20,16 @@
   ],
   "solc_ast": false,
   "solc_ast_json": false,
-  "solc_sources": false
+  "solc_sources": false,
+  "exclude_low_impact": false,
+  "exclude_medium_impact": false,
+  "exclude_high_impact": false,
+  "fail_on": "none",
+  "hardhat_ignore_compile": false,
+  "generate_pdf": false,
+  "markdown_root": "",
+  "show_inheritance": true,
+  "show_inheritance_graph": false,
+  "triage_mode": false,
+  "verbose": false
 }

@@ -8,7 +8,7 @@
 
 from abc import ABC, abstractmethod
 from pydantic import BaseModel, ValidationError, create_model
-from typing import Dict, Any, Type, Optional, List
+from typing import Dict, Any, Type, Optional, List, Union
 from datetime import datetime, timezone
 import json
 import logging
@@ -91,12 +91,10 @@ class BaseSkill(ABC):
         self.name = config.name
         self.description = getattr(config, 'description', 'No description provided')
         
-        if not self.input_schema:
-            try:
-                self.input_schema = self._create_dynamic_schema(config)
-                logger.info(f"Dynamic schema created for skill {self.skill_id}")
-            except Exception as e:
-                logger.warning(f"Could not create dynamic schema: {str(e)}")
+        # Création du schéma dynamique
+        self.input_schema = self._create_dynamic_schema(config)
+        if self.input_schema:
+            logger.info(f"Dynamic schema created for skill {self.skill_id}")
         
         self.config = config
         self.llm_client = llm_client
@@ -150,7 +148,7 @@ class BaseSkill(ABC):
             if self.cache_enabled and cache_key in self._cache:
                 logger.info(f"Cache hit for skill {self.skill_id}")
                 self.status = SkillStatus.CACHED
-                cached_result = self._cache[cache_key]
+                cached_result = self._cache[cache_key].copy()
                 cached_result["_from_cache"] = True
                 return cached_result
             
@@ -167,7 +165,7 @@ class BaseSkill(ABC):
                         self._validate_output(result)
                     
                     if self.cache_enabled:
-                        self._cache[cache_key] = result
+                        self._cache[cache_key] = result.copy()
                     
                     self.status = SkillStatus.COMPLETED
                     self._execution_count += 1
@@ -181,7 +179,6 @@ class BaseSkill(ABC):
                         "version": self.version
                     }
                     
-                    await self._log_execution(params, result, success=True)
                     logger.info(f"Skill {self.skill_id} executed successfully")
                     return result
                     
@@ -206,7 +203,8 @@ class BaseSkill(ABC):
             
         except Exception as e:
             self.status = SkillStatus.FAILED
-            await self._log_execution(params, None, success=False, error=str(e))
+            # Log de l'erreur sans utiliser _log_execution (délégation à l'agent)
+            logger.error(f"Skill {self.skill_id} execution failed: {str(e)}")
             raise
         
         finally:
@@ -230,15 +228,23 @@ class BaseSkill(ABC):
             raise
 
     def _validate_output(self, output: Dict[str, Any]) -> None:
-        """Valide la sortie de la compétence."""
+        """
+        Valide la sortie de la compétence.
+        
+        Les statuts acceptés sont en minuscules pour correspondre à l'Enum TaskStatus:
+        - "success": Exécution réussie
+        - "failed": Exécution échouée
+        """
         if not isinstance(output, dict):
             raise ValidationError("Output must be a dictionary")
         
         if "status" not in output:
             raise ValidationError("Output must contain 'status' field")
         
-        if output["status"] not in ["SUCCESS", "FAILED"]:
-            raise ValidationError(f"Invalid status: {output['status']}")
+        # Statuts en minuscules pour correspondre à l'Enum TaskStatus
+        valid_statuses = ["success", "failed"]
+        if output["status"] not in valid_statuses:
+            raise ValidationError(f"Invalid status: {output['status']}. Allowed: {valid_statuses}")
 
     def get_system_prompt_rules(self) -> str:
         """Retourne les règles système pour le prompt."""
@@ -315,14 +321,46 @@ class BaseSkill(ABC):
         }
 
     def _generate_cache_key(self, params: BaseModel) -> str:
-        """Génère une clé de cache à partir des paramètres."""
-        param_str = json.dumps(params.model_dump(), sort_keys=True)
-        return hashlib.sha256(param_str.encode()).hexdigest()
+        """
+        Génère une clé de cache à partir des paramètres.
+        
+        Args:
+            params: Paramètres validés (BaseModel)
+            
+        Returns:
+            Clé de cache SHA256
+        """
+        try:
+            # Utilisation de model_dump() pour Pydantic v2, fallback sur dict()
+            if hasattr(params, 'model_dump'):
+                param_dict = params.model_dump()
+            else:
+                param_dict = params.dict() if hasattr(params, 'dict') else {}
+            
+            param_str = json.dumps(param_dict, sort_keys=True, default=str)
+            return hashlib.sha256(param_str.encode()).hexdigest()
+        except Exception as e:
+            logger.warning(f"Cache key generation failed: {str(e)}")
+            # Fallback: utiliser l'ID de la compétence et un timestamp
+            return f"{self.skill_id}_{datetime.now(timezone.utc).timestamp()}"
 
     def _prepare_execution_context(self, params: BaseModel) -> Dict[str, Any]:
-        """Prépare le contexte d'exécution avec les connaissances RAG."""
-        context = params.model_dump()
+        """
+        Prépare le contexte d'exécution avec les connaissances RAG.
         
+        Args:
+            params: Paramètres validés (BaseModel)
+            
+        Returns:
+            Contexte d'exécution (dictionnaire)
+        """
+        # Conversion des paramètres en dictionnaire
+        if hasattr(params, 'model_dump'):
+            context = params.model_dump()
+        else:
+            context = params.dict() if hasattr(params, 'dict') else {}
+        
+        # Ajout du contexte RAG si disponible
         if self.knowledge_base:
             try:
                 query = f"{self.name} {self.skill_id} {context.get('description', '')}"
@@ -335,56 +373,89 @@ class BaseSkill(ABC):
         
         return context
 
-    async def _log_execution(
-        self, 
-        params: Dict[str, Any], 
-        result: Optional[Dict[str, Any]], 
-        success: bool,
-        error: Optional[str] = None
-    ) -> None:
-        """Enregistre l'exécution dans l'historique."""
-        entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "params": params,
-            "success": success,
-            "skill_id": self.skill_id,
-            "version": self.version
-        }
+    def _create_dynamic_schema(self, config: SkillConfig) -> Optional[Type[BaseModel]]:
+        """
+        Crée un schéma Pydantic dynamique à partir de la configuration.
         
-        if success and result:
-            entry["result"] = result
-        if error:
-            entry["error"] = error
-        
-        self.execution_history.append(entry)
-        
-        if len(self.execution_history) > 1000:
-            self.execution_history = self.execution_history[-1000:]
-
-    def _create_dynamic_schema(self, config: SkillConfig) -> Type[BaseModel]:
-        """Crée un schéma Pydantic dynamique à partir de la configuration."""
+        Args:
+            config: Configuration de la compétence
+            
+        Returns:
+            Modèle Pydantic dynamique ou None si aucun schéma n'est défini
+        """
         fields = {}
-        schema = getattr(config, 'parameters_schema', None)
-        if not schema:
-            schema = getattr(config, 'input_schema', None)
+        schema = None
         
-        if schema and isinstance(schema, dict):
-            for field_name, field_type in schema.items():
+        # Récupération du schéma depuis différentes sources possibles
+        if hasattr(config, 'parameters_schema'):
+            schema = config.parameters_schema
+        elif hasattr(config, 'input_schema'):
+            schema = config.input_schema
+        elif hasattr(config, 'schema'):
+            schema = config.schema
+        
+        if not schema or not isinstance(schema, dict):
+            logger.debug(f"No valid schema found for skill {self.skill_id}")
+            return None
+        
+        # Construction du dictionnaire de champs pour create_model
+        for field_name, field_info in schema.items():
+            if isinstance(field_info, dict):
+                # Gestion des champs avec des métadonnées
+                field_type = field_info.get('type', Any)
+                default = field_info.get('default', ...)
+                # Conversion des types string vers types Python
                 if isinstance(field_type, str):
                     type_mapping = {
                         'str': str,
                         'int': int,
                         'float': float,
                         'bool': bool,
-                        'list': list,
-                        'dict': dict,
-                        'any': Any
+                        'list': List,
+                        'dict': Dict,
+                        'any': Any,
+                        'string': str,
+                        'integer': int,
+                        'number': float,
+                        'boolean': bool,
+                        'array': List,
+                        'object': Dict
                     }
                     field_type = type_mapping.get(field_type, Any)
+                fields[field_name] = (field_type, default)
+            else:
+                # Gestion simple (type directement)
+                if isinstance(field_info, str):
+                    type_mapping = {
+                        'str': str,
+                        'int': int,
+                        'float': float,
+                        'bool': bool,
+                        'list': List,
+                        'dict': Dict,
+                        'any': Any,
+                        'string': str,
+                        'integer': int,
+                        'number': float,
+                        'boolean': bool,
+                        'array': List,
+                        'object': Dict
+                    }
+                    field_type = type_mapping.get(field_info, Any)
+                else:
+                    field_type = field_info
                 fields[field_name] = (field_type, ...)
         
-        model_name = f"{self.skill_id}_Input"
-        return create_model(model_name, **fields)
+        if not fields:
+            logger.debug(f"No fields found in schema for skill {self.skill_id}")
+            return None
+        
+        try:
+            model_name = f"{self.skill_id}_Input"
+            return create_model(model_name, **fields)
+        except Exception as e:
+            logger.error(f"Failed to create dynamic schema for {self.skill_id}: {str(e)}")
+            return None
 
     def __repr__(self) -> str:
         return f"<BaseSkill(skill_id='{self.skill_id}', name='{self.name}', status='{self.status.value}')>"
@@ -422,7 +493,7 @@ class BaseLLMSkill(BaseSkill):
             )
             
             return {
-                "status": "SUCCESS",
+                "status": "success",  # Statut en minuscules pour correspondre à TaskStatus
                 "result": response,
                 "prompt": prompt
             }

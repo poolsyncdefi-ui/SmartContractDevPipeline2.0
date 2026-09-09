@@ -22,7 +22,7 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from typing import Dict, List, Any, Optional, Union, Set
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import json
 import hashlib
@@ -89,8 +89,8 @@ class Document:
     embedding: Optional[List[float]] = None
     document_type: DocumentType = DocumentType.OTHER
     source: str = ""
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     version: str = "1.0.0"
     tags: Set[str] = field(default_factory=set)
 
@@ -338,7 +338,7 @@ class KnowledgeBase:
             content = artifact.get("content", "")
             artifact_type = artifact.get("type", "other")
             metadata = artifact.get("metadata", {})
-            artifact_id = artifact.get("id", f"art_{datetime.utcnow().timestamp()}")
+            artifact_id = artifact.get("id", f"art_{datetime.now(timezone.utc).timestamp()}")
 
             # Conversion du type
             try:
@@ -451,7 +451,7 @@ class KnowledgeBase:
             if metadata is not None:
                 current.metadata.update(metadata)
 
-            current.updated_at = datetime.utcnow()
+            current.updated_at = datetime.now(timezone.utc)
 
             # Re-ajout du document (suppression + ajout)
             await self.delete_document(doc_id)

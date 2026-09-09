@@ -15,7 +15,7 @@ import json
 import yaml
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.config.settings import settings
 from src.db.database import init_database, check_db_connection, get_async_session
@@ -95,7 +95,7 @@ def status(verbose: bool, quiet: bool, output_json: bool):
     """Affiche le statut du pipeline."""
     result = {
         "version": "2.0.0",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
     
     # Base de données
@@ -1361,3 +1361,11 @@ def info(verbose: bool, quiet: bool, output_json: bool):
         }, indent=2))
     
     click.echo("\n" + "=" * 60)
+
+
+# ==============================================================================
+# POINT D'ENTRÉE
+# ==============================================================================
+
+if __name__ == "__main__":
+    cli()

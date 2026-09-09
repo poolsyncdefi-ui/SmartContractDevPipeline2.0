@@ -8,7 +8,7 @@
 # ==============================================================================
 
 from typing import Optional, Any, Dict, List, Union
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ==============================================================================
 # EXCEPTION DE BASE
@@ -41,7 +41,7 @@ class PipelineError(Exception):
         super().__init__(message)
         self.message = message
         self.details = details or {}
-        self.timestamp = datetime.utcnow().isoformat()
+        self.timestamp = datetime.now(timezone.utc).isoformat()
         self.code = code or self.__class__.__name__.upper()
 
     def __str__(self) -> str:

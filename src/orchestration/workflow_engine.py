@@ -19,7 +19,7 @@ coordonnant l'execution des agents.
 """
 from typing import List, Dict, Set, Any, Optional, Tuple, Callable, Awaitable
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import asyncio
 import json
@@ -364,7 +364,7 @@ class WorkflowEngine:
             if metadata:
                 self.execution.metadata.update(metadata)
 
-        self.execution.start_time = datetime.utcnow()
+        self.execution.start_time = datetime.now(timezone.utc)
 
         logger.info(f"Workflow started: {workflow_id}")
 
@@ -397,7 +397,7 @@ class WorkflowEngine:
             raise
 
         finally:
-            self.execution.end_time = datetime.utcnow()
+            self.execution.end_time = datetime.now(timezone.utc)
             self._running = False
             self._execution_history.append(self.execution)
 
@@ -529,13 +529,15 @@ class WorkflowEngine:
             return
 
         # Verification du circuit breaker
-        if self.circuit_breaker and self.circuit_breaker.is_open():
-            raise CircuitBreakerOpenError(f"Circuit breaker open for task {task_id}")
+        if self.circuit_breaker:
+            is_open = await self.circuit_breaker.is_open()
+            if is_open:
+                raise CircuitBreakerOpenError(f"Circuit breaker open for task {task_id}")
 
         # Mise a jour du statut
         async with self._task_lock:
             task.status = TaskExecutionStatus.RUNNING
-            task.start_time = datetime.utcnow()
+            task.start_time = datetime.now(timezone.utc)
             self.execution.current_task = task_id
 
         logger.info(f"Executing task: {task_id} (attempt {task.retry_count + 1})")
@@ -561,7 +563,7 @@ class WorkflowEngine:
             async with self._task_lock:
                 task.result = result
                 task.status = TaskExecutionStatus.COMPLETED
-                task.end_time = datetime.utcnow()
+                task.end_time = datetime.now(timezone.utc)
                 self.execution.completed_count += 1
 
             # Sauvegarde si state_manager disponible
@@ -581,11 +583,11 @@ class WorkflowEngine:
             async with self._task_lock:
                 task.error = str(e)
                 task.retry_count += 1
-                task.end_time = datetime.utcnow()
+                task.end_time = datetime.now(timezone.utc)
 
                 # Enregistrement de la tentative
                 task.attempts.append({
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "error": str(e),
                     "retry_count": task.retry_count
                 })
@@ -714,7 +716,7 @@ class WorkflowEngine:
                 output=task.result,
                 error=None,
                 duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else None,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
 
             await self.state_manager.save_task_result(result_data)
@@ -740,7 +742,7 @@ class WorkflowEngine:
                 output=None,
                 error=task.error,
                 duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else None,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
 
             await self.state_manager.save_task_result(result_data)

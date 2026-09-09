@@ -20,7 +20,7 @@ pour d'autres transports (RabbitMQ, Kafka, etc.)
 """
 from abc import ABC, abstractmethod
 from typing import Callable, Awaitable, Optional, Dict, Any, List, Set, Union, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import asyncio
 import re
@@ -87,7 +87,7 @@ class Subscription:
     callback: Callable[[BaseMessage], Any]
     subscription_type: SubscriptionType = SubscriptionType.EXACT
     filter_criteria: Optional[Dict[str, Any]] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     active: bool = True
     message_count: int = 0
     last_message_at: Optional[datetime] = None
@@ -532,7 +532,7 @@ class MessageBus(ABC):
                         await res
 
                 sub.message_count += 1
-                sub.last_message_at = datetime.utcnow()
+                sub.last_message_at = datetime.now(timezone.utc)
 
                 if self._stats:
                     self._stats.total_delivered += 1
@@ -593,7 +593,7 @@ class MessageBus(ABC):
             return
 
         self._stats.total_published += 1
-        self._stats.last_activity = datetime.utcnow()
+        self._stats.last_activity = datetime.now(timezone.utc)
 
         type_key = message.type.value
         self._stats.by_type[type_key] = self._stats.by_type.get(type_key, 0) + 1

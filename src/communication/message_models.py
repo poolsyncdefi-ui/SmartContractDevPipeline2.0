@@ -20,7 +20,7 @@ decouplée entre les composants du pipeline.
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, Any, List, Set, Union
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 import uuid
 import json
 import logging
@@ -143,7 +143,7 @@ class BaseMessage(BaseModel):
         default=MessageDeliveryMode.POINT_TO_POINT,
         description="Mode de livraison"
     )
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: Optional[str] = Field(None, description="ID de corrélation")
     parent_id: Optional[str] = Field(None, description="ID du message parent")
     priority: int = Field(5, ge=0, le=10, description="Priorité (0-10)")
@@ -205,7 +205,7 @@ class BaseMessage(BaseModel):
             return False
         if self.status == MessageStatus.PROCESSED:
             return False
-        age = (datetime.utcnow() - self.timestamp).total_seconds()
+        age = (datetime.now(timezone.utc) - self.timestamp).total_seconds()
         return age > self.ttl
 
     def to_json(self) -> str:
@@ -305,18 +305,18 @@ class ResultMessage(BaseMessage):
             if field not in v:
                 raise ValueError(f"Payload missing required field: {field}")
 
-        if v['status'] not in ['SUCCESS', 'FAILED', 'CIRCUIT_OPEN']:
+        if v['status'] not in ['success', 'failed', 'circuit_broken']:
             raise ValueError(f"Invalid status: {v['status']}")
 
         return v
 
     def is_success(self) -> bool:
         """Vérifie si le résultat est un succès."""
-        return self.payload.get('status') == 'SUCCESS'
+        return self.payload.get('status') == 'success'
 
     def is_failure(self) -> bool:
         """Vérifie si le résultat est un échec."""
-        return self.payload.get('status') in ['FAILED', 'CIRCUIT_OPEN']
+        return self.payload.get('status') in ['failed', 'circuit_broken']
 
     def get_result(self) -> Optional[Dict[str, Any]]:
         """Retourne le résultat si succès."""
@@ -829,7 +829,7 @@ class MessageFactory:
             sender: ID de l'expéditeur
             recipient: ID du destinataire
             task_id: ID de la tâche
-            status: SUCCESS, FAILED, ou CIRCUIT_OPEN
+            status: success, failed, ou circuit_broken
             result: Résultat (si succès)
             error: Message d'erreur (si échec)
             correlation_id: ID de corrélation
