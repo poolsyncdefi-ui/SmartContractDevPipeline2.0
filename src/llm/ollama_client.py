@@ -5,6 +5,8 @@
 # Description: Client Ollama pour l'exécution de modèles LLM locaux.
 #              Support de génération, embeddings, streaming, health checks,
 #              cache des embeddings et métriques avancées.
+#              Version refactorisée avec cache intelligent, logger structuré
+#              et système de retry adaptatif.
 # ==============================================================================
 
 import httpx
@@ -18,6 +20,9 @@ import logging
 from src.llm.llm_client import LLMClient
 from src.config.settings import settings
 from src.core.exceptions import LLMConnectionError, LLMResponseError, LLMError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 
 # ==============================================================================
 # LOGGING
@@ -39,7 +44,7 @@ class OllamaClient(LLMClient):
     - Embeddings (embed)
     - Streaming (generate_stream)
     - Health checks
-    - Cache des embeddings
+    - Cache intelligent des embeddings
     - Métriques avancées
     - Gestion des modèles
     """
@@ -55,6 +60,7 @@ class OllamaClient(LLMClient):
         max_retries: int = 3,
         cache_embeddings: bool = True,
         cache_ttl: int = 3600,
+        cache_strategy: CacheStrategy = CacheStrategy.ADAPTIVE,
         **kwargs
     ):
         """
@@ -70,6 +76,7 @@ class OllamaClient(LLMClient):
             max_retries: Nombre maximum de tentatives
             cache_embeddings: Activer le cache des embeddings
             cache_ttl: Durée de vie du cache en secondes
+            cache_strategy: Stratégie de cache
         """
         # Valeurs par défaut sécurisées avec getattr
         if hasattr(settings, 'llm'):
@@ -85,7 +92,10 @@ class OllamaClient(LLMClient):
             model=model or default_model,
             temperature=temperature,
             timeout=timeout,
-            provider="ollama"
+            provider="ollama",
+            cache_enabled=cache_embeddings,
+            cache_ttl=cache_ttl,
+            cache_strategy=cache_strategy
         )
         
         self.base_url = base_url or ollama_url_default
@@ -99,8 +109,36 @@ class OllamaClient(LLMClient):
         self._client: Optional[httpx.AsyncClient] = None
         self._initialized = False
         
-        # Cache des embeddings
-        self._embedding_cache: Dict[str, Dict[str, Any]] = {}
+        # Cache intelligent pour les embeddings
+        self._embedding_cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=2000,
+            strategy=cache_strategy,
+            enable_metrics=True
+        )
+        if cache_embeddings:
+            self._embedding_cache.start()
+        
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name="OllamaClient",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(
+            base_url=base_url or ollama_url_default,
+            model=model or default_model,
+            embedding_model=embedding_model or embedding_model_default
+        )
+        
+        # Système de retry adaptatif pour les appels HTTP
+        self._http_retry = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=30.0,
+            max_retries=max_retries,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(httpx.TimeoutException, httpx.ConnectError)
+        )
         
         # Métriques avancées
         self._metrics = {
@@ -144,11 +182,13 @@ class OllamaClient(LLMClient):
         )
         self._initialized = True
         
+        self._logger.log_debug("HTTP client initialized", "http_client_initialized")
+        
         # Mettre à jour les modèles disponibles (ne pas bloquer si échec)
         try:
             await self._update_models_available()
         except Exception as e:
-            logger.warning(f"Could not update models list: {str(e)}")
+            self._logger.log_warning(f"Could not update models list: {str(e)}", "models_update_failed")
     
     async def _update_models_available(self) -> None:
         """
@@ -157,8 +197,9 @@ class OllamaClient(LLMClient):
         try:
             models = await self.list_models()
             self._metrics["models_available"] = models
+            self._logger.log_debug(f"Models available: {len(models)}", "models_updated")
         except Exception as e:
-            logger.warning(f"Failed to update models list: {str(e)}")
+            self._logger.log_warning(f"Failed to update models list: {str(e)}", "models_update_failed")
     
     async def _request(
         self,
@@ -188,56 +229,71 @@ class OllamaClient(LLMClient):
         url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
         start_time = datetime.now(timezone.utc)
         
-        for attempt in range(self.max_retries if retry_on_failure else 1):
-            try:
-                if method.upper() == "GET":
-                    response = await self._client.get(url)
-                else:
-                    response = await self._client.post(url, json=data)
-                
-                response.raise_for_status()
-                
-                # Mettre à jour les métriques
-                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-                self._update_metrics(endpoint, duration, success=True)
-                
-                return response.json()
-                
-            except httpx.TimeoutException as e:
-                if attempt < self.max_retries - 1 and retry_on_failure:
-                    wait_time = 2 ** (attempt + 1)
-                    logger.warning(f"Request timed out, retrying in {wait_time}s (attempt {attempt + 1}/{self.max_retries})")
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise LLMConnectionError(
-                    url=self.base_url,
-                    message=f"Request timed out: {str(e)}"
-                )
-            except httpx.ConnectError as e:
-                if attempt < self.max_retries - 1 and retry_on_failure:
-                    wait_time = 2 ** (attempt + 1)
-                    logger.warning(f"Connection failed, retrying in {wait_time}s (attempt {attempt + 1}/{self.max_retries})")
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise LLMConnectionError(
-                    url=self.base_url,
-                    message=f"Connection failed: {str(e)}"
-                )
-            except httpx.HTTPStatusError as e:
-                self._metrics["total_errors"] += 1
-                raise LLMResponseError(
-                    message=f"HTTP {e.response.status_code}: {e.response.text[:200]}"
-                )
-            except Exception as e:
-                self._metrics["total_errors"] += 1
-                if attempt < self.max_retries - 1 and retry_on_failure:
-                    wait_time = 2 ** (attempt + 1)
-                    logger.warning(f"Request failed, retrying in {wait_time}s (attempt {attempt + 1}/{self.max_retries})")
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise LLMError(f"Ollama request failed: {str(e)}")
+        async def _do_request():
+            if method.upper() == "GET":
+                response = await self._client.get(url)
+            else:
+                response = await self._client.post(url, json=data)
+            
+            response.raise_for_status()
+            return response.json()
         
-        raise LLMError(f"Request failed after {self.max_retries} attempts")
+        try:
+            if retry_on_failure:
+                result = await self._http_retry.execute_with_retry(_do_request)
+            else:
+                result = await _do_request()
+            
+            # Mettre à jour les métriques
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            self._update_metrics(endpoint, duration, success=True)
+            
+            return result
+            
+        except httpx.TimeoutException as e:
+            self._metrics["total_errors"] += 1
+            self._logger.log_error(
+                f"Request timed out: {str(e)}",
+                e,
+                "request_timeout",
+                endpoint=endpoint
+            )
+            raise LLMConnectionError(
+                url=self.base_url,
+                message=f"Request timed out: {str(e)}"
+            )
+        except httpx.ConnectError as e:
+            self._metrics["total_errors"] += 1
+            self._logger.log_error(
+                f"Connection failed: {str(e)}",
+                e,
+                "connection_failed",
+                endpoint=endpoint
+            )
+            raise LLMConnectionError(
+                url=self.base_url,
+                message=f"Connection failed: {str(e)}"
+            )
+        except httpx.HTTPStatusError as e:
+            self._metrics["total_errors"] += 1
+            self._logger.log_error(
+                f"HTTP error {e.response.status_code}: {e.response.text[:200]}",
+                e,
+                "http_error",
+                status_code=e.response.status_code
+            )
+            raise LLMResponseError(
+                message=f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            )
+        except Exception as e:
+            self._metrics["total_errors"] += 1
+            self._logger.log_error(
+                f"Request failed: {str(e)}",
+                e,
+                "request_failed",
+                endpoint=endpoint
+            )
+            raise LLMError(f"Ollama request failed: {str(e)}")
     
     def _update_metrics(self, endpoint: str, duration: float, success: bool) -> None:
         """
@@ -335,7 +391,11 @@ class OllamaClient(LLMClient):
             data["options"] = options
         
         try:
-            logger.debug(f"Sending generation request to {self.model}")
+            self._logger.log_debug(
+                f"Sending generation request to {self.model}",
+                "generation_request",
+                prompt_length=len(prompt)
+            )
             response = await self._request("api/generate", data)
             
             if "response" not in response:
@@ -344,13 +404,26 @@ class OllamaClient(LLMClient):
                     response_preview=json.dumps(response)[:200]
                 )
             
-            return response["response"].strip()
+            result = response["response"].strip()
+            
+            self._logger.log_debug(
+                f"Generation completed",
+                "generation_completed",
+                response_length=len(result)
+            )
+            
+            return result
             
         except LLMConnectionError:
             raise
         except LLMResponseError:
             raise
         except Exception as e:
+            self._logger.log_error(
+                f"Generation failed: {str(e)}",
+                e,
+                "generation_failed"
+            )
             raise LLMError(f"Generation failed: {str(e)}")
     
     async def generate_stream(
@@ -396,6 +469,12 @@ class OllamaClient(LLMClient):
         url = f"{self.base_url.rstrip('/')}/api/generate"
         
         try:
+            self._logger.log_debug(
+                f"Starting streaming generation",
+                "stream_generation_start",
+                prompt_length=len(prompt)
+            )
+            
             async with self._client.stream("POST", url, json=data) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
@@ -408,16 +487,24 @@ class OllamaClient(LLMClient):
                                 break
                         except json.JSONDecodeError:
                             continue
+            
+            self._logger.log_debug("Streaming generation completed", "stream_generation_completed")
+            
         except Exception as e:
+            self._logger.log_error(
+                f"Streaming generation failed: {str(e)}",
+                e,
+                "stream_generation_failed"
+            )
             raise LLMError(f"Streaming generation failed: {str(e)}")
     
     # ==========================================================================
-    # EMBEDDINGS AVEC CACHE
+    # EMBEDDINGS AVEC CACHE INTELLIGENT
     # ==========================================================================
     
     async def embed(self, text: str, use_cache: bool = True) -> List[float]:
         """
-        Génère un embedding pour un texte avec cache.
+        Génère un embedding pour un texte avec cache intelligent.
         
         Args:
             text: Texte à encoder
@@ -426,17 +513,14 @@ class OllamaClient(LLMClient):
         Returns:
             List[float]: Embedding vectoriel
         """
-        now_utc = datetime.now(timezone.utc)
+        # Vérification du cache intelligent
         if use_cache and self.cache_embeddings:
             cache_key = hashlib.md5(text.encode()).hexdigest()
-            if cache_key in self._embedding_cache:
-                cache_entry = self._embedding_cache[cache_key]
-                if (now_utc - cache_entry["timestamp"]).total_seconds() < self.cache_ttl:
-                    self._metrics["total_cache_hits"] += 1
-                    logger.debug(f"Embedding cache hit for key: {cache_key[:8]}")
-                    return cache_entry["embedding"]
-                else:
-                    del self._embedding_cache[cache_key]
+            cached_embedding = await self._embedding_cache.get(cache_key)
+            if cached_embedding is not None:
+                self._metrics["total_cache_hits"] += 1
+                self._logger.log_debug(f"Embedding cache hit for key: {cache_key[:8]}", "embedding_cache_hit")
+                return cached_embedding
         
         self._metrics["total_cache_misses"] += 1
         
@@ -456,18 +540,26 @@ class OllamaClient(LLMClient):
             
             embedding = response["embedding"]
             
+            # Mise en cache intelligent
             if use_cache and self.cache_embeddings:
                 cache_key = hashlib.md5(text.encode()).hexdigest()
-                self._embedding_cache[cache_key] = {
-                    "embedding": embedding,
-                    "timestamp": datetime.now(timezone.utc),
-                    "text": text[:100]
-                }
-                logger.debug(f"Embedding cached with key: {cache_key[:8]}")
+                await self._embedding_cache.set(
+                    cache_key,
+                    embedding,
+                    ttl=self.cache_ttl,
+                    tags=["embedding"]
+                )
+                self._logger.log_debug(f"Embedding cached with key: {cache_key[:8]}", "embedding_cached")
             
             return embedding
             
         except Exception as e:
+            self._logger.log_error(
+                f"Embedding generation failed: {str(e)}",
+                e,
+                "embedding_failed",
+                text_length=len(text)
+            )
             raise LLMError(f"Embedding generation failed: {str(e)}")
     
     async def embed_batch(self, texts: List[str], use_cache: bool = True) -> List[List[float]]:
@@ -491,10 +583,12 @@ class OllamaClient(LLMClient):
         Returns:
             int: Nombre d'entrées supprimées
         """
-        count = len(self._embedding_cache)
-        self._embedding_cache.clear()
-        logger.info(f"Cleared {count} cached embeddings")
-        return count
+        cache_metrics = self._embedding_cache.get_metrics()
+        cache_size = cache_metrics.get("total_entries", 0)
+        await self._embedding_cache.clear()
+        self._logger.log_info(f"Cleared {cache_size} cached embeddings", "embedding_cache_cleared")
+        logger.info(f"Cleared {cache_size} cached embeddings")
+        return cache_size
     
     def get_embedding_cache_stats(self) -> Dict[str, Any]:
         """
@@ -503,13 +597,15 @@ class OllamaClient(LLMClient):
         Returns:
             Dict[str, Any]: Statistiques du cache
         """
+        cache_metrics = self._embedding_cache.get_metrics()
+        
         total_hits = self._metrics["total_cache_hits"]
         total_misses = self._metrics["total_cache_misses"]
         total_requests = total_hits + total_misses
         hit_rate = (total_hits / total_requests) if total_requests > 0 else 0.0
         
         return {
-            "total_cached": len(self._embedding_cache),
+            "cache_metrics": cache_metrics,
             "cache_hits": total_hits,
             "cache_misses": total_misses,
             "hit_rate": hit_rate,
@@ -530,9 +626,17 @@ class OllamaClient(LLMClient):
         try:
             await self._ensure_client()
             response = await self._client.get(f"{self.base_url.rstrip('/')}/api/tags")
-            return response.status_code == 200
+            is_healthy = response.status_code == 200
+            
+            self._logger.log_debug(
+                f"Health check: {'healthy' if is_healthy else 'unhealthy'}",
+                "health_check",
+                status_code=response.status_code
+            )
+            
+            return is_healthy
         except Exception as e:
-            logger.warning(f"Health check failed: {str(e)}")
+            self._logger.log_warning(f"Health check failed: {str(e)}", "health_check_failed")
             return False
     
     async def health_check_detailed(self) -> Dict[str, Any]:
@@ -568,6 +672,11 @@ class OllamaClient(LLMClient):
         except Exception as e:
             result["status"] = "unhealthy"
             result["error"] = str(e)
+            self._logger.log_error(
+                f"Detailed health check failed: {str(e)}",
+                e,
+                "detailed_health_check_failed"
+            )
         
         return result
     
@@ -587,7 +696,11 @@ class OllamaClient(LLMClient):
             models = response.get("models", [])
             return [model.get("name", "unknown") for model in models]
         except Exception as e:
-            logger.error(f"Failed to list models: {str(e)}")
+            self._logger.log_error(
+                f"Failed to list models: {str(e)}",
+                e,
+                "list_models_failed"
+            )
             return []
     
     async def get_model_info(self, model_name: str) -> Dict[str, Any]:
@@ -604,7 +717,12 @@ class OllamaClient(LLMClient):
             response = await self._request("api/show", {"name": model_name})
             return response
         except Exception as e:
-            logger.error(f"Failed to get model info for {model_name}: {str(e)}")
+            self._logger.log_error(
+                f"Failed to get model info for {model_name}: {str(e)}",
+                e,
+                "get_model_info_failed",
+                model_name=model_name
+            )
             return {}
     
     async def pull_model(
@@ -629,10 +747,17 @@ class OllamaClient(LLMClient):
         
         try:
             await self._request("api/pull", {"name": model_name})
+            self._logger.log_info(f"Model {model_name} pulled successfully", "model_pulled")
             logger.info(f"Model {model_name} pulled successfully")
             await self._update_models_available()
             return True
         except Exception as e:
+            self._logger.log_error(
+                f"Failed to pull model {model_name}: {str(e)}",
+                e,
+                "model_pull_failed",
+                model_name=model_name
+            )
             logger.error(f"Failed to pull model {model_name}: {str(e)}")
             return False
     
@@ -672,6 +797,12 @@ class OllamaClient(LLMClient):
                         except json.JSONDecodeError:
                             continue
         except Exception as e:
+            self._logger.log_error(
+                f"Model pull failed: {str(e)}",
+                e,
+                "model_pull_stream_failed",
+                model_name=model_name
+            )
             raise LLMError(f"Model pull failed: {str(e)}")
     
     async def delete_model(self, model_name: str) -> bool:
@@ -686,10 +817,17 @@ class OllamaClient(LLMClient):
         """
         try:
             await self._request("api/delete", {"name": model_name})
+            self._logger.log_info(f"Model {model_name} deleted successfully", "model_deleted")
             logger.info(f"Model {model_name} deleted successfully")
             await self._update_models_available()
             return True
         except Exception as e:
+            self._logger.log_error(
+                f"Failed to delete model {model_name}: {str(e)}",
+                e,
+                "model_delete_failed",
+                model_name=model_name
+            )
             logger.error(f"Failed to delete model {model_name}: {str(e)}")
             return False
     
@@ -704,6 +842,8 @@ class OllamaClient(LLMClient):
         Returns:
             Dict[str, Any]: Statistiques détaillées
         """
+        embedding_cache_stats = self.get_embedding_cache_stats()
+        
         return {
             "model": self.model,
             "embedding_model": self.embedding_model,
@@ -712,7 +852,7 @@ class OllamaClient(LLMClient):
             "request_count": self._request_count,
             "last_request": self._last_request_time.isoformat() if self._last_request_time else None,
             **self._metrics,
-            "embedding_cache": self.get_embedding_cache_stats(),
+            "embedding_cache": embedding_cache_stats,
             "is_connected": self._initialized,
             "base_url": self.base_url
         }
@@ -725,9 +865,13 @@ class OllamaClient(LLMClient):
         """
         Ferme le client HTTP.
         """
+        await self._embedding_cache.stop()
+        await super().close()
+        
         if self._client:
             await self._client.aclose()
             self._initialized = False
+            self._logger.log_debug("Ollama client closed", "client_closed")
             logger.debug("Ollama client closed")
     
     async def __aenter__(self):

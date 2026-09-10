@@ -5,6 +5,7 @@
 # Description: Routes API pour la gestion des projets.
 #              CRUD complet avec pagination, filtrage, tri et relations.
 #              Support des événements, WebSockets et recherche avancée.
+#              Version refactorisée avec logger structuré et horodatages timezone-aware.
 # ==============================================================================
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status as fastapi_status, BackgroundTasks
@@ -37,6 +38,9 @@ from src.api.schemas.responses import (
 )
 from src.api.websockets.notifier import manager
 from src.core.exceptions import PipelineError, ValidationError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.status_manager import normalize_status, status_manager
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 
 # ==============================================================================
 # CONFIGURATION
@@ -44,6 +48,94 @@ from src.core.exceptions import PipelineError, ValidationError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["projects"])
+
+# Logger structuré pour le router
+_router_logger = StructuredLogger(
+    component_name="ProjectsRouter",
+    log_level=LogLevel.INFO
+)
+
+# Système de retry pour les opérations BDD
+_db_retry = AdaptiveRetry(
+    base_delay=0.5,
+    max_delay=5.0,
+    max_retries=3,
+    strategy=RetryStrategy.EXPONENTIAL,
+    jitter=True
+)
+
+
+# ==============================================================================
+# UTILITAIRES
+# ==============================================================================
+
+def _build_project_summary(p) -> ProjectSummaryResponse:
+    """
+    Construit un résumé de projet à partir d'un modèle ORM.
+    
+    Args:
+        p: Modèle ORM ProjectModel
+        
+    Returns:
+        ProjectSummaryResponse: Résumé du projet
+    """
+    return ProjectSummaryResponse(
+        id=p.id,
+        name=p.name,
+        status=p.status.value if p.status else "CREATED",
+        priority=p.priority.value if p.priority else "medium",
+        category=p.category.value if p.category else "other",
+        chain=p.chain.value if p.chain else "ethereum",
+        task_count=p.task_count or 0,
+        completed_task_count=p.completed_task_count or 0,
+        failed_task_count=p.failed_task_count or 0,
+        completion_rate=p.completion_rate if hasattr(p, 'completion_rate') else 0.0,
+        security_score=p.security_score or 0,
+        quality_score=p.quality_score or 0,
+        created_at=p.created_at.isoformat() if p.created_at else "",
+        tags=p.get_tags() if hasattr(p, 'get_tags') else [],
+        is_active=p.is_active if hasattr(p, 'is_active') else True
+    )
+
+
+def _build_project_detail(p) -> ProjectDetailResponse:
+    """
+    Construit un détail de projet à partir d'un modèle ORM.
+    
+    Args:
+        p: Modèle ORM ProjectModel
+        
+    Returns:
+        ProjectDetailResponse: Détail du projet
+    """
+    return ProjectDetailResponse(
+        id=p.id,
+        name=p.name,
+        status=p.status.value if p.status else "CREATED",
+        priority=p.priority.value if p.priority else "medium",
+        category=p.category.value if p.category else "other",
+        chain=p.chain.value if p.chain else "ethereum",
+        task_count=p.task_count or 0,
+        completed_task_count=p.completed_task_count or 0,
+        failed_task_count=p.failed_task_count or 0,
+        completion_rate=p.completion_rate if hasattr(p, 'completion_rate') else 0.0,
+        security_score=p.security_score or 0,
+        quality_score=p.quality_score or 0,
+        created_at=p.created_at.isoformat() if p.created_at else "",
+        tags=p.get_tags() if hasattr(p, 'get_tags') else [],
+        is_active=p.is_active if hasattr(p, 'is_active') else True,
+        description=p.description or "",
+        version=p.version or "1.0.0",
+        config=p.config or {},
+        metadata=p.metadata or {},
+        sprint_count=len(p.sprints) if p.sprints else 0,
+        updated_at=p.updated_at.isoformat() if p.updated_at else "",
+        started_at=p.started_at.isoformat() if p.started_at else None,
+        completed_at=p.completed_at.isoformat() if p.completed_at else None,
+        duration_days=p.duration_days if hasattr(p, 'duration_days') else None,
+        is_template=p.is_template or False,
+        is_public=p.is_public or False
+    )
 
 
 # ==============================================================================
@@ -71,6 +163,14 @@ async def list_projects(
     """
     Liste tous les projets avec pagination et filtres avancés.
     """
+    _router_logger.log_info(
+        "Listing projects",
+        "list_projects_start",
+        page=page,
+        page_size=page_size,
+        search=search
+    )
+    
     try:
         # Construction de la requête avec chargement des relations
         query = select(ProjectModel)
@@ -93,7 +193,9 @@ async def list_projects(
             filters.append(search_filter)
         
         if status:
-            filters.append(ProjectModel.status.in_(status))
+            # Normalisation des statuts pour la comparaison
+            normalized_statuses = [normalize_status(s).upper() for s in status]
+            filters.append(ProjectModel.status.in_(normalized_statuses))
         
         if chain:
             filters.append(ProjectModel.chain == chain)
@@ -133,34 +235,27 @@ async def list_projects(
         offset = (page - 1) * page_size
         query = query.offset(offset).limit(page_size)
         
-        # Exécution
-        result = await session.execute(query)
-        projects = result.scalars().all()
+        # Exécution avec retry
+        async def _execute_queries():
+            result = await session.execute(query)
+            projects = result.scalars().all()
+            
+            count_result = await session.execute(count_query)
+            total = count_result.scalar() or 0
+            
+            return projects, total
         
-        count_result = await session.execute(count_query)
-        total = count_result.scalar() or 0
+        projects, total = await _db_retry.execute_with_retry(_execute_queries)
         
         # Conversion
-        items = []
-        for p in projects:
-            summary = ProjectSummaryResponse(
-                id=p.id,
-                name=p.name,
-                status=p.status.value if p.status else "UNKNOWN",
-                priority=p.priority.value if p.priority else "medium",
-                category=p.category.value if p.category else "other",
-                chain=p.chain.value if p.chain else "ethereum",
-                task_count=p.task_count,
-                completed_task_count=p.completed_task_count,
-                failed_task_count=p.failed_task_count,
-                completion_rate=p.completion_rate,
-                security_score=p.security_score,
-                quality_score=p.quality_score,
-                created_at=p.created_at.isoformat() if p.created_at else "",
-                tags=p.get_tags(),
-                is_active=p.is_active
-            )
-            items.append(summary)
+        items = [_build_project_summary(p) for p in projects]
+        
+        _router_logger.log_info(
+            f"Listed {len(items)} projects",
+            "list_projects_completed",
+            total=total,
+            returned=len(items)
+        )
         
         return PaginatedResponse(
             items=items,
@@ -173,7 +268,11 @@ async def list_projects(
         )
         
     except Exception as e:
-        logger.error(f"Error listing projects: {str(e)}")
+        _router_logger.log_error(
+            f"Error listing projects: {str(e)}",
+            e,
+            "list_projects_failed"
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list projects: {str(e)}"
@@ -189,6 +288,12 @@ async def create_project(
     """
     Crée un nouveau projet.
     """
+    _router_logger.log_info(
+        f"Creating project: {request.name}",
+        "create_project_start",
+        project_name=request.name
+    )
+    
     try:
         # Création du projet
         project = ProjectModel(
@@ -214,14 +319,22 @@ async def create_project(
                     project.priority = ProjectPriority(spec_data["priority"])
                 if "category" in spec_data:
                     project.category = ProjectCategory(spec_data["category"])
-        except yaml.YAMLError:
-            pass
+        except yaml.YAMLError as e:
+            _router_logger.log_warning(
+                f"Failed to parse YAML spec: {str(e)}",
+                "yaml_parse_warning"
+            )
         
         session.add(project)
         await session.commit()
         await session.refresh(project)
         
-        logger.info(f"Project created: {project.id} - {project.name}")
+        _router_logger.log_info(
+            f"Project created: {project.id}",
+            "create_project_completed",
+            project_id=project.id,
+            project_name=project.name
+        )
         
         # Notification WebSocket
         background_tasks.add_task(
@@ -231,46 +344,26 @@ async def create_project(
             {"name": project.name, "action": "created"}
         )
         
-        # Construire la réponse
-        return ProjectDetailResponse(
-            id=project.id,
-            name=project.name,
-            status=project.status.value if project.status else "CREATED",
-            priority=project.priority.value if project.priority else "medium",
-            category=project.category.value if project.category else "other",
-            chain=project.chain.value if project.chain else "ethereum",
-            task_count=project.task_count,
-            completed_task_count=project.completed_task_count,
-            failed_task_count=project.failed_task_count,
-            completion_rate=project.completion_rate,
-            security_score=project.security_score,
-            quality_score=project.quality_score,
-            created_at=project.created_at.isoformat() if project.created_at else "",
-            tags=project.get_tags(),
-            is_active=project.is_active,
-            description=project.description,
-            version=project.version,
-            config=project.config,
-            metadata=project.metadata,
-            sprint_count=len(project.sprints) if project.sprints else 0,
-            updated_at=project.updated_at.isoformat() if project.updated_at else "",
-            started_at=project.started_at.isoformat() if project.started_at else None,
-            completed_at=project.completed_at.isoformat() if project.completed_at else None,
-            duration_days=project.duration_days,
-            is_template=project.is_template,
-            is_public=project.is_public
-        )
+        return _build_project_detail(project)
         
     except ValidationError as e:
         await session.rollback()
-        logger.error(f"Validation error creating project: {str(e)}")
+        _router_logger.log_error(
+            f"Validation error creating project: {str(e)}",
+            e,
+            "create_project_validation_failed"
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error creating project: {str(e)}")
+        _router_logger.log_error(
+            f"Error creating project: {str(e)}",
+            e,
+            "create_project_failed"
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create project: {str(e)}"
@@ -287,6 +380,12 @@ async def get_project(
     """
     Récupère un projet par son ID.
     """
+    _router_logger.log_debug(
+        f"Getting project: {project_id}",
+        "get_project_start",
+        project_id=project_id
+    )
+    
     try:
         query = select(ProjectModel).where(ProjectModel.id == project_id)
         query = query.options(selectinload(ProjectModel.sprints))
@@ -297,44 +396,27 @@ async def get_project(
         project = result.scalar_one_or_none()
         
         if not project:
+            _router_logger.log_warning(
+                f"Project not found: {project_id}",
+                "get_project_not_found",
+                project_id=project_id
+            )
             raise HTTPException(
                 status_code=fastapi_status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
         
-        return ProjectDetailResponse(
-            id=project.id,
-            name=project.name,
-            status=project.status.value if project.status else "CREATED",
-            priority=project.priority.value if project.priority else "medium",
-            category=project.category.value if project.category else "other",
-            chain=project.chain.value if project.chain else "ethereum",
-            task_count=project.task_count,
-            completed_task_count=project.completed_task_count,
-            failed_task_count=project.failed_task_count,
-            completion_rate=project.completion_rate,
-            security_score=project.security_score,
-            quality_score=project.quality_score,
-            created_at=project.created_at.isoformat() if project.created_at else "",
-            tags=project.get_tags(),
-            is_active=project.is_active,
-            description=project.description,
-            version=project.version,
-            config=project.config,
-            metadata=project.metadata,
-            sprint_count=len(project.sprints) if project.sprints else 0,
-            updated_at=project.updated_at.isoformat() if project.updated_at else "",
-            started_at=project.started_at.isoformat() if project.started_at else None,
-            completed_at=project.completed_at.isoformat() if project.completed_at else None,
-            duration_days=project.duration_days,
-            is_template=project.is_template,
-            is_public=project.is_public
-        )
+        return _build_project_detail(project)
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting project {project_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error getting project {project_id}: {str(e)}",
+            e,
+            "get_project_failed",
+            project_id=project_id
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get project: {str(e)}"
@@ -351,6 +433,12 @@ async def update_project(
     """
     Met à jour un projet existant.
     """
+    _router_logger.log_info(
+        f"Updating project: {project_id}",
+        "update_project_start",
+        project_id=project_id
+    )
+    
     try:
         result = await session.execute(
             select(ProjectModel)
@@ -401,7 +489,12 @@ async def update_project(
         await session.commit()
         await session.refresh(project)
         
-        logger.info(f"Project updated: {project.id} - {project.name}")
+        _router_logger.log_info(
+            f"Project updated: {project.id}",
+            "update_project_completed",
+            project_id=project.id,
+            changes=list(changes.keys())
+        )
         
         if old_status != project.status:
             background_tasks.add_task(
@@ -411,40 +504,18 @@ async def update_project(
                 {"old_status": old_status.value if old_status else None, "changes": changes}
             )
         
-        return ProjectDetailResponse(
-            id=project.id,
-            name=project.name,
-            status=project.status.value if project.status else "CREATED",
-            priority=project.priority.value if project.priority else "medium",
-            category=project.category.value if project.category else "other",
-            chain=project.chain.value if project.chain else "ethereum",
-            task_count=project.task_count,
-            completed_task_count=project.completed_task_count,
-            failed_task_count=project.failed_task_count,
-            completion_rate=project.completion_rate,
-            security_score=project.security_score,
-            quality_score=project.quality_score,
-            created_at=project.created_at.isoformat() if project.created_at else "",
-            tags=project.get_tags(),
-            is_active=project.is_active,
-            description=project.description,
-            version=project.version,
-            config=project.config,
-            metadata=project.metadata,
-            sprint_count=len(project.sprints) if project.sprints else 0,
-            updated_at=project.updated_at.isoformat() if project.updated_at else "",
-            started_at=project.started_at.isoformat() if project.started_at else None,
-            completed_at=project.completed_at.isoformat() if project.completed_at else None,
-            duration_days=project.duration_days,
-            is_template=project.is_template,
-            is_public=project.is_public
-        )
+        return _build_project_detail(project)
         
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error updating project {project_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error updating project {project_id}: {str(e)}",
+            e,
+            "update_project_failed",
+            project_id=project_id
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to update project: {str(e)}"
@@ -461,6 +532,13 @@ async def update_project_status(
     """
     Met à jour le statut d'un projet.
     """
+    _router_logger.log_info(
+        f"Updating project status: {project_id}",
+        "update_project_status_start",
+        project_id=project_id,
+        new_status=new_status.value
+    )
+    
     try:
         result = await session.execute(
             select(ProjectModel)
@@ -481,7 +559,13 @@ async def update_project_status(
         await session.commit()
         await session.refresh(project)
         
-        logger.info(f"Project status updated: {project.id} - {old_status} -> {new_status}")
+        _router_logger.log_info(
+            f"Project status updated: {project.id}",
+            "update_project_status_completed",
+            project_id=project.id,
+            old_status=old_status.value if old_status else None,
+            new_status=new_status.value
+        )
         
         background_tasks.add_task(
             manager.send_project_update,
@@ -490,40 +574,18 @@ async def update_project_status(
             {"old_status": old_status.value if old_status else None}
         )
         
-        return ProjectDetailResponse(
-            id=project.id,
-            name=project.name,
-            status=project.status.value if project.status else "CREATED",
-            priority=project.priority.value if project.priority else "medium",
-            category=project.category.value if project.category else "other",
-            chain=project.chain.value if project.chain else "ethereum",
-            task_count=project.task_count,
-            completed_task_count=project.completed_task_count,
-            failed_task_count=project.failed_task_count,
-            completion_rate=project.completion_rate,
-            security_score=project.security_score,
-            quality_score=project.quality_score,
-            created_at=project.created_at.isoformat() if project.created_at else "",
-            tags=project.get_tags(),
-            is_active=project.is_active,
-            description=project.description,
-            version=project.version,
-            config=project.config,
-            metadata=project.metadata,
-            sprint_count=len(project.sprints) if project.sprints else 0,
-            updated_at=project.updated_at.isoformat() if project.updated_at else "",
-            started_at=project.started_at.isoformat() if project.started_at else None,
-            completed_at=project.completed_at.isoformat() if project.completed_at else None,
-            duration_days=project.duration_days,
-            is_template=project.is_template,
-            is_public=project.is_public
-        )
+        return _build_project_detail(project)
         
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error updating project status {project_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error updating project status {project_id}: {str(e)}",
+            e,
+            "update_project_status_failed",
+            project_id=project_id
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update project status: {str(e)}"
@@ -539,6 +601,12 @@ async def delete_project(
     """
     Supprime un projet.
     """
+    _router_logger.log_info(
+        f"Deleting project: {project_id}",
+        "delete_project_start",
+        project_id=project_id
+    )
+    
     try:
         result = await session.execute(
             select(ProjectModel).where(ProjectModel.id == project_id)
@@ -556,7 +624,12 @@ async def delete_project(
         await session.delete(project)
         await session.commit()
         
-        logger.info(f"Project deleted: {project_id} - {project_name}")
+        _router_logger.log_info(
+            f"Project deleted: {project_id}",
+            "delete_project_completed",
+            project_id=project_id,
+            project_name=project_name
+        )
         
         background_tasks.add_task(
             manager.send_notification,
@@ -575,7 +648,12 @@ async def delete_project(
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error deleting project {project_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error deleting project {project_id}: {str(e)}",
+            e,
+            "delete_project_failed",
+            project_id=project_id
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete project: {str(e)}"
@@ -590,6 +668,12 @@ async def get_project_stats(
     """
     Récupère les statistiques d'un projet.
     """
+    _router_logger.log_debug(
+        f"Getting project stats: {project_id}",
+        "get_project_stats_start",
+        project_id=project_id
+    )
+    
     try:
         result = await session.execute(
             select(ProjectModel).where(ProjectModel.id == project_id)
@@ -602,12 +686,29 @@ async def get_project_stats(
                 detail=f"Project {project_id} not found"
             )
         
-        return project.get_statistics()
+        if hasattr(project, 'get_statistics'):
+            return project.get_statistics()
+        else:
+            return {
+                "project_id": project.id,
+                "name": project.name,
+                "task_count": project.task_count or 0,
+                "completed_task_count": project.completed_task_count or 0,
+                "failed_task_count": project.failed_task_count or 0,
+                "completion_rate": project.completion_rate if hasattr(project, 'completion_rate') else 0.0,
+                "security_score": project.security_score or 0,
+                "quality_score": project.quality_score or 0,
+            }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting project stats {project_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error getting project stats {project_id}: {str(e)}",
+            e,
+            "get_project_stats_failed",
+            project_id=project_id
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get project stats: {str(e)}"
@@ -624,6 +725,12 @@ async def search_projects(
     """
     Recherche avancée de projets par nom, description, tags et contenu YAML.
     """
+    _router_logger.log_info(
+        f"Searching projects: {query}",
+        "search_projects_start",
+        search_query=query
+    )
+    
     try:
         search_pattern = f"%{query}%"
         
@@ -654,26 +761,14 @@ async def search_projects(
         count_result = await session.execute(count_query)
         total = count_result.scalar() or 0
         
-        items = []
-        for p in projects:
-            summary = ProjectSummaryResponse(
-                id=p.id,
-                name=p.name,
-                status=p.status.value if p.status else "UNKNOWN",
-                priority=p.priority.value if p.priority else "medium",
-                category=p.category.value if p.category else "other",
-                chain=p.chain.value if p.chain else "ethereum",
-                task_count=p.task_count,
-                completed_task_count=p.completed_task_count,
-                failed_task_count=p.failed_task_count,
-                completion_rate=p.completion_rate,
-                security_score=p.security_score,
-                quality_score=p.quality_score,
-                created_at=p.created_at.isoformat() if p.created_at else "",
-                tags=p.get_tags(),
-                is_active=p.is_active
-            )
-            items.append(summary)
+        items = [_build_project_summary(p) for p in projects]
+        
+        _router_logger.log_info(
+            f"Search returned {len(items)} projects",
+            "search_projects_completed",
+            total=total,
+            returned=len(items)
+        )
         
         return PaginatedResponse(
             items=items,
@@ -686,7 +781,11 @@ async def search_projects(
         )
         
     except Exception as e:
-        logger.error(f"Error searching projects: {str(e)}")
+        _router_logger.log_error(
+            f"Error searching projects: {str(e)}",
+            e,
+            "search_projects_failed"
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to search projects: {str(e)}"
@@ -702,6 +801,12 @@ async def archive_project(
     """
     Archive un projet.
     """
+    _router_logger.log_info(
+        f"Archiving project: {project_id}",
+        "archive_project_start",
+        project_id=project_id
+    )
+    
     try:
         result = await session.execute(
             select(ProjectModel).where(ProjectModel.id == project_id)
@@ -725,7 +830,11 @@ async def archive_project(
         
         await session.commit()
         
-        logger.info(f"Project archived: {project_id}")
+        _router_logger.log_info(
+            f"Project archived: {project_id}",
+            "archive_project_completed",
+            project_id=project_id
+        )
         
         background_tasks.add_task(
             manager.send_notification,
@@ -744,7 +853,12 @@ async def archive_project(
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error archiving project {project_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error archiving project {project_id}: {str(e)}",
+            e,
+            "archive_project_failed",
+            project_id=project_id
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to archive project: {str(e)}"
@@ -760,6 +874,12 @@ async def unarchive_project(
     """
     Désarchive un projet.
     """
+    _router_logger.log_info(
+        f"Unarchiving project: {project_id}",
+        "unarchive_project_start",
+        project_id=project_id
+    )
+    
     try:
         result = await session.execute(
             select(ProjectModel).where(ProjectModel.id == project_id)
@@ -783,7 +903,11 @@ async def unarchive_project(
         
         await session.commit()
         
-        logger.info(f"Project unarchived: {project_id}")
+        _router_logger.log_info(
+            f"Project unarchived: {project_id}",
+            "unarchive_project_completed",
+            project_id=project_id
+        )
         
         background_tasks.add_task(
             manager.send_notification,
@@ -802,7 +926,12 @@ async def unarchive_project(
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error unarchiving project {project_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error unarchiving project {project_id}: {str(e)}",
+            e,
+            "unarchive_project_failed",
+            project_id=project_id
+        )
         raise HTTPException(
             status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to unarchive project: {str(e)}"

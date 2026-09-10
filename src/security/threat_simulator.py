@@ -18,6 +18,7 @@ Il supporte:
 
 Le ThreatSimulator est un composant du bouclier de securite multi-couches,
 operant au niveau 3 (simulation d'attaques).
+Version refactorisée avec logger structuré, retry adaptatif et horodatages timezone-aware.
 """
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone
@@ -34,6 +35,9 @@ from dataclasses import dataclass, field
 
 # Import des modules du pipeline
 from src.core.exceptions import PipelineError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
 
 # Tentative d'import des settings avec fallback
 try:
@@ -181,6 +185,9 @@ class ThreatSimulator:
         chain_id (int): ID de la chaine
         _anvil_port (int): Port pour Anvil
         _is_initialized (bool): Anvil est-il initialise ?
+        _logger (StructuredLogger): Logger structure
+        _cache (IntelligentCache): Cache intelligent
+        _retry_handler (AdaptiveRetry): Systeme de retry
     """
 
     def __init__(
@@ -188,7 +195,10 @@ class ThreatSimulator:
         project_path: str = ".",
         rpc_url: Optional[str] = None,
         fork_block_number: Optional[int] = None,
-        port: int = 8545
+        port: int = 8545,
+        cache_enabled: bool = True,
+        cache_ttl: int = 300,
+        max_retries: int = 3
     ):
         """
         Initialise le simulateur de menaces.
@@ -198,6 +208,9 @@ class ThreatSimulator:
             rpc_url: URL RPC pour le fork
             fork_block_number: Block number pour le fork
             port: Port pour Anvil (defaut: 8545)
+            cache_enabled: Activer le cache
+            cache_ttl: Duree de vie du cache en secondes
+            max_retries: Nombre maximum de tentatives
         """
         self.project_path = project_path
         self.rpc_url = rpc_url or getattr(settings, 'eth_rpc_url', "http://localhost:8545")
@@ -207,6 +220,38 @@ class ThreatSimulator:
         self._anvil_process: Optional[asyncio.subprocess.Process] = None
         self._is_initialized = False
         self._temp_dir: Optional[str] = None
+        self.max_retries = max_retries
+
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name="ThreatSimulator",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(
+            project_path=project_path,
+            port=port,
+            chain_id=self.chain_id
+        )
+
+        # Cache intelligent pour les résultats de simulation
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=100,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+
+        # Système de retry adaptatif pour les opérations Anvil/Forge
+        self._retry_handler = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=30.0,
+            max_retries=max_retries,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(subprocess.TimeoutExpired, PipelineError)
+        )
 
         # Statistiques
         self._stats = {
@@ -230,6 +275,7 @@ class ThreatSimulator:
             PipelineError: Si Anvil ne peut pas demarrer
         """
         if self._is_initialized:
+            self._logger.log_warning("Anvil already running", "anvil_already_running")
             logger.warning("Anvil already running")
             return
 
@@ -249,7 +295,14 @@ class ThreatSimulator:
                 cmd.extend(["--fork-block-number", str(self.fork_block_number)])
 
             # Demarrage d'Anvil (processus asynchrone)
+            self._logger.log_info(
+                f"Starting Anvil on port {self._port}",
+                "anvil_start",
+                port=self._port,
+                chain_id=self.chain_id
+            )
             logger.info(f"Starting Anvil on port {self._port}...")
+            
             self._anvil_process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -257,20 +310,41 @@ class ThreatSimulator:
                 stdin=asyncio.subprocess.DEVNULL
             )
 
-            # Attendre que Anvil soit pret (lecture de stdout)
+            # Attendre que Anvil soit pret
             await asyncio.sleep(2)
 
             # Verifier que le processus est toujours actif
             if self._anvil_process.returncode is not None:
                 _, stderr = await self._anvil_process.communicate()
-                raise PipelineError(f"Anvil failed to start: {stderr.decode('utf-8', errors='ignore')}")
+                error_msg = stderr.decode('utf-8', errors='ignore')
+                self._logger.log_error(
+                    f"Anvil failed to start: {error_msg}",
+                    None,
+                    "anvil_start_failed"
+                )
+                raise PipelineError(f"Anvil failed to start: {error_msg}")
 
             self._is_initialized = True
+            self._logger.log_info(
+                f"Anvil started on port {self._port}",
+                "anvil_started",
+                port=self._port
+            )
             logger.info(f"Anvil started on port {self._port}")
 
         except FileNotFoundError:
+            self._logger.log_error(
+                "Anvil not found. Please install Foundry.",
+                None,
+                "anvil_not_found"
+            )
             raise PipelineError("Anvil not found. Please install Foundry.")
         except Exception as e:
+            self._logger.log_error(
+                f"Failed to start Anvil: {str(e)}",
+                e,
+                "anvil_start_error"
+            )
             raise PipelineError(f"Failed to start Anvil: {str(e)}")
 
     async def stop_anvil(self) -> None:
@@ -281,11 +355,13 @@ class ThreatSimulator:
             try:
                 self._anvil_process.terminate()
                 await asyncio.wait_for(self._anvil_process.wait(), timeout=5.0)
+                self._logger.log_info("Anvil stopped", "anvil_stopped")
             except asyncio.TimeoutError:
                 self._anvil_process.kill()
                 await self._anvil_process.wait()
+                self._logger.log_warning("Anvil killed (timeout)", "anvil_killed")
             except Exception as e:
-                logger.warning(f"Error stopping Anvil: {str(e)}")
+                self._logger.log_warning(f"Error stopping Anvil: {str(e)}", "anvil_stop_error")
             self._anvil_process = None
             self._is_initialized = False
             logger.info("Anvil stopped")
@@ -318,6 +394,12 @@ class ThreatSimulator:
         Returns:
             Dict: Resultat de la simulation
         """
+        cache_key = f"flash_loan:{target_address}:{token_address}:{amount}"
+        cached = await self._cache.get(cache_key)
+        if cached is not None:
+            self._logger.log_debug("Flash loan cache hit", "cache_hit")
+            return cached
+
         await self._ensure_anvil()
 
         start_time = time.time()
@@ -325,6 +407,13 @@ class ThreatSimulator:
             attack_type=AttackType.FLASH_LOAN,
             vulnerable=False,
             severity=AttackSeverity.HIGH
+        )
+
+        self._logger.log_info(
+            f"Simulating flash loan attack on {target_address}",
+            "flash_loan_simulation_start",
+            target_address=target_address,
+            amount=amount
         )
 
         try:
@@ -350,14 +439,27 @@ class ThreatSimulator:
                 self._stats["vulnerable_found"] += 1
             self._stats["by_attack_type"]["flash_loan"] = self._stats["by_attack_type"].get("flash_loan", 0) + 1
 
-            logger.info(f"Flash loan simulation: {'VULNERABLE' if vulnerable else 'SECURE'}")
+            self._logger.log_info(
+                f"Flash loan simulation: {'VULNERABLE' if vulnerable else 'SECURE'}",
+                "flash_loan_simulation_completed",
+                vulnerable=vulnerable
+            )
+
+            # Mise en cache
+            result_dict = result.to_dict()
+            await self._cache.set(cache_key, result_dict, ttl=300, tags=["flash_loan"])
+            
+            return result_dict
 
         except Exception as e:
-            logger.error(f"Flash loan simulation failed: {str(e)}")
+            self._logger.log_error(
+                f"Flash loan simulation failed: {str(e)}",
+                e,
+                "flash_loan_simulation_failed"
+            )
             self._stats["errors"] += 1
             result.details["error"] = str(e)
-
-        return result.to_dict()
+            return result.to_dict()
 
     async def simulate_oracle_manipulation(
         self,
@@ -376,6 +478,12 @@ class ThreatSimulator:
         Returns:
             Dict: Resultat de la simulation
         """
+        cache_key = f"oracle_manipulation:{target_address}:{pair_address}:{price_impact}"
+        cached = await self._cache.get(cache_key)
+        if cached is not None:
+            self._logger.log_debug("Oracle manipulation cache hit", "cache_hit")
+            return cached
+
         await self._ensure_anvil()
 
         start_time = time.time()
@@ -383,6 +491,13 @@ class ThreatSimulator:
             attack_type=AttackType.ORACLE_MANIPULATION,
             vulnerable=False,
             severity=AttackSeverity.HIGH
+        )
+
+        self._logger.log_info(
+            f"Simulating oracle manipulation on {target_address}",
+            "oracle_manipulation_simulation_start",
+            target_address=target_address,
+            price_impact=price_impact
         )
 
         try:
@@ -409,14 +524,26 @@ class ThreatSimulator:
                 self._stats["vulnerable_found"] += 1
             self._stats["by_attack_type"]["oracle_manipulation"] = self._stats["by_attack_type"].get("oracle_manipulation", 0) + 1
 
-            logger.info(f"Oracle manipulation simulation: {'VULNERABLE' if vulnerable else 'SECURE'}")
+            self._logger.log_info(
+                f"Oracle manipulation simulation: {'VULNERABLE' if vulnerable else 'SECURE'}",
+                "oracle_manipulation_simulation_completed",
+                vulnerable=vulnerable
+            )
+
+            result_dict = result.to_dict()
+            await self._cache.set(cache_key, result_dict, ttl=300, tags=["oracle_manipulation"])
+            
+            return result_dict
 
         except Exception as e:
-            logger.error(f"Oracle manipulation simulation failed: {str(e)}")
+            self._logger.log_error(
+                f"Oracle manipulation simulation failed: {str(e)}",
+                e,
+                "oracle_manipulation_simulation_failed"
+            )
             self._stats["errors"] += 1
             result.details["error"] = str(e)
-
-        return result.to_dict()
+            return result.to_dict()
 
     async def simulate_mev_attack(
         self,
@@ -433,6 +560,12 @@ class ThreatSimulator:
         Returns:
             Dict: Resultat de la simulation
         """
+        cache_key = f"mev:{target_address}:{pool_address}"
+        cached = await self._cache.get(cache_key)
+        if cached is not None:
+            self._logger.log_debug("MEV cache hit", "cache_hit")
+            return cached
+
         await self._ensure_anvil()
 
         start_time = time.time()
@@ -440,6 +573,12 @@ class ThreatSimulator:
             attack_type=AttackType.MEV,
             vulnerable=False,
             severity=AttackSeverity.MEDIUM
+        )
+
+        self._logger.log_info(
+            f"Simulating MEV attack on {target_address}",
+            "mev_simulation_start",
+            target_address=target_address
         )
 
         try:
@@ -464,14 +603,26 @@ class ThreatSimulator:
                 self._stats["vulnerable_found"] += 1
             self._stats["by_attack_type"]["mev"] = self._stats["by_attack_type"].get("mev", 0) + 1
 
-            logger.info(f"MEV simulation: {'VULNERABLE' if vulnerable else 'SECURE'}")
+            self._logger.log_info(
+                f"MEV simulation: {'VULNERABLE' if vulnerable else 'SECURE'}",
+                "mev_simulation_completed",
+                vulnerable=vulnerable
+            )
+
+            result_dict = result.to_dict()
+            await self._cache.set(cache_key, result_dict, ttl=300, tags=["mev"])
+            
+            return result_dict
 
         except Exception as e:
-            logger.error(f"MEV simulation failed: {str(e)}")
+            self._logger.log_error(
+                f"MEV simulation failed: {str(e)}",
+                e,
+                "mev_simulation_failed"
+            )
             self._stats["errors"] += 1
             result.details["error"] = str(e)
-
-        return result.to_dict()
+            return result.to_dict()
 
     async def simulate_reentrancy_attack(
         self,
@@ -488,6 +639,12 @@ class ThreatSimulator:
         Returns:
             Dict: Resultat de la simulation
         """
+        cache_key = f"reentrancy:{target_address}:{amount}"
+        cached = await self._cache.get(cache_key)
+        if cached is not None:
+            self._logger.log_debug("Reentrancy cache hit", "cache_hit")
+            return cached
+
         await self._ensure_anvil()
 
         start_time = time.time()
@@ -495,6 +652,13 @@ class ThreatSimulator:
             attack_type=AttackType.REENTRANCY,
             vulnerable=False,
             severity=AttackSeverity.CRITICAL
+        )
+
+        self._logger.log_info(
+            f"Simulating reentrancy attack on {target_address}",
+            "reentrancy_simulation_start",
+            target_address=target_address,
+            amount=amount
         )
 
         try:
@@ -519,14 +683,26 @@ class ThreatSimulator:
                 self._stats["vulnerable_found"] += 1
             self._stats["by_attack_type"]["reentrancy"] = self._stats["by_attack_type"].get("reentrancy", 0) + 1
 
-            logger.info(f"Reentrancy simulation: {'VULNERABLE' if vulnerable else 'SECURE'}")
+            self._logger.log_info(
+                f"Reentrancy simulation: {'VULNERABLE' if vulnerable else 'SECURE'}",
+                "reentrancy_simulation_completed",
+                vulnerable=vulnerable
+            )
+
+            result_dict = result.to_dict()
+            await self._cache.set(cache_key, result_dict, ttl=300, tags=["reentrancy"])
+            
+            return result_dict
 
         except Exception as e:
-            logger.error(f"Reentrancy simulation failed: {str(e)}")
+            self._logger.log_error(
+                f"Reentrancy simulation failed: {str(e)}",
+                e,
+                "reentrancy_simulation_failed"
+            )
             self._stats["errors"] += 1
             result.details["error"] = str(e)
-
-        return result.to_dict()
+            return result.to_dict()
 
     async def run_full_threat_suite(self, target_address: str) -> ThreatReport:
         """
@@ -538,6 +714,11 @@ class ThreatSimulator:
         Returns:
             ThreatReport: Rapport complet
         """
+        self._logger.log_info(
+            f"Running full threat suite on {target_address}",
+            "threat_suite_start",
+            target_address=target_address
+        )
         logger.info(f"Running full threat suite on {target_address}")
 
         report = ThreatReport(
@@ -558,7 +739,11 @@ class ThreatSimulator:
 
         for result in results:
             if isinstance(result, Exception):
-                logger.error(f"Attack simulation failed: {str(result)}")
+                self._logger.log_error(
+                    f"Attack simulation failed: {str(result)}",
+                    result,
+                    "attack_simulation_error"
+                )
                 continue
 
             # Convertir en AttackResult
@@ -601,6 +786,13 @@ class ThreatSimulator:
         else:
             report.recommendations.append("No vulnerabilities found. Contract is secure.")
 
+        self._logger.log_info(
+            f"Threat suite completed: {report.vulnerable_count} vulnerabilities found",
+            "threat_suite_completed",
+            vulnerable_count=report.vulnerable_count,
+            total_attacks=report.total_attacks,
+            passed=report.passed
+        )
         logger.info(f"Threat suite completed: {report.vulnerable_count} vulnerabilities found")
 
         return report
@@ -639,29 +831,49 @@ class ThreatSimulator:
             "--skip-simulation"
         ]
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self.project_path
+        self._logger.log_debug(
+            "Running forge script",
+            "forge_script_start",
+            script_path=script_path
         )
 
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=60.0
+        async def _execute():
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.project_path
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            raise PipelineError("Forge script execution timed out (60s)")
 
-        output = stdout.decode('utf-8', errors='ignore')
-        stderr_text = stderr.decode('utf-8', errors='ignore')
-        if process.returncode != 0:
-            logger.warning(f"Forge script returned non-zero: {stderr_text}")
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=60.0
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                raise PipelineError("Forge script execution timed out (60s)")
 
-        return output + stderr_text
+            output = stdout.decode('utf-8', errors='ignore')
+            stderr_text = stderr.decode('utf-8', errors='ignore')
+            if process.returncode != 0:
+                self._logger.log_warning(
+                    f"Forge script returned non-zero: {stderr_text[:200]}",
+                    "forge_script_warning"
+                )
+
+            return output + stderr_text
+
+        try:
+            return await self._retry_handler.execute_with_retry(_execute)
+        except Exception as e:
+            self._logger.log_error(
+                f"Forge script execution failed: {str(e)}",
+                e,
+                "forge_script_failed"
+            )
+            raise
 
     def _build_flash_loan_script(self, target: str, token: str, amount: int) -> str:
         """Construit le script de simulation de flash loan."""
@@ -788,13 +1000,29 @@ contract ReentrancySimulation is Script {{
         Returns:
             Dict: Statistiques
         """
+        cache_metrics = self._cache.get_metrics()
+        
         return {
             **self._stats,
             "is_initialized": self._is_initialized,
             "port": self._port,
             "chain_id": self.chain_id,
-            "rpc_url": self.rpc_url[:30] + "..." if self.rpc_url else None
+            "rpc_url": self.rpc_url[:30] + "..." if self.rpc_url else None,
+            "cache_metrics": cache_metrics
         }
+
+    async def clear_cache(self) -> int:
+        """
+        Vide le cache.
+
+        Returns:
+            int: Nombre d'entrées supprimées
+        """
+        cache_metrics = self._cache.get_metrics()
+        cache_size = cache_metrics.get("total_entries", 0)
+        await self._cache.clear()
+        self._logger.log_info(f"Cache cleared ({cache_size} entries)", "cache_cleared")
+        return cache_size
 
     # =========================================================================
     # NETTOYAGE
@@ -805,12 +1033,14 @@ contract ReentrancySimulation is Script {{
         Nettoie les ressources.
         """
         await self.stop_anvil()
+        await self._cache.stop()
 
         if self._temp_dir:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, shutil.rmtree, self._temp_dir, True)
             self._temp_dir = None
 
+        self._logger.log_info("ThreatSimulator cleaned up", "cleanup_completed")
         logger.info("ThreatSimulator cleaned up")
 
     # =========================================================================
@@ -832,5 +1062,6 @@ contract ReentrancySimulation is Script {{
             "chain_id": self.chain_id,
             "initialized": self._is_initialized,
             "rpc_url": self.rpc_url[:30] + "..." if self.rpc_url else None,
-            "stats": self._stats
+            "stats": self._stats,
+            "cache_metrics": self._cache.get_metrics()
         }

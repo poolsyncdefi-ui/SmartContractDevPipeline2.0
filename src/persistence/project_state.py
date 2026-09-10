@@ -16,6 +16,7 @@ des projets, sprints et resultats de taches. Il supporte:
 
 Le ProjectState est utilise par le WorkflowEngine et les agents
 pour persister l'etat des executions.
+Version refactorisée avec intégration des nouveaux modules système.
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_, func, desc
@@ -31,11 +32,18 @@ from src.persistence.models_orm import (
     ProjectModel,
     TaskModel,
     ExecutionLogModel,
-    SkillRecordModel
+    SkillRecordModel,
+    Sprint,
+    TaskResult as ORMTaskResult,
+    Artifact as ORMArtifact
 )
 # Modèles Pydantic pour les DTO
 from src.core.models import Sprint as SprintDTO, TaskResult as TaskResultDTO
 from src.core.exceptions import PipelineError
+from src.core.status_manager import StatusManager, normalize_status, status_manager
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
@@ -43,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 def handle_db_errors(func):
     """
-    Decorateur pour la gestion des erreurs BDD.
+    Decorateur pour la gestion des erreurs BDD avec logging structuré.
     """
     @wraps(func)
     async def wrapper(*args, **kwargs):
@@ -74,15 +82,17 @@ class ProjectState:
     Attributes:
         session (AsyncSession): Session SQLAlchemy
         cache_enabled (bool): Activer la mise en cache
-        _cache (Dict): Cache des donnees
-        _cache_ttl (int): Duree de vie du cache (secondes)
+        _cache (IntelligentCache): Cache intelligent
+        _logger (StructuredLogger): Logger structuré
+        _retry_handler (AdaptiveRetry): Système de retry
     """
 
     def __init__(
         self,
         session: AsyncSession,
         cache_enabled: bool = True,
-        cache_ttl: int = 60
+        cache_ttl: int = 60,
+        max_retries: int = 3
     ):
         """
         Initialise le gestionnaire d'etat.
@@ -91,13 +101,38 @@ class ProjectState:
             session: Session SQLAlchemy
             cache_enabled: Activer la mise en cache (defaut: True)
             cache_ttl: Duree de vie du cache en secondes (defaut: 60)
+            max_retries: Nombre maximum de tentatives (defaut: 3)
         """
         self.session = session
         self.cache_enabled = cache_enabled
         self.cache_ttl = cache_ttl
-        self._cache: Dict[str, Any] = {}
-        self._cache_timestamps: Dict[str, datetime] = {}
         
+        # Cache intelligent (remplace le cache naïf)
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=1000,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+        
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name="ProjectState",
+            log_level=LogLevel.INFO
+        )
+        
+        # Système de retry adaptatif pour les opérations BDD
+        self._retry_handler = AdaptiveRetry(
+            base_delay=0.5,
+            max_delay=10.0,
+            max_retries=max_retries,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(SQLAlchemyError,)
+        )
+
         # Stores d'instance isolés (correction du bug des attributs de classe mutables partagés)
         self._sprint_store: Dict[str, dict] = {}
         self._result_store: Dict[str, dict] = {}
@@ -116,38 +151,37 @@ class ProjectState:
     # GESTION DU CACHE
     # =========================================================================
 
-    def _get_cache_key(self, prefix: str, **kwargs) -> str:
+    def _invalidate_cache(self, prefix: Optional[str] = None) -> None:
         """
-        Genere une cle de cache.
+        Invalide le cache de manière robuste.
 
         Args:
-            prefix: Prefixe de la cle
-            **kwargs: Parametres de la cle
-
-        Returns:
-            str: Cle de cache
+            prefix: Prefixe ou terme des cles a invalider (optionnel)
         """
-        key_parts = [prefix]
-        for k, v in sorted(kwargs.items()):
-            key_parts.append(f"{k}:{v}")
-        return ":".join(key_parts)
+        if prefix is None:
+            # Utiliser la méthode synchrone du cache
+            keys_to_remove = list(self._cache._cache.keys())
+            for key in keys_to_remove:
+                del self._cache._cache[key]
+                if key in self._cache._metrics.by_tag:
+                    del self._cache._metrics.by_tag[key]
+        else:
+            # Correction du bug d'invalidation rigide : correspondance par début ou inclusion de sous-chaîne
+            keys_to_remove = [
+                k for k in self._cache._cache.keys()
+                if k.startswith(prefix) or prefix in k
+            ]
+            for key in keys_to_remove:
+                del self._cache._cache[key]
+                if key in self._cache._metrics.by_tag:
+                    del self._cache._metrics.by_tag[key]
+        
+        self._logger.log_debug(
+            f"Cache invalidated for prefix: {prefix or 'all'}",
+            "cache_invalidation"
+        )
 
-    def _is_cache_valid(self, cache_key: str) -> bool:
-        """
-        Verifie si une entree de cache est valide.
-
-        Args:
-            cache_key: Cle de cache
-
-        Returns:
-            bool: True si valide
-        """
-        if cache_key not in self._cache_timestamps:
-            return False
-        age = (datetime.now(timezone.utc) - self._cache_timestamps[cache_key]).total_seconds()
-        return age < self.cache_ttl
-
-    def _get_from_cache(self, cache_key: str) -> Optional[Any]:
+    async def _get_from_cache(self, cache_key: str) -> Optional[Any]:
         """
         Recupere une donnee du cache.
 
@@ -159,15 +193,17 @@ class ProjectState:
         """
         if not self.cache_enabled:
             return None
-
-        if self._is_cache_valid(cache_key):
+        
+        result = await self._cache.get(cache_key)
+        if result is not None:
             self._stats["cache_hits"] += 1
-            return self._cache.get(cache_key)
+            self._logger.log_debug(f"Cache hit for key: {cache_key[:8]}", "cache_hit")
+        else:
+            self._stats["cache_misses"] += 1
+        
+        return result
 
-        self._stats["cache_misses"] += 1
-        return None
-
-    def _set_cache(self, cache_key: str, data: Any) -> None:
+    async def _set_cache(self, cache_key: str, data: Any) -> None:
         """
         Stocke une donnee dans le cache.
 
@@ -177,30 +213,9 @@ class ProjectState:
         """
         if not self.cache_enabled:
             return
-
-        self._cache[cache_key] = data
-        self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
-
-    def _invalidate_cache(self, prefix: Optional[str] = None) -> None:
-        """
-        Invalide le cache de manière robuste.
-
-        Args:
-            prefix: Prefixe ou terme des cles a invalider (optionnel)
-        """
-        if prefix is None:
-            self._cache.clear()
-            self._cache_timestamps.clear()
-        else:
-            # Correction du bug d'invalidation rigide : correspondance par début ou inclusion de sous-chaîne
-            keys_to_remove = [
-                k for k in self._cache.keys()
-                if k.startswith(prefix) or prefix in k
-            ]
-            for key in keys_to_remove:
-                del self._cache[key]
-                if key in self._cache_timestamps:
-                    del self._cache_timestamps[key]
+        
+        await self._cache.set(cache_key, data, ttl=self.cache_ttl)
+        self._logger.log_debug(f"Cache set for key: {cache_key[:8]}", "cache_set")
 
     # =========================================================================
     # GESTION DES PROJETS (modèle ORM ProjectModel)
@@ -229,12 +244,18 @@ class ProjectState:
         if not name:
             raise ValueError("Project name is required")
 
+        self._logger.log_info(
+            f"Creating project: {name}",
+            "project_creation_start",
+            project_id=project_id
+        )
+
         db_project = ProjectModel(
             id=project_id or str(datetime.now(timezone.utc).timestamp()),
             name=name,
             description=description,
             spec_yaml=json.dumps(config or {}),
-            status="active",
+            status="CREATED",
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc)
         )
@@ -243,7 +264,15 @@ class ProjectState:
         await self.session.commit()
         await self.session.refresh(db_project)
 
-        logger.info(f"Project created: {db_project.id} ({db_project.name})")
+        # Invalidation du cache
+        self._invalidate_cache("project")
+
+        self._logger.log_info(
+            f"Project created: {db_project.id}",
+            "project_created",
+            project_id=db_project.id,
+            project_name=name
+        )
 
         return db_project
 
@@ -261,18 +290,21 @@ class ProjectState:
         self._stats["queries"] += 1
 
         # Verification du cache
-        cache_key = self._get_cache_key("project", id=project_id)
-        cached = self._get_from_cache(cache_key)
+        cache_key = f"project:{project_id}"
+        cached = await self._get_from_cache(cache_key)
         if cached is not None:
             return cached
 
-        # Requete BDD
-        stmt = select(ProjectModel).where(ProjectModel.id == project_id)
-        result = await self.session.execute(stmt)
-        db_project = result.scalar_one_or_none()
+        # Requete BDD avec retry
+        async def _fetch_project():
+            stmt = select(ProjectModel).where(ProjectModel.id == project_id)
+            result = await self.session.execute(stmt)
+            return result.scalar_one_or_none()
+
+        db_project = await self._retry_handler.execute_with_retry(_fetch_project)
 
         if db_project:
-            self._set_cache(cache_key, db_project)
+            await self._set_cache(cache_key, db_project)
 
         return db_project
 
@@ -313,8 +345,14 @@ class ProjectState:
 
         # Invalidation du cache
         self._invalidate_cache(project_id)
+        self._invalidate_cache("project")
 
-        logger.info(f"Project updated: {project_id}")
+        self._logger.log_info(
+            f"Project updated: {project_id}",
+            "project_updated",
+            project_id=project_id,
+            updated_fields=list(data.keys())
+        )
 
         return db_project
 
@@ -340,7 +378,13 @@ class ProjectState:
         await self.session.commit()
 
         self._invalidate_cache(project_id)
-        logger.info(f"Project deleted: {project_id}")
+        self._invalidate_cache("project")
+        
+        self._logger.log_info(
+            f"Project deleted: {project_id}",
+            "project_deleted",
+            project_id=project_id
+        )
         return True
 
     @handle_db_errors
@@ -387,6 +431,12 @@ class ProjectState:
         if not sprint.project_id:
             raise ValueError("Project ID is required")
 
+        self._logger.log_info(
+            f"Creating sprint: {sprint.name}",
+            "sprint_creation_start",
+            project_id=sprint.project_id
+        )
+
         # Verification de l'existence du projet
         project = await self.get_project(sprint.project_id)
         if not project:
@@ -405,8 +455,14 @@ class ProjectState:
 
         # Invalidation du cache
         self._invalidate_cache(sprint.project_id)
+        self._invalidate_cache("sprints")
 
-        logger.info(f"Sprint created: {sprint_id} ({sprint.name})")
+        self._logger.log_info(
+            f"Sprint created: {sprint_id}",
+            "sprint_created",
+            sprint_id=sprint_id,
+            sprint_name=sprint.name
+        )
 
         return sprint
 
@@ -424,8 +480,8 @@ class ProjectState:
         self._stats["queries"] += 1
 
         # Verification du cache
-        cache_key = self._get_cache_key("sprint", id=sprint_id)
-        cached = self._get_from_cache(cache_key)
+        cache_key = f"sprint:{sprint_id}"
+        cached = await self._get_from_cache(cache_key)
         if cached is not None:
             return cached
 
@@ -435,7 +491,7 @@ class ProjectState:
             return None
 
         sprint = SprintDTO(**sprint_data)
-        self._set_cache(cache_key, sprint)
+        await self._set_cache(cache_key, sprint)
         return sprint
 
     @handle_db_errors
@@ -468,7 +524,14 @@ class ProjectState:
             self._invalidate_cache(sprint_data.get('project_id'))
 
         sprint = SprintDTO(**sprint_data)
-        logger.info(f"Sprint updated: {sprint_id}")
+        
+        self._logger.log_info(
+            f"Sprint updated: {sprint_id}",
+            "sprint_updated",
+            sprint_id=sprint_id,
+            updated_fields=list(data.keys())
+        )
+        
         return sprint
 
     @handle_db_errors
@@ -492,7 +555,11 @@ class ProjectState:
         if project_id:
             self._invalidate_cache(project_id)
 
-        logger.info(f"Sprint deleted: {sprint_id}")
+        self._logger.log_info(
+            f"Sprint deleted: {sprint_id}",
+            "sprint_deleted",
+            sprint_id=sprint_id
+        )
         return True
 
     @handle_db_errors
@@ -518,8 +585,8 @@ class ProjectState:
         self._stats["queries"] += 1
 
         # Construction du cache incluant limit et offset pour éviter le bug de pagination
-        cache_key = self._get_cache_key("sprints", project=project_id or "all", status=status or "all", limit=limit, offset=offset)
-        cached = self._get_from_cache(cache_key)
+        cache_key = f"sprints:{project_id or 'all'}:{status or 'all'}:{limit}:{offset}"
+        cached = await self._get_from_cache(cache_key)
         if cached is not None:
             return cached
 
@@ -538,7 +605,7 @@ class ProjectState:
         # Pagination
         paginated = result[offset:offset+limit] if limit else result
 
-        self._set_cache(cache_key, paginated)
+        await self._set_cache(cache_key, paginated)
         return paginated
 
     @handle_db_errors
@@ -581,6 +648,11 @@ class ProjectState:
         if not result.status:
             raise ValueError("Status is required")
 
+        # Normalisation du statut
+        normalized_status = normalize_status(result.status)
+        if result.status != normalized_status:
+            result = result.model_copy(update={"status": normalized_status})
+
         # Verification de l'existence du sprint
         sprint = await self.get_sprint(result.sprint_id)
         if not sprint:
@@ -600,7 +672,12 @@ class ProjectState:
         self._invalidate_cache(result.sprint_id)
         self._invalidate_cache(result.task_id)
 
-        logger.info(f"Task result saved: {result_id} ({result.task_id})")
+        self._logger.log_info(
+            f"Task result saved: {result_id}",
+            "task_result_saved",
+            task_id=result.task_id,
+            status=normalized_status
+        )
 
         return result
 
@@ -617,8 +694,8 @@ class ProjectState:
         """
         self._stats["queries"] += 1
 
-        cache_key = self._get_cache_key("task_result", id=task_result_id)
-        cached = self._get_from_cache(cache_key)
+        cache_key = f"task_result:{task_result_id}"
+        cached = await self._get_from_cache(cache_key)
         if cached is not None:
             return cached
 
@@ -627,7 +704,7 @@ class ProjectState:
             return None
 
         result = TaskResultDTO(**result_data)
-        self._set_cache(cache_key, result)
+        await self._set_cache(cache_key, result)
         return result
 
     @handle_db_errors
@@ -654,26 +731,19 @@ class ProjectState:
         """
         self._stats["queries"] += 1
 
-        cache_key = self._get_cache_key(
-            "task_results",
-            sprint=sprint_id or "all",
-            task=task_id or "all",
-            status=status or "all",
-            limit=limit,
-            offset=offset
-        )
-        cached = self._get_from_cache(cache_key)
+        cache_key = f"task_results:{sprint_id or 'all'}:{task_id or 'all'}:{status or 'all'}:{limit}:{offset}"
+        cached = await self._get_from_cache(cache_key)
         if cached is not None:
             return cached
 
-        # Filtrage en mémoire
+        # Filtrage en mémoire avec normalisation des statuts
         result = []
         for res_data in self._result_store.values():
             if sprint_id and res_data.get("sprint_id") != sprint_id:
                 continue
             if task_id and res_data.get("task_id") != task_id:
                 continue
-            if status and res_data.get("status") != status:
+            if status and normalize_status(res_data.get("status", "")) != normalize_status(status):
                 continue
             result.append(TaskResultDTO(**res_data))
 
@@ -681,7 +751,7 @@ class ProjectState:
         result.sort(key=lambda r: r.timestamp or datetime.min, reverse=True)
 
         paginated = result[offset:offset+limit] if limit else result
-        self._set_cache(cache_key, paginated)
+        await self._set_cache(cache_key, paginated)
         return paginated
 
     @handle_db_errors
@@ -760,7 +830,12 @@ class ProjectState:
         if task_id:
             self._invalidate_cache(task_id)
 
-        logger.info(f"Artifact saved: {artifact_id} ({artifact_type})")
+        self._logger.log_info(
+            f"Artifact saved: {artifact_id}",
+            "artifact_saved",
+            artifact_type=artifact_type,
+            task_id=task_id
+        )
         return artifact_data
 
     @handle_db_errors
@@ -817,7 +892,8 @@ class ProjectState:
 
         status_counts = {}
         for result in all_results:
-            status_counts[result.status] = status_counts.get(result.status, 0) + 1
+            status = normalize_status(result.status)
+            status_counts[status] = status_counts.get(status, 0) + 1
 
         total_duration = sum(getattr(r, 'duration', 0) or 0 for r in all_results)
 
@@ -828,7 +904,7 @@ class ProjectState:
             "status_counts": status_counts,
             "total_duration": total_duration,
             "success_rate": (
-                status_counts.get("SUCCESS", 0) / len(all_results) if all_results else 0
+                status_counts.get("success", 0) / len(all_results) if all_results else 0
             )
         }
 
@@ -840,14 +916,21 @@ class ProjectState:
             Dict: Statistiques
         """
         total_cache_ops = self._stats["cache_hits"] + self._stats["cache_misses"]
+        
+        # Récupération des métriques du cache intelligent
+        cache_metrics = self._cache.get_metrics()
+        
         return {
             **self._stats,
-            "cache_size": len(self._cache),
             "cache_hit_rate": (
                 self._stats["cache_hits"] / total_cache_ops
                 if total_cache_ops > 0
                 else 0
-            )
+            ),
+            "cache_metrics": cache_metrics,
+            "sprint_store_size": len(self._sprint_store),
+            "result_store_size": len(self._result_store),
+            "artifact_store_size": len(self._artifact_store),
         }
 
     # =========================================================================
@@ -866,7 +949,34 @@ class ProjectState:
         """
         return {
             "cache_enabled": self.cache_enabled,
-            "cache_size": len(self._cache),
             "cache_ttl": self.cache_ttl,
-            "stats": self.get_stats()
+            "stats": self.get_stats(),
+            "cache_metrics": self._cache.get_metrics()
         }
+
+
+# ==============================================================================
+# FONCTION DE CONVENANCE
+# ==============================================================================
+
+def create_project_state(
+    session: AsyncSession,
+    cache_enabled: bool = True,
+    cache_ttl: int = 60
+) -> ProjectState:
+    """
+    Crée une instance de ProjectState avec les paramètres par défaut.
+
+    Args:
+        session: Session SQLAlchemy
+        cache_enabled: Activer le cache
+        cache_ttl: Durée de vie du cache
+
+    Returns:
+        ProjectState: Instance configurée
+    """
+    return ProjectState(
+        session=session,
+        cache_enabled=cache_enabled,
+        cache_ttl=cache_ttl
+    )

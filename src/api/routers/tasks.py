@@ -5,6 +5,7 @@
 # Description: Routes API pour la gestion des tâches.
 #              CRUD complet avec transitions d'état, validation humaine,
 #              événements, WebSockets et opérations batch.
+#              Version refactorisée avec logger structuré et horodatages timezone-aware.
 # ==============================================================================
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
@@ -36,6 +37,9 @@ from src.api.schemas.responses import (
 )
 from src.api.websockets.notifier import manager
 from src.core.exceptions import PipelineError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.status_manager import normalize_status, status_manager, StatusManager
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 
 # ==============================================================================
 # CONFIGURATION
@@ -44,6 +48,25 @@ from src.core.exceptions import PipelineError
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tasks"])
 
+# Logger structuré pour le router
+_router_logger = StructuredLogger(
+    component_name="TasksRouter",
+    log_level=LogLevel.INFO
+)
+
+# Système de retry pour les opérations BDD
+_db_retry = AdaptiveRetry(
+    base_delay=0.5,
+    max_delay=5.0,
+    max_retries=3,
+    strategy=RetryStrategy.EXPONENTIAL,
+    jitter=True
+)
+
+
+# ==============================================================================
+# UTILITAIRES
+# ==============================================================================
 
 def _get_safe_logs_preview(task) -> Optional[str]:
     """Helper sécurisé pour extraire un aperçu des logs sans risque de TypeError."""
@@ -55,6 +78,83 @@ def _get_safe_logs_preview(task) -> Optional[str]:
     else:
         logs_content = str(logs)
     return logs_content[:500] + "..." if len(logs_content) > 500 else logs_content
+
+
+def _build_task_summary(t) -> TaskSummaryResponse:
+    """
+    Construit un résumé de tâche à partir d'un modèle ORM.
+    
+    Args:
+        t: Modèle ORM TaskModel
+        
+    Returns:
+        TaskSummaryResponse: Résumé de la tâche
+    """
+    state_val = t.state.value if t.state else "PENDING"
+    priority_val = t.priority.value if t.priority else "normal"
+    task_type_val = t.task_type.value if t.task_type else "custom"
+    
+    return TaskSummaryResponse(
+        id=t.id,
+        name=t.name,
+        state=state_val,
+        priority=priority_val,
+        task_type=task_type_val,
+        skill_id=t.skill_id,
+        retry_count=t.retry_count or 0,
+        duration_seconds=getattr(t, 'duration_seconds', 0.0) or 0.0,
+        created_at=t.created_at.isoformat() if t.created_at else "",
+        is_terminal=getattr(t, 'is_terminal', False),
+        is_success=getattr(t, 'is_success', False)
+    )
+
+
+def _build_task_detail(t, include_logs: bool = False) -> TaskDetailResponse:
+    """
+    Construit un détail de tâche à partir d'un modèle ORM.
+    
+    Args:
+        t: Modèle ORM TaskModel
+        include_logs: Inclure l'aperçu des logs
+        
+    Returns:
+        TaskDetailResponse: Détail de la tâche
+    """
+    state_val = t.state.value if t.state else "PENDING"
+    priority_val = t.priority.value if t.priority else "normal"
+    task_type_val = t.task_type.value if t.task_type else "custom"
+    
+    return TaskDetailResponse(
+        id=t.id,
+        name=t.name,
+        state=state_val,
+        priority=priority_val,
+        task_type=task_type_val,
+        skill_id=t.skill_id,
+        retry_count=t.retry_count or 0,
+        duration_seconds=getattr(t, 'duration_seconds', 0.0) or 0.0,
+        created_at=t.created_at.isoformat() if t.created_at else "",
+        description=t.description,
+        project_id=t.project_id,
+        dependencies=t.dependencies,
+        parameters=t.parameters,
+        result=t.result,
+        error_message=t.error_message,
+        requires_human_validation=t.requires_human_validation,
+        human_validated=t.human_validated,
+        human_validation_comments=t.human_validation_comments,
+        timeout_seconds=t.timeout_seconds,
+        max_retries=t.max_retries,
+        is_timeout=getattr(t, 'is_timeout', False),
+        elapsed_time=getattr(t, 'elapsed_time', 0.0) or 0.0,
+        remaining_time=getattr(t, 'remaining_time', 0.0) or 0.0,
+        memory_usage_mb=getattr(t, 'memory_usage_mb', None),
+        cpu_usage_percent=getattr(t, 'cpu_usage_percent', None),
+        started_at=t.started_at.isoformat() if t.started_at else None,
+        completed_at=t.completed_at.isoformat() if t.completed_at else None,
+        updated_at=t.updated_at.isoformat() if t.updated_at else "",
+        logs_preview=_get_safe_logs_preview(t) if include_logs else None
+    )
 
 
 # ==============================================================================
@@ -82,6 +182,14 @@ async def list_tasks(
     """
     Liste toutes les tâches avec pagination et filtres avancés.
     """
+    _router_logger.log_info(
+        "Listing tasks",
+        "list_tasks_start",
+        page=page,
+        page_size=page_size,
+        project_id=project_id
+    )
+    
     try:
         query = select(TaskModel)
         count_query = select(func.count()).select_from(TaskModel)
@@ -129,33 +237,28 @@ async def list_tasks(
         offset = (page - 1) * page_size
         query = query.offset(offset).limit(page_size)
 
-        result = await session.execute(query)
-        tasks = result.scalars().all()
+        # Exécution avec retry
+        async def _execute_queries():
+            result = await session.execute(query)
+            tasks = result.scalars().all()
+            
+            count_result = await session.execute(count_query)
+            total = count_result.scalar() or 0
+            
+            return tasks, total
+        
+        tasks, total = await _db_retry.execute_with_retry(_execute_queries)
 
-        count_result = await session.execute(count_query)
-        total = count_result.scalar() or 0
-
-        items = []
-        for t in tasks:
-            state_val = t.state.value if t.state else "PENDING"
-            priority_val = t.priority.value if t.priority else "normal"
-            task_type_val = t.task_type.value if t.task_type else "custom"
-            summary = TaskSummaryResponse(
-                id=t.id,
-                name=t.name,
-                state=state_val,
-                priority=priority_val,
-                task_type=task_type_val,
-                skill_id=t.skill_id,
-                retry_count=t.retry_count or 0,
-                duration_seconds=getattr(t, 'duration_seconds', 0.0) or 0.0,
-                created_at=t.created_at.isoformat() if t.created_at else "",
-                is_terminal=getattr(t, 'is_terminal', False),
-                is_success=getattr(t, 'is_success', False)
-            )
-            items.append(summary)
+        items = [_build_task_summary(t) for t in tasks]
 
         total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
+
+        _router_logger.log_info(
+            f"Listed {len(items)} tasks",
+            "list_tasks_completed",
+            total=total,
+            returned=len(items)
+        )
 
         return PaginatedResponse(
             items=items,
@@ -168,7 +271,11 @@ async def list_tasks(
         )
 
     except Exception as e:
-        logger.error(f"Error listing tasks: {str(e)}")
+        _router_logger.log_error(
+            f"Error listing tasks: {str(e)}",
+            e,
+            "list_tasks_failed"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list tasks: {str(e)}"
@@ -185,6 +292,12 @@ async def create_task(
     """
     Crée une nouvelle tâche.
     """
+    _router_logger.log_info(
+        f"Creating task: {request.name}",
+        "create_task_start",
+        project_id=project_id
+    )
+    
     try:
         project_result = await session.execute(
             select(ProjectModel).where(ProjectModel.id == project_id)
@@ -221,7 +334,12 @@ async def create_task(
         await session.commit()
         await session.refresh(task)
 
-        logger.info(f"Task created: {task.id} - {task.name}")
+        _router_logger.log_info(
+            f"Task created: {task.id}",
+            "create_task_completed",
+            task_id=task.id,
+            task_name=task.name
+        )
 
         background_tasks.add_task(
             manager.send_task_update,
@@ -230,43 +348,17 @@ async def create_task(
             {"name": task.name, "project_id": project_id, "action": "created"}
         )
 
-        return TaskDetailResponse(
-            id=task.id,
-            name=task.name,
-            state=task.state.value if task.state else "PENDING",
-            priority=task.priority.value if task.priority else "normal",
-            task_type=task.task_type.value if task.task_type else "custom",
-            skill_id=task.skill_id,
-            retry_count=task.retry_count or 0,
-            duration_seconds=getattr(task, 'duration_seconds', 0.0) or 0.0,
-            created_at=task.created_at.isoformat() if task.created_at else "",
-            description=task.description,
-            project_id=task.project_id,
-            dependencies=task.dependencies,
-            parameters=task.parameters,
-            result=task.result,
-            error_message=task.error_message,
-            requires_human_validation=task.requires_human_validation,
-            human_validated=task.human_validated,
-            human_validation_comments=task.human_validation_comments,
-            timeout_seconds=task.timeout_seconds,
-            max_retries=task.max_retries,
-            is_timeout=getattr(task, 'is_timeout', False),
-            elapsed_time=getattr(task, 'elapsed_time', 0.0) or 0.0,
-            remaining_time=getattr(task, 'remaining_time', 0.0) or 0.0,
-            memory_usage_mb=getattr(task, 'memory_usage_mb', None),
-            cpu_usage_percent=getattr(task, 'cpu_usage_percent', None),
-            started_at=task.started_at.isoformat() if task.started_at else None,
-            completed_at=task.completed_at.isoformat() if task.completed_at else None,
-            updated_at=task.updated_at.isoformat() if task.updated_at else "",
-            logs_preview=_get_safe_logs_preview(task)
-        )
+        return _build_task_detail(task)
 
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error creating task: {str(e)}")
+        _router_logger.log_error(
+            f"Error creating task: {str(e)}",
+            e,
+            "create_task_failed"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create task: {str(e)}"
@@ -282,6 +374,12 @@ async def create_tasks_batch(
     """
     Crée plusieurs tâches en masse.
     """
+    _router_logger.log_info(
+        f"Creating batch of {len(request.tasks)} tasks",
+        "create_tasks_batch_start",
+        project_id=request.project_id
+    )
+    
     try:
         project_result = await session.execute(
             select(ProjectModel).where(ProjectModel.id == request.project_id)
@@ -324,7 +422,12 @@ async def create_tasks_batch(
         for task in created_tasks:
             await session.refresh(task)
 
-        logger.info(f"Batch created {len(created_tasks)} tasks for project {request.project_id}")
+        _router_logger.log_info(
+            f"Batch created {len(created_tasks)} tasks",
+            "create_tasks_batch_completed",
+            project_id=request.project_id,
+            count=len(created_tasks)
+        )
 
         for task in created_tasks:
             background_tasks.add_task(
@@ -334,47 +437,17 @@ async def create_tasks_batch(
                 {"name": task.name, "action": "created_batch"}
             )
 
-        responses = []
-        for task in created_tasks:
-            responses.append(TaskDetailResponse(
-                id=task.id,
-                name=task.name,
-                state=task.state.value if task.state else "PENDING",
-                priority=task.priority.value if task.priority else "normal",
-                task_type=task.task_type.value if task.task_type else "custom",
-                skill_id=task.skill_id,
-                retry_count=task.retry_count or 0,
-                duration_seconds=getattr(task, 'duration_seconds', 0.0) or 0.0,
-                created_at=task.created_at.isoformat() if task.created_at else "",
-                description=task.description,
-                project_id=task.project_id,
-                dependencies=task.dependencies,
-                parameters=task.parameters,
-                result=task.result,
-                error_message=task.error_message,
-                requires_human_validation=task.requires_human_validation,
-                human_validated=task.human_validated,
-                human_validation_comments=task.human_validation_comments,
-                timeout_seconds=task.timeout_seconds,
-                max_retries=task.max_retries,
-                is_timeout=getattr(task, 'is_timeout', False),
-                elapsed_time=getattr(task, 'elapsed_time', 0.0) or 0.0,
-                remaining_time=getattr(task, 'remaining_time', 0.0) or 0.0,
-                memory_usage_mb=getattr(task, 'memory_usage_mb', None),
-                cpu_usage_percent=getattr(task, 'cpu_usage_percent', None),
-                started_at=task.started_at.isoformat() if task.started_at else None,
-                completed_at=task.completed_at.isoformat() if task.completed_at else None,
-                updated_at=task.updated_at.isoformat() if task.updated_at else "",
-                logs_preview=_get_safe_logs_preview(task)
-            ))
-
-        return responses
+        return [_build_task_detail(task) for task in created_tasks]
 
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error creating batch tasks: {str(e)}")
+        _router_logger.log_error(
+            f"Error creating batch tasks: {str(e)}",
+            e,
+            "create_tasks_batch_failed"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create batch tasks: {str(e)}"
@@ -391,6 +464,12 @@ async def get_task(
     """
     Récupère une tâche par son ID.
     """
+    _router_logger.log_debug(
+        f"Getting task: {task_id}",
+        "get_task_start",
+        task_id=task_id
+    )
+    
     try:
         query = select(TaskModel).where(TaskModel.id == task_id)
         if hasattr(TaskModel, 'logs'):
@@ -407,44 +486,17 @@ async def get_task(
                 detail=f"Task {task_id} not found"
             )
 
-        logs_preview = _get_safe_logs_preview(task) if include_logs else None
-
-        return TaskDetailResponse(
-            id=task.id,
-            name=task.name,
-            state=task.state.value if task.state else "PENDING",
-            priority=task.priority.value if task.priority else "normal",
-            task_type=task.task_type.value if task.task_type else "custom",
-            skill_id=task.skill_id,
-            retry_count=task.retry_count or 0,
-            duration_seconds=getattr(task, 'duration_seconds', 0.0) or 0.0,
-            created_at=task.created_at.isoformat() if task.created_at else "",
-            description=task.description,
-            project_id=task.project_id,
-            dependencies=task.dependencies,
-            parameters=task.parameters,
-            result=task.result if include_result else None,
-            error_message=task.error_message,
-            requires_human_validation=task.requires_human_validation,
-            human_validated=task.human_validated,
-            human_validation_comments=task.human_validation_comments,
-            timeout_seconds=task.timeout_seconds,
-            max_retries=task.max_retries,
-            is_timeout=getattr(task, 'is_timeout', False),
-            elapsed_time=getattr(task, 'elapsed_time', 0.0) or 0.0,
-            remaining_time=getattr(task, 'remaining_time', 0.0) or 0.0,
-            memory_usage_mb=getattr(task, 'memory_usage_mb', None),
-            cpu_usage_percent=getattr(task, 'cpu_usage_percent', None),
-            started_at=task.started_at.isoformat() if task.started_at else None,
-            completed_at=task.completed_at.isoformat() if task.completed_at else None,
-            updated_at=task.updated_at.isoformat() if task.updated_at else "",
-            logs_preview=logs_preview
-        )
+        return _build_task_detail(task, include_logs=include_logs)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting task {task_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error getting task {task_id}: {str(e)}",
+            e,
+            "get_task_failed",
+            task_id=task_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get task: {str(e)}"
@@ -461,6 +513,12 @@ async def update_task(
     """
     Met à jour une tâche existante.
     """
+    _router_logger.log_info(
+        f"Updating task: {task_id}",
+        "update_task_start",
+        task_id=task_id
+    )
+    
     try:
         result = await session.execute(
             select(TaskModel).where(TaskModel.id == task_id)
@@ -520,7 +578,12 @@ async def update_task(
         await session.commit()
         await session.refresh(task)
 
-        logger.info(f"Task updated: {task.id}")
+        _router_logger.log_info(
+            f"Task updated: {task.id}",
+            "update_task_completed",
+            task_id=task.id,
+            changes=list(changes.keys())
+        )
 
         if old_state != task.state:
             background_tasks.add_task(
@@ -530,43 +593,18 @@ async def update_task(
                 {"old_state": old_state.value if old_state else None, "changes": changes}
             )
 
-        return TaskDetailResponse(
-            id=task.id,
-            name=task.name,
-            state=task.state.value if task.state else "PENDING",
-            priority=task.priority.value if task.priority else "normal",
-            task_type=task.task_type.value if task.task_type else "custom",
-            skill_id=task.skill_id,
-            retry_count=task.retry_count or 0,
-            duration_seconds=getattr(task, 'duration_seconds', 0.0) or 0.0,
-            created_at=task.created_at.isoformat() if task.created_at else "",
-            description=task.description,
-            project_id=task.project_id,
-            dependencies=task.dependencies,
-            parameters=task.parameters,
-            result=task.result,
-            error_message=task.error_message,
-            requires_human_validation=task.requires_human_validation,
-            human_validated=task.human_validated,
-            human_validation_comments=task.human_validation_comments,
-            timeout_seconds=task.timeout_seconds,
-            max_retries=task.max_retries,
-            is_timeout=getattr(task, 'is_timeout', False),
-            elapsed_time=getattr(task, 'elapsed_time', 0.0) or 0.0,
-            remaining_time=getattr(task, 'remaining_time', 0.0) or 0.0,
-            memory_usage_mb=getattr(task, 'memory_usage_mb', None),
-            cpu_usage_percent=getattr(task, 'cpu_usage_percent', None),
-            started_at=task.started_at.isoformat() if task.started_at else None,
-            completed_at=task.completed_at.isoformat() if task.completed_at else None,
-            updated_at=task.updated_at.isoformat() if task.updated_at else "",
-            logs_preview=_get_safe_logs_preview(task)
-        )
+        return _build_task_detail(task)
 
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error updating task {task_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error updating task {task_id}: {str(e)}",
+            e,
+            "update_task_failed",
+            task_id=task_id
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to update task: {str(e)}"
@@ -582,6 +620,12 @@ async def delete_task(
     """
     Supprime une tâche.
     """
+    _router_logger.log_info(
+        f"Deleting task: {task_id}",
+        "delete_task_start",
+        task_id=task_id
+    )
+    
     try:
         result = await session.execute(
             select(TaskModel).where(TaskModel.id == task_id)
@@ -611,7 +655,12 @@ async def delete_task(
         await session.delete(task)
         await session.commit()
 
-        logger.info(f"Task deleted: {task_id} - {task_name}")
+        _router_logger.log_info(
+            f"Task deleted: {task_id}",
+            "delete_task_completed",
+            task_id=task_id,
+            task_name=task_name
+        )
 
         background_tasks.add_task(
             manager.send_notification,
@@ -630,7 +679,12 @@ async def delete_task(
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error deleting task {task_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error deleting task {task_id}: {str(e)}",
+            e,
+            "delete_task_failed",
+            task_id=task_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete task: {str(e)}"
@@ -647,6 +701,13 @@ async def human_validate_task(
     """
     Valide ou rejette une tâche par un humain.
     """
+    _router_logger.log_info(
+        f"Human validation for task: {task_id}",
+        "human_validate_task_start",
+        task_id=task_id,
+        approved=request.approved
+    )
+    
     try:
         result = await session.execute(
             select(TaskModel).where(TaskModel.id == task_id)
@@ -679,7 +740,12 @@ async def human_validate_task(
         await session.commit()
         await session.refresh(task)
 
-        logger.info(f"Task {task_id} human validated: {request.approved}")
+        _router_logger.log_info(
+            f"Task human validated: {task_id}",
+            "human_validate_task_completed",
+            task_id=task_id,
+            approved=request.approved
+        )
 
         background_tasks.add_task(
             manager.send_task_update,
@@ -692,43 +758,18 @@ async def human_validate_task(
             }
         )
 
-        return TaskDetailResponse(
-            id=task.id,
-            name=task.name,
-            state=task.state.value if task.state else "PENDING",
-            priority=task.priority.value if task.priority else "normal",
-            task_type=task.task_type.value if task.task_type else "custom",
-            skill_id=task.skill_id,
-            retry_count=task.retry_count or 0,
-            duration_seconds=getattr(task, 'duration_seconds', 0.0) or 0.0,
-            created_at=task.created_at.isoformat() if task.created_at else "",
-            description=task.description,
-            project_id=task.project_id,
-            dependencies=task.dependencies,
-            parameters=task.parameters,
-            result=task.result,
-            error_message=task.error_message,
-            requires_human_validation=task.requires_human_validation,
-            human_validated=task.human_validated,
-            human_validation_comments=task.human_validation_comments,
-            timeout_seconds=task.timeout_seconds,
-            max_retries=task.max_retries,
-            is_timeout=getattr(task, 'is_timeout', False),
-            elapsed_time=getattr(task, 'elapsed_time', 0.0) or 0.0,
-            remaining_time=getattr(task, 'remaining_time', 0.0) or 0.0,
-            memory_usage_mb=getattr(task, 'memory_usage_mb', None),
-            cpu_usage_percent=getattr(task, 'cpu_usage_percent', None),
-            started_at=task.started_at.isoformat() if task.started_at else None,
-            completed_at=task.completed_at.isoformat() if task.completed_at else None,
-            updated_at=task.updated_at.isoformat() if task.updated_at else "",
-            logs_preview=_get_safe_logs_preview(task)
-        )
+        return _build_task_detail(task)
 
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error validating task {task_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error validating task {task_id}: {str(e)}",
+            e,
+            "human_validate_task_failed",
+            task_id=task_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to validate task: {str(e)}"
@@ -745,6 +786,12 @@ async def retry_task(
     """
     Réessaie une tâche échouée.
     """
+    _router_logger.log_info(
+        f"Retrying task: {task_id}",
+        "retry_task_start",
+        task_id=task_id
+    )
+    
     try:
         result = await session.execute(
             select(TaskModel).where(TaskModel.id == task_id)
@@ -786,7 +833,12 @@ async def retry_task(
         await session.commit()
         await session.refresh(task)
 
-        logger.info(f"Task {task_id} retry scheduled (attempt {task.retry_count})")
+        _router_logger.log_info(
+            f"Task retry scheduled: {task_id}",
+            "retry_task_completed",
+            task_id=task_id,
+            retry_count=task.retry_count
+        )
 
         background_tasks.add_task(
             manager.send_task_update,
@@ -799,43 +851,18 @@ async def retry_task(
             }
         )
 
-        return TaskDetailResponse(
-            id=task.id,
-            name=task.name,
-            state=task.state.value if task.state else "PENDING",
-            priority=task.priority.value if task.priority else "normal",
-            task_type=task.task_type.value if task.task_type else "custom",
-            skill_id=task.skill_id,
-            retry_count=task.retry_count or 0,
-            duration_seconds=getattr(task, 'duration_seconds', 0.0) or 0.0,
-            created_at=task.created_at.isoformat() if task.created_at else "",
-            description=task.description,
-            project_id=task.project_id,
-            dependencies=task.dependencies,
-            parameters=task.parameters,
-            result=task.result,
-            error_message=task.error_message,
-            requires_human_validation=task.requires_human_validation,
-            human_validated=task.human_validated,
-            human_validation_comments=task.human_validation_comments,
-            timeout_seconds=task.timeout_seconds,
-            max_retries=task.max_retries,
-            is_timeout=getattr(task, 'is_timeout', False),
-            elapsed_time=getattr(task, 'elapsed_time', 0.0) or 0.0,
-            remaining_time=getattr(task, 'remaining_time', 0.0) or 0.0,
-            memory_usage_mb=getattr(task, 'memory_usage_mb', None),
-            cpu_usage_percent=getattr(task, 'cpu_usage_percent', None),
-            started_at=task.started_at.isoformat() if task.started_at else None,
-            completed_at=task.completed_at.isoformat() if task.completed_at else None,
-            updated_at=task.updated_at.isoformat() if task.updated_at else "",
-            logs_preview=_get_safe_logs_preview(task)
-        )
+        return _build_task_detail(task)
 
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error retrying task {task_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error retrying task {task_id}: {str(e)}",
+            e,
+            "retry_task_failed",
+            task_id=task_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retry task: {str(e)}"
@@ -852,6 +879,13 @@ async def cancel_task(
     """
     Annule une tâche en cours.
     """
+    _router_logger.log_info(
+        f"Cancelling task: {task_id}",
+        "cancel_task_start",
+        task_id=task_id,
+        reason=reason
+    )
+    
     try:
         result = await session.execute(
             select(TaskModel).where(TaskModel.id == task_id)
@@ -881,7 +915,12 @@ async def cancel_task(
         await session.commit()
         await session.refresh(task)
 
-        logger.info(f"Task {task_id} cancelled: {reason or 'No reason provided'}")
+        _router_logger.log_info(
+            f"Task cancelled: {task_id}",
+            "cancel_task_completed",
+            task_id=task_id,
+            reason=reason
+        )
 
         background_tasks.add_task(
             manager.send_task_update,
@@ -893,43 +932,18 @@ async def cancel_task(
             }
         )
 
-        return TaskDetailResponse(
-            id=task.id,
-            name=task.name,
-            state=task.state.value if task.state else "CANCELLED",
-            priority=task.priority.value if task.priority else "normal",
-            task_type=task.task_type.value if task.task_type else "custom",
-            skill_id=task.skill_id,
-            retry_count=task.retry_count or 0,
-            duration_seconds=getattr(task, 'duration_seconds', 0.0) or 0.0,
-            created_at=task.created_at.isoformat() if task.created_at else "",
-            description=task.description,
-            project_id=task.project_id,
-            dependencies=task.dependencies,
-            parameters=task.parameters,
-            result=task.result,
-            error_message=task.error_message,
-            requires_human_validation=task.requires_human_validation,
-            human_validated=task.human_validated,
-            human_validation_comments=task.human_validation_comments,
-            timeout_seconds=task.timeout_seconds,
-            max_retries=task.max_retries,
-            is_timeout=getattr(task, 'is_timeout', False),
-            elapsed_time=getattr(task, 'elapsed_time', 0.0) or 0.0,
-            remaining_time=getattr(task, 'remaining_time', 0.0) or 0.0,
-            memory_usage_mb=getattr(task, 'memory_usage_mb', None),
-            cpu_usage_percent=getattr(task, 'cpu_usage_percent', None),
-            started_at=task.started_at.isoformat() if task.started_at else None,
-            completed_at=task.completed_at.isoformat() if task.completed_at else None,
-            updated_at=task.updated_at.isoformat() if task.updated_at else "",
-            logs_preview=_get_safe_logs_preview(task)
-        )
+        return _build_task_detail(task)
 
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        logger.error(f"Error cancelling task {task_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error cancelling task {task_id}: {str(e)}",
+            e,
+            "cancel_task_failed",
+            task_id=task_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to cancel task: {str(e)}"
@@ -944,6 +958,12 @@ async def get_task_stats(
     """
     Récupère les statistiques d'une tâche.
     """
+    _router_logger.log_debug(
+        f"Getting task stats: {task_id}",
+        "get_task_stats_start",
+        task_id=task_id
+    )
+    
     try:
         result = await session.execute(
             select(TaskModel).where(TaskModel.id == task_id)
@@ -973,7 +993,12 @@ async def get_task_stats(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting task stats {task_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error getting task stats {task_id}: {str(e)}",
+            e,
+            "get_task_stats_failed",
+            task_id=task_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get task stats: {str(e)}"
@@ -988,6 +1013,12 @@ async def get_project_tasks_stats(
     """
     Récupère les statistiques des tâches d'un projet.
     """
+    _router_logger.log_debug(
+        f"Getting project tasks stats: {project_id}",
+        "get_project_tasks_stats_start",
+        project_id=project_id
+    )
+    
     try:
         project_result = await session.execute(
             select(ProjectModel).where(ProjectModel.id == project_id)
@@ -1028,6 +1059,13 @@ async def get_project_tasks_stats(
 
         success_count = stats_by_state.get("SUCCESS", 0)
 
+        _router_logger.log_info(
+            f"Project tasks stats: {project_id}",
+            "get_project_tasks_stats_completed",
+            project_id=project_id,
+            total_tasks=total
+        )
+
         return {
             "project_id": project_id,
             "total_tasks": total,
@@ -1043,7 +1081,12 @@ async def get_project_tasks_stats(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting project tasks stats {project_id}: {str(e)}")
+        _router_logger.log_error(
+            f"Error getting project tasks stats {project_id}: {str(e)}",
+            e,
+            "get_project_tasks_stats_failed",
+            project_id=project_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get project tasks stats: {str(e)}"

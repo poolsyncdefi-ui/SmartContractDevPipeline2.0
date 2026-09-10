@@ -17,6 +17,7 @@ Il supporte:
 
 Le FormalVerifier est un composant du bouclier de securite multi-couches,
 operant au niveau 4 (verification formelle).
+Version refactorisée avec logger structuré, cache intelligent et horodatages timezone-aware.
 """
 import asyncio
 import subprocess
@@ -32,6 +33,9 @@ import logging
 
 # Import des modules du pipeline
 from src.core.exceptions import PipelineError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 
 # Tentative d'import des settings avec fallback
 try:
@@ -136,7 +140,16 @@ class VerificationReport:
         return {
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "contract_name": self.contract_name,
-            "properties": [{"name": p.name, "description": p.description, "type": p.type.value, "expression": p.expression, "function": p.function, "contract": p.contract} for p in self.properties],
+            "properties": [
+                {
+                    "name": p.name,
+                    "description": p.description,
+                    "type": p.type.value,
+                    "expression": p.expression,
+                    "function": p.function,
+                    "contract": p.contract
+                } for p in self.properties
+            ],
             "results": {k: v.value for k, v in self.results.items()},
             "counterexamples": self.counterexamples,
             "passed_count": self.passed_count,
@@ -163,7 +176,9 @@ class FormalVerifier:
         halmos_path (str): Chemin vers Halmos
         solc_path (str): Chemin vers solc
         _stats (Dict): Statistiques de verification
-        _cache (Dict): Cache des resultats
+        _cache (IntelligentCache): Cache intelligent
+        _logger (StructuredLogger): Logger structure
+        _retry_handler (AdaptiveRetry): Systeme de retry
     """
 
     # Proprietes predefinies pour les contrats ERC20
@@ -193,7 +208,10 @@ class FormalVerifier:
         project_path: str = ".",
         timeout: int = 300,
         halmos_path: str = "halmos",
-        solc_path: str = "solc"
+        solc_path: str = "solc",
+        cache_enabled: bool = True,
+        cache_ttl: int = 3600,
+        max_retries: int = 3
     ):
         """
         Initialise le verificateur formel.
@@ -203,14 +221,47 @@ class FormalVerifier:
             timeout: Timeout en secondes (defaut: 300)
             halmos_path: Chemin vers Halmos (defaut: "halmos")
             solc_path: Chemin vers solc (defaut: "solc")
+            cache_enabled: Activer le cache
+            cache_ttl: Duree de vie du cache en secondes
+            max_retries: Nombre maximum de tentatives
         """
         self.project_path = project_path
         self.timeout = timeout
         self.halmos_path = halmos_path
         self.solc_path = solc_path
+        self.max_retries = max_retries
 
-        # Cache et statistiques
-        self._cache: Dict[str, VerificationReport] = {}
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name="FormalVerifier",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(
+            project_path=project_path,
+            timeout=timeout
+        )
+
+        # Cache intelligent pour les résultats de vérification
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=100,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+
+        # Système de retry adaptatif pour les appels Halmos
+        self._retry_handler = AdaptiveRetry(
+            base_delay=2.0,
+            max_delay=60.0,
+            max_retries=max_retries,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(subprocess.TimeoutExpired,)
+        )
+
+        # Statistiques
         self._stats = {
             "total_verifications": 0,
             "passed_verifications": 0,
@@ -261,10 +312,22 @@ class FormalVerifier:
 
         # Generation d'une cle de cache robuste basee sur le contenu des proprietes
         prop_signatures = sorted([p.name for p in properties])
-        cache_key = f"{contract_path}_{check_function}_{timeout}_{prop_signatures}"
-        if use_cache and cache_key in self._cache:
-            logger.info(f"Cache hit for {cache_key}")
-            return self._cache[cache_key].to_dict()
+        cache_key = f"{contract_path}_{check_function}_{timeout}_{','.join(prop_signatures)}"
+        
+        if use_cache:
+            cached_result = await self._cache.get(cache_key)
+            if cached_result is not None:
+                self._logger.log_debug("Cache hit for verification", "cache_hit")
+                logger.info(f"Cache hit for {cache_key}")
+                return cached_result
+
+        self._logger.log_info(
+            f"Starting formal verification for {contract_path or 'contract'}",
+            "verification_start",
+            contract_path=contract_path,
+            check_function=check_function,
+            properties_count=len(properties)
+        )
 
         # Construction de la commande avec des arguments separes
         cmd = [self.halmos_path]
@@ -288,7 +351,11 @@ class FormalVerifier:
 
         # Mise en cache
         if use_cache:
-            self._cache[cache_key] = report
+            report_dict = report.to_dict()
+            await self._cache.set(cache_key, report_dict, ttl=3600, tags=["verification"])
+            result = report_dict
+        else:
+            result = report.to_dict()
 
         # Mise a jour des statistiques
         self._stats["total_verifications"] += 1
@@ -301,9 +368,16 @@ class FormalVerifier:
         else:
             self._stats["failed_verifications"] += 1
 
+        self._logger.log_info(
+            f"Verification completed: {report.passed_count}/{report.total_count} passed",
+            "verification_completed",
+            passed=report.passed_count,
+            total=report.total_count,
+            execution_time=report.execution_time
+        )
         logger.info(f"Verification completed: {report.passed_count}/{report.total_count} passed")
 
-        return report.to_dict()
+        return result
 
     async def verify_contract(
         self,
@@ -322,6 +396,11 @@ class FormalVerifier:
         Returns:
             Dict: Rapport de verification
         """
+        self._logger.log_info(
+            f"Verifying contract: {contract_path}",
+            "contract_verification_start",
+            contract_path=contract_path
+        )
         logger.info(f"Verifying contract: {contract_path}")
         return await self.verify_invariants(
             contract_path=contract_path,
@@ -392,6 +471,13 @@ class FormalVerifier:
         Returns:
             Dict: Resultat de l'execution
         """
+        self._logger.log_debug(
+            "Executing Halmos",
+            "halmos_execution_start",
+            command=" ".join(cmd),
+            timeout=timeout
+        )
+
         try:
             # Execution du processus
             proc = await asyncio.create_subprocess_exec(
@@ -413,6 +499,11 @@ class FormalVerifier:
                 except Exception:
                     pass
                 self._stats["timeouts"] += 1
+                self._logger.log_warning(
+                    f"Halmos timed out after {timeout}s",
+                    "halmos_timeout",
+                    timeout=timeout
+                )
                 return {
                     "success": False,
                     "output": "",
@@ -424,6 +515,12 @@ class FormalVerifier:
             output = stdout.decode('utf-8', errors='ignore')
             error = stderr.decode('utf-8', errors='ignore')
 
+            self._logger.log_debug(
+                f"Halmos execution completed with return code {proc.returncode}",
+                "halmos_execution_completed",
+                returncode=proc.returncode
+            )
+
             return {
                 "success": proc.returncode == 0,
                 "output": output,
@@ -434,6 +531,11 @@ class FormalVerifier:
 
         except FileNotFoundError:
             self._stats["errors"] += 1
+            self._logger.log_error(
+                f"Halmos not found: {self.halmos_path}",
+                None,
+                "halmos_not_found"
+            )
             logger.error(f"Halmos not found: {self.halmos_path}")
             return {
                 "success": False,
@@ -444,6 +546,11 @@ class FormalVerifier:
             }
         except Exception as e:
             self._stats["errors"] += 1
+            self._logger.log_error(
+                f"Halmos execution failed: {str(e)}",
+                e,
+                "halmos_execution_failed"
+            )
             logger.error(f"Halmos execution failed: {str(e)}")
             return {
                 "success": False,
@@ -485,7 +592,9 @@ class FormalVerifier:
         if not result.get("success", False) or result.get("timed_out", False):
             report.passed = False
             for prop in properties:
-                report.results[prop.name] = VerificationResult.ERROR if result.get("error") else VerificationResult.TIMEOUT
+                report.results[prop.name] = (
+                    VerificationResult.ERROR if result.get("error") else VerificationResult.TIMEOUT
+                )
             return report
 
         output = result.get("output", "")
@@ -667,27 +776,37 @@ class FormalVerifier:
         Returns:
             Dict: Statistiques
         """
+        cache_metrics = self._cache.get_metrics()
+        
         return {
             **self._stats,
-            "cache_size": len(self._cache),
+            "cache_metrics": cache_metrics,
             "project_path": self.project_path,
             "timeout": self.timeout
         }
 
-    def clear_cache(self) -> None:
+    async def clear_cache(self) -> int:
         """
         Vide le cache.
+
+        Returns:
+            int: Nombre d'entrées supprimées
         """
-        cache_size = len(self._cache)
-        self._cache.clear()
+        cache_metrics = self._cache.get_metrics()
+        cache_size = cache_metrics.get("total_entries", 0)
+        await self._cache.clear()
+        self._logger.log_info(f"Cache cleared ({cache_size} entries)", "cache_cleared")
         logger.info(f"Cache cleared ({cache_size} entries)")
+        return cache_size
 
     # =========================================================================
     # REPRESENTATION
     # =========================================================================
 
     def __repr__(self) -> str:
-        return f"<FormalVerifier(project_path='{self.project_path}', cache={len(self._cache)})>"
+        cache_metrics = self._cache.get_metrics()
+        cache_size = cache_metrics.get("total_entries", 0)
+        return f"<FormalVerifier(project_path='{self.project_path}', cache={cache_size})>"
 
     def to_dict(self) -> Dict:
         """
@@ -699,6 +818,6 @@ class FormalVerifier:
         return {
             "project_path": self.project_path,
             "timeout": self.timeout,
-            "cache_size": len(self._cache),
-            "stats": self._stats
+            "stats": self._stats,
+            "cache_metrics": self._cache.get_metrics()
         }

@@ -26,6 +26,7 @@ Structure des relations:
 Note: Les relations sont ajoutées dynamiquement après la définition des classes
 pour éviter les imports circulaires. Cela fonctionne car toutes les classes
 sont chargées avant la création du moteur SQLAlchemy.
+Version refactorisée avec horodatages timezone-aware et intégration des nouveaux modules.
 """
 from sqlalchemy import (
     Column, String, JSON, DateTime, Integer, Float, ForeignKey, Text,
@@ -76,11 +77,21 @@ class Sprint(Base):
     status = Column(String, default='planned', nullable=False, index=True)
     priority = Column(Integer, default=5)  # 1-10
 
-    # Dates
+    # Dates (UTC time-aware)
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True
+    )
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
 
     # Metadonnees (Utilisation de meta_data pour eviter le conflit avec Base.metadata)
     meta_data = Column('metadata', JSON, nullable=True, default=dict)
@@ -162,7 +173,7 @@ class TaskResult(Base):
     # Informations
     task_id = Column(String, nullable=False, index=True)
     agent_id = Column(String, nullable=True, index=True)
-    status = Column(String, nullable=False, index=True)  # SUCCESS, FAILED, PENDING, etc.
+    status = Column(String, nullable=False, index=True)  # success, failed, pending, etc.
 
     # Contenu
     output = Column(JSON, nullable=True)
@@ -173,8 +184,13 @@ class TaskResult(Base):
     memory_usage = Column(Integer, nullable=True)  # Memoire utilisee en MB
     cpu_usage = Column(Float, nullable=True)  # CPU utilise en %
 
-    # Dates
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    # Dates (UTC time-aware)
+    timestamp = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True
+    )
 
     # Metadonnees (Utilisation de meta_data pour eviter le conflit avec Base.metadata)
     meta_data = Column('metadata', JSON, nullable=True, default=dict)
@@ -182,9 +198,12 @@ class TaskResult(Base):
     # Relations
     sprint = relationship("Sprint", back_populates="task_results", lazy="selectin")
 
-    # Contraintes
+    # Contraintes (Statuts en minuscules pour correspondre à TaskStatus)
     __table_args__ = (
-        CheckConstraint("status IN ('SUCCESS', 'FAILED', 'PENDING', 'RUNNING', 'CIRCUIT_OPEN')", name='chk_task_result_status'),
+        CheckConstraint(
+            "status IN ('success', 'failed', 'pending', 'running', 'circuit_broken', 'cancelled')",
+            name='chk_task_result_status'
+        ),
         Index('idx_task_results_sprint_status', 'sprint_id', 'status'),
         Index('idx_task_results_task_id', 'task_id'),
         Index('idx_task_results_timestamp', 'timestamp'),
@@ -213,12 +232,12 @@ class TaskResult(Base):
     @hybrid_property
     def is_success(self) -> bool:
         """Verifie si le resultat est un succes."""
-        return self.status == 'SUCCESS'
+        return self.status == 'success'
 
     @hybrid_property
     def is_failure(self) -> bool:
         """Verifie si le resultat est un echec."""
-        return self.status == 'FAILED'
+        return self.status in ('failed', 'circuit_broken')
 
 
 class Artifact(Base):
@@ -247,15 +266,23 @@ class Artifact(Base):
     # Version
     version = Column(String, nullable=True, default="1.0.0")
 
-    # Dates
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    # Dates (UTC time-aware)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True
+    )
 
     # Relation
     task = relationship("TaskModel", back_populates="artifacts", lazy="selectin")
 
     # Contraintes
     __table_args__ = (
-        CheckConstraint("type IN ('solidity', 'test', 'doc', 'abi', 'bytecode', 'config', 'report', 'other')", name='chk_artifact_type'),
+        CheckConstraint(
+            "type IN ('solidity', 'test', 'doc', 'abi', 'bytecode', 'config', 'report', 'other')",
+            name='chk_artifact_type'
+        ),
         Index('idx_artifacts_task_type', 'task_id', 'type'),
         Index('idx_artifacts_created_at', 'created_at'),
     )

@@ -18,9 +18,12 @@ Il supporte:
 
 Le Circuit Breaker est utilise par le WorkflowEngine et les agents
 pour prevenir les boucles infinies de correction automatique.
+Version refactorisée : Wrapper autour d'IntelligentCircuitBreaker
+pour assurer la rétrocompatibilité tout en bénéficiant des nouvelles
+fonctionnalités d'apprentissage et de métriques avancées.
 """
 from typing import Dict, Optional, List, Any, Set, Callable, Awaitable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 import json
 import asyncio
@@ -29,6 +32,14 @@ from dataclasses import dataclass, field
 
 # Import des modules du pipeline
 from src.core.exceptions import CircuitBreakerOpenError
+from src.core.intelligent_circuit_breaker import (
+    IntelligentCircuitBreaker,
+    CircuitState,
+    CircuitEvent,
+    CircuitMetrics,
+    CircuitBreakerConfig,
+    CircuitOpenError
+)
 from src.persistence.project_state import ProjectState
 
 # Tentative d'import des settings avec fallback
@@ -44,75 +55,28 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class CircuitBreakerState(str, Enum):
-    """
-    Etats possibles du circuit breaker.
-    """
-    CLOSED = "CLOSED"          # Circuit ferme - les requetes passent
-    OPEN = "OPEN"              # Circuit ouvert - les requetes sont bloquees
-    HALF_OPEN = "HALF_OPEN"    # Semi-ouvert - test de recuperation
+# =============================================================================
+# ALIAS POUR LA RÉTROCOMPATIBILITÉ
+# =============================================================================
+
+# Réexport des énumérations du module intelligent
+CircuitBreakerState = CircuitState
+CircuitBreakerEvent = CircuitEvent
+CircuitBreakerStats = CircuitMetrics
 
 
-class CircuitBreakerEvent(str, Enum):
-    """
-    Evenements du circuit breaker.
-    """
-    OPENED = "opened"          # Circuit ouvert
-    CLOSED = "closed"          # Circuit ferme
-    HALF_OPEN = "half_open"    # Passage en semi-ouvert
-    RESET = "reset"            # Reinitialisation
-    TIMEOUT = "timeout"        # Timeout
-    FAILURE = "failure"        # Echec enregistre
-    SUCCESS = "success"        # Succes enregistre
-
-
-@dataclass
-class CircuitBreakerStats:
-    """
-    Statistiques d'un circuit breaker.
-
-    Attributes:
-        total_failures (int): Nombre total d'echecs
-        total_successes (int): Nombre total de succes
-        total_openings (int): Nombre d'ouvertures
-        total_closings (int): Nombre de fermetures
-        last_failure (Optional[datetime]): Dernier echec
-        last_success (Optional[datetime]): Dernier succes
-        last_state_change (Optional[datetime]): Dernier changement d'etat
-        current_retries (int): Tentatives en cours
-        max_retries_reached (int): Nombre de fois ou le max a ete atteint
-    """
-    total_failures: int = 0
-    total_successes: int = 0
-    total_openings: int = 0
-    total_closings: int = 0
-    last_failure: Optional[datetime] = None
-    last_success: Optional[datetime] = None
-    last_state_change: Optional[datetime] = None
-    current_retries: int = 0
-    max_retries_reached: int = 0
-
-    def to_dict(self) -> Dict:
-        """Convertit les statistiques en dictionnaire."""
-        return {
-            "total_failures": self.total_failures,
-            "total_successes": self.total_successes,
-            "total_openings": self.total_openings,
-            "total_closings": self.total_closings,
-            "last_failure": self.last_failure.isoformat() if self.last_failure else None,
-            "last_success": self.last_success.isoformat() if self.last_success else None,
-            "last_state_change": self.last_state_change.isoformat() if self.last_state_change else None,
-            "current_retries": self.current_retries,
-            "max_retries_reached": self.max_retries_reached
-        }
-
+# =============================================================================
+# CIRCUIT BREAKER (WRAPPER DE RÉTROCOMPATIBILITÉ)
+# =============================================================================
 
 class CircuitBreaker:
     """
     Circuit breaker pour la protection contre les boucles infinies.
 
-    Cette classe implemente le pattern Circuit Breaker avec trois etats
-    et des transitions automatiques basees sur les echecs et les succes.
+    Cette classe est un wrapper autour d'IntelligentCircuitBreaker
+    qui maintient la compatibilité avec l'ancienne API tout en
+    bénéficiant des nouvelles fonctionnalités d'apprentissage,
+    de métriques avancées et d'annulation propre.
 
     Attributes:
         max_retries (int): Nombre maximum de tentatives avant ouverture
@@ -126,6 +90,7 @@ class CircuitBreaker:
         _stats (Dict[str, CircuitBreakerStats]): Statistiques par tache
         _listeners (List[Callable]): Listeners d'evenements
         _state_manager (Optional[ProjectState]): Gestionnaire d'etat pour persistance
+        _intelligent (IntelligentCircuitBreaker): Instance du circuit breaker intelligent
     """
 
     def __init__(
@@ -155,24 +120,52 @@ class CircuitBreaker:
         self.state_manager = state_manager
         self.persistent = persistent
 
-        # Etats par tache
+        # Configuration du circuit breaker intelligent
+        config = CircuitBreakerConfig(
+            failure_threshold=self.max_retries * 2,
+            recovery_timeout=self.timeout,
+            half_open_max_attempts=1,
+            success_threshold=2,
+            enable_learning=True,
+            enable_metrics=True,
+            name=name
+        )
+
+        # Instance du circuit breaker intelligent
+        self._intelligent = IntelligentCircuitBreaker(
+            config=config,
+            listeners=[]
+        )
+
+        # Compatibilité avec l'ancienne API
+        # Les dictionnaires sont maintenus pour la rétrocompatibilité
         self._state: Dict[str, CircuitBreakerState] = {}
         self._failures: Dict[str, int] = {}
         self._last_failure_time: Dict[str, datetime] = {}
         self._last_state_change: Dict[str, datetime] = {}
         self._half_open_retries: Dict[str, int] = {}
         self._success_count: Dict[str, int] = {}
-
-        # Statistiques par tache
         self._stats: Dict[str, CircuitBreakerStats] = {}
-
-        # Listeners
         self._listeners: List[Callable[[str, str, Dict], Awaitable[None]]] = []
 
         # Verrou asynchrone
         self._lock = asyncio.Lock()
 
         logger.info(f"CircuitBreaker initialized: {name} (max_retries={self.max_retries}, timeout={timeout}s)")
+
+    # =========================================================================
+    # PROPRIÉTÉS DE COMPATIBILITÉ
+    # =========================================================================
+
+    @property
+    def state(self) -> str:
+        """Retourne l'état global du circuit breaker."""
+        return self._intelligent.state.value if hasattr(self._intelligent.state, 'value') else str(self._intelligent.state)
+
+    @property
+    def failure_count(self) -> int:
+        """Retourne le nombre d'échecs global."""
+        return self._intelligent.metrics.total_failures
 
     # =========================================================================
     # OPERATIONS PRINCIPALES (ASYNC)
@@ -182,12 +175,16 @@ class CircuitBreaker:
         """
         Verifie si une nouvelle tentative est autorisee.
 
+        Cette méthode délègue à l'implémentation intelligente tout
+        en maintenant la compatibilité avec l'ancienne API.
+
         Args:
             task_id: ID de la tache
 
         Returns:
             bool: True si une tentative est autorisee
         """
+        # Mise à jour des dictionnaires de compatibilité
         async with self._lock:
             state = self._get_state(task_id)
             last_change = self._last_state_change.get(task_id)
@@ -381,7 +378,8 @@ class CircuitBreaker:
                 "total_tasks": total_tasks,
                 "open_tasks": open_tasks,
                 "half_open_tasks": half_open_tasks,
-                "closed_tasks": total_tasks - open_tasks - half_open_tasks
+                "closed_tasks": total_tasks - open_tasks - half_open_tasks,
+                "intelligent_metrics": self._intelligent.get_metrics().to_dict()
             }
 
     def _get_stats_sync(self) -> Dict:
@@ -502,11 +500,11 @@ class CircuitBreaker:
         # Notification des listeners
         for listener in self._listeners:
             try:
-                await listener(event_type.value, task_id, event_data)
+                await listener(event_type.value if hasattr(event_type, 'value') else str(event_type), task_id, event_data)
             except Exception as e:
                 logger.error(f"Listener error: {str(e)}")
 
-        logger.debug(f"Event emitted: {event_type.value} for {task_id}")
+        logger.debug(f"Event emitted: {event_type} for {task_id}")
 
     # =========================================================================
     # MAINTENANCE
@@ -558,6 +556,67 @@ class CircuitBreaker:
             return tasks
 
     # =========================================================================
+    # MÉTHODES AVANCÉES (DÉLÉGATION À L'IMPLÉMENTATION INTELLIGENTE)
+    # =========================================================================
+
+    async def execute_with_protection(
+        self,
+        func: Callable,
+        *args,
+        task_id: str,
+        **kwargs
+    ) -> Any:
+        """
+        Exécute une fonction avec la protection du circuit breaker intelligent.
+
+        Args:
+            func: Fonction asynchrone à exécuter
+            *args: Arguments positionnels
+            task_id: ID de la tâche
+            **kwargs: Arguments nommés
+
+        Returns:
+            Any: Résultat de la fonction
+
+        Raises:
+            CircuitOpenError: Si le circuit est ouvert
+        """
+        return await self._intelligent.execute(func, *args, **kwargs)
+
+    def analyze_patterns(self) -> Dict[str, Any]:
+        """
+        Analyse les patterns d'échec.
+
+        Returns:
+            Dict[str, Any]: Analyse des patterns
+        """
+        return self._intelligent.analyze_patterns()
+
+    async def force_open(self, reason: str = "manual") -> None:
+        """
+        Force l'ouverture du circuit.
+
+        Args:
+            reason: Raison de l'ouverture
+        """
+        await self._intelligent.force_open(reason)
+
+    async def force_close(self, reason: str = "manual") -> None:
+        """
+        Force la fermeture du circuit.
+
+        Args:
+            reason: Raison de la fermeture
+        """
+        await self._intelligent.force_close(reason)
+
+    async def force_half_open(self) -> None:
+        """
+        Force le passage en semi-ouvert.
+        """
+        await self._intelligent.force_half_open()
+
+    # =========================================================================
     # REPRESENTATION
     # =========================================================================
 
@@ -581,5 +640,6 @@ class CircuitBreaker:
             "total_tasks": len(self._state),
             "open_tasks": sum(1 for s in self._state.values() if s == CircuitBreakerState.OPEN),
             "half_open_tasks": sum(1 for s in self._state.values() if s == CircuitBreakerState.HALF_OPEN),
-            "stats": self._get_stats_sync()
+            "stats": self._get_stats_sync(),
+            "intelligent_metrics": self._intelligent.get_metrics().to_dict()
         }

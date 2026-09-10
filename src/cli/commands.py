@@ -6,6 +6,7 @@
 #              Opérations de gestion, exécution et maintenance du pipeline.
 #              Support des projets, tâches, sprints, artefacts, compétences,
 #              configuration, notifications et webhooks.
+#              Version refactorisée avec logger structuré et horodatages timezone-aware.
 # ==============================================================================
 
 import click
@@ -23,6 +24,17 @@ from src.db.migrations import run_migrations, reset_models, get_current_version
 from src.models.project import ProjectModel, ProjectStatus, ProjectChain
 from src.models.task import TaskModel, TaskState, TaskPriority, TaskType
 from src.orchestration.workflow_engine import WorkflowEngine
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.status_manager import normalize_status, status_manager
+
+# ==============================================================================
+# LOGGER STRUCTURÉ POUR LA CLI
+# ==============================================================================
+
+_cli_logger = StructuredLogger(
+    component_name="CLI",
+    log_level=LogLevel.INFO
+)
 
 
 # ==============================================================================
@@ -82,6 +94,7 @@ def require_db(f):
 @click.group()
 def cli():
     """Smart Contract Dev Pipeline CLI."""
+    _cli_logger.log_info("CLI session started", "cli_start")
     pass
 
 
@@ -93,6 +106,8 @@ def cli():
 @common_options
 def status(verbose: bool, quiet: bool, output_json: bool):
     """Affiche le statut du pipeline."""
+    _cli_logger.log_info("Executing status command", "cmd_status")
+    
     result = {
         "version": "2.0.0",
         "timestamp": datetime.now(timezone.utc).isoformat()
@@ -113,6 +128,7 @@ def status(verbose: bool, quiet: bool, output_json: bool):
     except Exception as e:
         click.echo(f"  ❌ Error: {e}")
         result["database"] = {"status": "error", "error": str(e)}
+        _cli_logger.log_error("Database check failed", e, "db_check_failed")
     
     # Configuration
     click.echo("\n⚙️ Configuration:")
@@ -156,6 +172,7 @@ def status(verbose: bool, quiet: bool, output_json: bool):
         click.echo(f"  Completed tasks: {stats['completed_tasks']}")
     except Exception as e:
         click.echo(f"  ❌ Error getting stats: {e}")
+        _cli_logger.log_warning(f"Failed to get stats: {e}", "stats_failed")
     
     if output_json:
         click.echo(json.dumps(result, indent=2))
@@ -169,6 +186,12 @@ def status(verbose: bool, quiet: bool, output_json: bool):
 @click.option('--seed', is_flag=True, help='Seed database with initial data')
 def db_init(reset: bool, seed: bool, verbose: bool, quiet: bool, output_json: bool):
     """Initialise la base de données."""
+    _cli_logger.log_info(
+        "Executing db-init command",
+        "cmd_db_init",
+        reset=reset,
+        seed=seed
+    )
     click.echo("📊 Initializing database...")
     
     if reset:
@@ -189,6 +212,9 @@ def db_init(reset: bool, seed: bool, verbose: bool, quiet: bool, output_json: bo
             click.echo("✅ Database seeded")
         except ImportError:
             click.echo("⚠️  Seed module not found, skipping.")
+        except Exception as e:
+            _cli_logger.log_error("Seeding failed", e, "seed_failed")
+            click.echo(f"⚠️  Seeding failed: {e}")
     
     click.echo("✅ Database initialized")
     
@@ -200,6 +226,7 @@ def db_init(reset: bool, seed: bool, verbose: bool, quiet: bool, output_json: bo
 @common_options
 def db_migrate(verbose: bool, quiet: bool, output_json: bool):
     """Exécute les migrations de la base de données."""
+    _cli_logger.log_info("Executing db-migrate command", "cmd_db_migrate")
     click.echo("📊 Running migrations...")
     
     try:
@@ -214,6 +241,7 @@ def db_migrate(verbose: bool, quiet: bool, output_json: bool):
                 "version": current_version
             }))
     except Exception as e:
+        _cli_logger.log_error("Migration failed", e, "migration_failed")
         click.echo(f"❌ Migration failed: {e}")
         if output_json:
             click.echo(json.dumps({"status": "error", "error": str(e)}))
@@ -224,6 +252,11 @@ def db_migrate(verbose: bool, quiet: bool, output_json: bool):
 @click.argument('version')
 def db_rollback(version: str, verbose: bool, quiet: bool, output_json: bool):
     """Rollback vers une version spécifique."""
+    _cli_logger.log_info(
+        f"Executing db-rollback command to version {version}",
+        "cmd_db_rollback",
+        version=version
+    )
     click.echo(f"📊 Rolling back to version {version}...")
     
     try:
@@ -238,6 +271,7 @@ def db_rollback(version: str, verbose: bool, quiet: bool, output_json: bool):
                 "version": version
             }))
     except Exception as e:
+        _cli_logger.log_error("Rollback failed", e, "rollback_failed")
         click.echo(f"❌ Rollback failed: {e}")
         if output_json:
             click.echo(json.dumps({"status": "error", "error": str(e)}))
@@ -260,6 +294,11 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
                    chain: Optional[str], tags: Optional[str], priority: str,
                    category: str, verbose: bool, quiet: bool, output_json: bool):
     """Crée un nouveau projet."""
+    _cli_logger.log_info(
+        f"Executing project-create command for {name}",
+        "cmd_project_create",
+        project_name=name
+    )
     click.echo(f"📋 Creating project: {name}")
     
     # Charger la spécification
@@ -267,6 +306,11 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
     if spec:
         spec_path = Path(spec)
         if not spec_path.exists():
+            _cli_logger.log_error(
+                f"Specification file not found: {spec}",
+                None,
+                "spec_file_not_found"
+            )
             click.echo(f"❌ Specification file not found: {spec}")
             return
         spec_content = spec_path.read_text()
@@ -287,6 +331,11 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
     if config:
         config_path = Path(config)
         if not config_path.exists():
+            _cli_logger.log_error(
+                f"Config file not found: {config}",
+                None,
+                "config_file_not_found"
+            )
             click.echo(f"❌ Config file not found: {config}")
             return
         try:
@@ -295,6 +344,7 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
             elif config_path.suffix in ['.yml', '.yaml']:
                 config_data = yaml.safe_load(config_path.read_text())
         except Exception as e:
+            _cli_logger.log_error(f"Error loading config: {e}", e, "config_load_failed")
             click.echo(f"❌ Error loading config: {e}")
             return
     
@@ -332,10 +382,18 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
         click.echo(f"   Priority: {saved_project.priority.value if saved_project.priority else 'medium'}")
         click.echo(f"   Category: {saved_project.category.value if saved_project.category else 'other'}")
         
+        _cli_logger.log_info(
+            f"Project created: {saved_project.id}",
+            "project_created",
+            project_id=saved_project.id,
+            project_name=name
+        )
+        
         if output_json:
             click.echo(json.dumps(saved_project.to_dict(), indent=2))
             
     except Exception as e:
+        _cli_logger.log_error(f"Error creating project: {e}", e, "project_create_failed")
         click.echo(f"❌ Error creating project: {e}")
         if output_json:
             click.echo(json.dumps({"status": "error", "error": str(e)}))
@@ -346,6 +404,11 @@ def project_create(name: str, spec: Optional[str], config: Optional[str],
 @click.argument('project_id')
 def project_show(project_id: str, verbose: bool, quiet: bool, output_json: bool):
     """Affiche les détails d'un projet."""
+    _cli_logger.log_info(
+        f"Executing project-show command for {project_id}",
+        "cmd_project_show",
+        project_id=project_id
+    )
     click.echo(f"📋 Showing project: {project_id}")
     
     async def get_project():
@@ -361,6 +424,7 @@ def project_show(project_id: str, verbose: bool, quiet: bool, output_json: bool)
     project = asyncio.run(get_project())
     
     if not project:
+        _cli_logger.log_warning(f"Project not found: {project_id}", "project_not_found")
         click.echo(f"❌ Project {project_id} not found")
         return
     
@@ -396,6 +460,7 @@ def project_list(status: Optional[str], priority: Optional[str],
                  category: Optional[str], chain: Optional[str], 
                  limit: int, verbose: bool, quiet: bool, output_json: bool):
     """Liste tous les projets."""
+    _cli_logger.log_info("Executing project-list command", "cmd_project_list")
     click.echo("📋 Listing projects...")
     
     async def list_projects():
@@ -450,6 +515,11 @@ def project_update(project_id: str, status: Optional[str], name: Optional[str],
                    category: Optional[str], chain: Optional[str],
                    tags: Optional[str], verbose: bool, quiet: bool, output_json: bool):
     """Met à jour un projet."""
+    _cli_logger.log_info(
+        f"Executing project-update command for {project_id}",
+        "cmd_project_update",
+        project_id=project_id
+    )
     click.echo(f"📋 Updating project: {project_id}")
     
     updates = {}
@@ -506,6 +576,7 @@ def project_update(project_id: str, status: Optional[str], name: Optional[str],
     project = asyncio.run(update_project())
     
     if not project:
+        _cli_logger.log_warning(f"Project not found: {project_id}", "project_not_found")
         click.echo(f"❌ Project {project_id} not found")
         return
     
@@ -517,6 +588,13 @@ def project_update(project_id: str, status: Optional[str], name: Optional[str],
     click.echo(f"   Chain: {project.chain.value if project.chain else 'N/A'}")
     click.echo(f"   Tags: {', '.join(project.get_tags())}")
     
+    _cli_logger.log_info(
+        f"Project updated: {project_id}",
+        "project_updated",
+        project_id=project_id,
+        updates=list(updates.keys())
+    )
+    
     if output_json:
         click.echo(json.dumps(project.to_dict(), indent=2))
 
@@ -527,6 +605,11 @@ def project_update(project_id: str, status: Optional[str], name: Optional[str],
 @click.option('--yes', is_flag=True, help='Skip confirmation')
 def project_delete(project_id: str, yes: bool, verbose: bool, quiet: bool, output_json: bool):
     """Supprime un projet."""
+    _cli_logger.log_info(
+        f"Executing project-delete command for {project_id}",
+        "cmd_project_delete",
+        project_id=project_id
+    )
     click.echo(f"📋 Deleting project: {project_id}")
     
     if not yes:
@@ -555,9 +638,16 @@ def project_delete(project_id: str, yes: bool, verbose: bool, quiet: bool, outpu
     project = asyncio.run(delete_project())
     
     if not project:
+        _cli_logger.log_warning(f"Project not found: {project_id}", "project_not_found")
         click.echo(f"❌ Project {project_id} not found")
         return
     
+    _cli_logger.log_info(
+        f"Project deleted: {project_id}",
+        "project_deleted",
+        project_id=project_id,
+        project_name=project.name
+    )
     click.echo(f"✅ Project deleted: {project.name} ({project.id})")
     
     if output_json:
@@ -585,6 +675,12 @@ def task_create(project_id: str, name: str, skill: str, parameters: Optional[str
                 requires_validation: bool, timeout: int, max_retries: int,
                 verbose: bool, quiet: bool, output_json: bool):
     """Crée une nouvelle tâche."""
+    _cli_logger.log_info(
+        f"Executing task-create command for {name}",
+        "cmd_task_create",
+        project_id=project_id,
+        task_name=name
+    )
     click.echo(f"📋 Creating task: {name}")
     
     # Parser les paramètres
@@ -593,6 +689,11 @@ def task_create(project_id: str, name: str, skill: str, parameters: Optional[str
         try:
             params = json.loads(parameters)
         except json.JSONDecodeError:
+            _cli_logger.log_error(
+                f"Invalid parameters JSON: {parameters}",
+                None,
+                "invalid_params_json"
+            )
             click.echo(f"❌ Invalid parameters JSON: {parameters}")
             return
     
@@ -642,9 +743,16 @@ def task_create(project_id: str, name: str, skill: str, parameters: Optional[str
     result = asyncio.run(create_task())
     
     if isinstance(result, dict) and "error" in result:
+        _cli_logger.log_warning(result["error"], "task_create_error")
         click.echo(f"❌ {result['error']}")
         return
     
+    _cli_logger.log_info(
+        f"Task created: {result.id}",
+        "task_created",
+        task_id=result.id,
+        task_name=name
+    )
     click.echo(f"✅ Task created: {result.id}")
     click.echo(f"   Name: {result.name}")
     click.echo(f"   Skill: {result.skill_id}")
@@ -660,6 +768,11 @@ def task_create(project_id: str, name: str, skill: str, parameters: Optional[str
 @click.argument('task_id')
 def task_show(task_id: str, verbose: bool, quiet: bool, output_json: bool):
     """Affiche les détails d'une tâche."""
+    _cli_logger.log_info(
+        f"Executing task-show command for {task_id}",
+        "cmd_task_show",
+        task_id=task_id
+    )
     click.echo(f"📋 Showing task: {task_id}")
     
     async def get_task():
@@ -675,6 +788,7 @@ def task_show(task_id: str, verbose: bool, quiet: bool, output_json: bool):
     task = asyncio.run(get_task())
     
     if not task:
+        _cli_logger.log_warning(f"Task not found: {task_id}", "task_not_found")
         click.echo(f"❌ Task {task_id} not found")
         return
     
@@ -713,6 +827,11 @@ def task_show(task_id: str, verbose: bool, quiet: bool, output_json: bool):
 def task_update(task_id: str, state: Optional[str], priority: Optional[str],
                 parameters: Optional[str], verbose: bool, quiet: bool, output_json: bool):
     """Met à jour une tâche."""
+    _cli_logger.log_info(
+        f"Executing task-update command for {task_id}",
+        "cmd_task_update",
+        task_id=task_id
+    )
     click.echo(f"📋 Updating task: {task_id}")
     
     updates = {}
@@ -724,6 +843,11 @@ def task_update(task_id: str, state: Optional[str], priority: Optional[str],
         try:
             updates["parameters"] = json.loads(parameters)
         except json.JSONDecodeError:
+            _cli_logger.log_error(
+                f"Invalid parameters JSON: {parameters}",
+                None,
+                "invalid_params_json"
+            )
             click.echo(f"❌ Invalid parameters JSON: {parameters}")
             return
     
@@ -769,8 +893,16 @@ def task_update(task_id: str, state: Optional[str], priority: Optional[str],
     task = asyncio.run(update_task())
     
     if not task:
+        _cli_logger.log_warning(f"Task not found: {task_id}", "task_not_found")
         click.echo(f"❌ Task {task_id} not found")
         return
+    
+    _cli_logger.log_info(
+        f"Task updated: {task_id}",
+        "task_updated",
+        task_id=task_id,
+        updates=list(updates.keys())
+    )
     
     click.echo(f"✅ Task updated: {task.id}")
     click.echo(f"   State: {task.state.value if task.state else 'PENDING'}")
@@ -786,6 +918,12 @@ def task_update(task_id: str, state: Optional[str], priority: Optional[str],
 @click.option('--force', is_flag=True, help='Force retry even if max retries reached')
 def task_retry(task_id: str, force: bool, verbose: bool, quiet: bool, output_json: bool):
     """Réessaie une tâche échouée."""
+    _cli_logger.log_info(
+        f"Executing task-retry command for {task_id}",
+        "cmd_task_retry",
+        task_id=task_id,
+        force=force
+    )
     click.echo(f"🔄 Retrying task: {task_id}")
     
     async def retry_task():
@@ -831,9 +969,16 @@ def task_retry(task_id: str, force: bool, verbose: bool, quiet: bool, output_jso
     result = asyncio.run(retry_task())
     
     if "error" in result:
+        _cli_logger.log_warning(result["error"], "task_retry_error")
         click.echo(f"❌ {result['error']}")
         return
     
+    _cli_logger.log_info(
+        f"Task retry scheduled: {task_id}",
+        "task_retry_scheduled",
+        task_id=task_id,
+        retry_count=result['retry_count']
+    )
     click.echo(f"✅ Task {task_id} retry scheduled (attempt {result['retry_count']}/{result['max_retries']})")
     
     if output_json:
@@ -846,6 +991,12 @@ def task_retry(task_id: str, force: bool, verbose: bool, quiet: bool, output_jso
 @click.option('--reason', help='Cancellation reason')
 def task_cancel(task_id: str, reason: Optional[str], verbose: bool, quiet: bool, output_json: bool):
     """Annule une tâche."""
+    _cli_logger.log_info(
+        f"Executing task-cancel command for {task_id}",
+        "cmd_task_cancel",
+        task_id=task_id,
+        reason=reason
+    )
     click.echo(f"🛑 Cancelling task: {task_id}")
     
     async def cancel_task():
@@ -873,9 +1024,16 @@ def task_cancel(task_id: str, reason: Optional[str], verbose: bool, quiet: bool,
     result = asyncio.run(cancel_task())
     
     if isinstance(result, dict) and "error" in result:
+        _cli_logger.log_warning(result["error"], "task_cancel_error")
         click.echo(f"❌ {result['error']}")
         return
     
+    _cli_logger.log_info(
+        f"Task cancelled: {task_id}",
+        "task_cancelled",
+        task_id=task_id,
+        reason=reason
+    )
     click.echo(f"✅ Task {task_id} cancelled")
     
     if output_json:
@@ -891,6 +1049,11 @@ def task_cancel(task_id: str, reason: Optional[str], verbose: bool, quiet: bool,
 def task_list(project_id: str, state: Optional[str], priority: Optional[str], 
               limit: int, verbose: bool, quiet: bool, output_json: bool):
     """Liste les tâches d'un projet."""
+    _cli_logger.log_info(
+        f"Executing task-list command for project {project_id}",
+        "cmd_task_list",
+        project_id=project_id
+    )
     click.echo(f"📋 Listing tasks for project: {project_id}")
     
     async def list_tasks():
@@ -941,6 +1104,12 @@ def sprint_create(project_id: str, name: str, description: Optional[str],
                   start_date: Optional[str], end_date: Optional[str],
                   verbose: bool, quiet: bool, output_json: bool):
     """Crée un nouveau sprint."""
+    _cli_logger.log_info(
+        f"Executing sprint-create command for {name}",
+        "cmd_sprint_create",
+        project_id=project_id,
+        sprint_name=name
+    )
     click.echo(f"📋 Creating sprint: {name}")
     
     async def create_sprint():
@@ -975,9 +1144,16 @@ def sprint_create(project_id: str, name: str, description: Optional[str],
     result = asyncio.run(create_sprint())
     
     if isinstance(result, dict) and "error" in result:
+        _cli_logger.log_warning(result["error"], "sprint_create_error")
         click.echo(f"❌ {result['error']}")
         return
     
+    _cli_logger.log_info(
+        f"Sprint created: {result.id}",
+        "sprint_created",
+        sprint_id=result.id,
+        sprint_name=name
+    )
     click.echo(f"✅ Sprint created: {result.id}")
     click.echo(f"   Name: {result.name}")
     click.echo(f"   Project: {result.project_id}")
@@ -992,6 +1168,11 @@ def sprint_create(project_id: str, name: str, description: Optional[str],
 @click.argument('sprint_id')
 def sprint_show(sprint_id: str, verbose: bool, quiet: bool, output_json: bool):
     """Affiche les détails d'un sprint."""
+    _cli_logger.log_info(
+        f"Executing sprint-show command for {sprint_id}",
+        "cmd_sprint_show",
+        sprint_id=sprint_id
+    )
     click.echo(f"📋 Showing sprint: {sprint_id}")
     
     async def get_sprint():
@@ -1007,6 +1188,7 @@ def sprint_show(sprint_id: str, verbose: bool, quiet: bool, output_json: bool):
     sprint = asyncio.run(get_sprint())
     
     if not sprint:
+        _cli_logger.log_warning(f"Sprint not found: {sprint_id}", "sprint_not_found")
         click.echo(f"❌ Sprint {sprint_id} not found")
         return
     
@@ -1035,6 +1217,13 @@ def sprint_show(sprint_id: str, verbose: bool, quiet: bool, output_json: bool):
 @click.option('--max-parallel', default=4, help='Max parallel tasks')
 def run(project_id: str, sprint: Optional[str], parallel: bool, max_parallel: int, verbose: bool, quiet: bool, output_json: bool):
     """Exécute le pipeline pour un projet."""
+    _cli_logger.log_info(
+        f"Executing run command for project {project_id}",
+        "cmd_run",
+        project_id=project_id,
+        sprint=sprint,
+        parallel=parallel
+    )
     click.echo(f"🚀 Running pipeline for project: {project_id}")
     
     async def execute():
@@ -1096,9 +1285,20 @@ def run(project_id: str, sprint: Optional[str], parallel: bool, max_parallel: in
     result = asyncio.run(execute())
     
     if "error" in result:
+        _cli_logger.log_error(
+            f"Pipeline execution failed: {result['error']}",
+            None,
+            "pipeline_execution_failed"
+        )
         click.echo(f"❌ {result['error']}")
         return
     
+    _cli_logger.log_info(
+        f"Pipeline completed: {result['tasks_completed']} tasks",
+        "pipeline_completed",
+        project_id=project_id,
+        tasks_completed=result['tasks_completed']
+    )
     click.echo(f"✅ Pipeline completed: {result['tasks_completed']} tasks executed")
     
     if output_json:
@@ -1110,6 +1310,11 @@ def run(project_id: str, sprint: Optional[str], parallel: bool, max_parallel: in
 @click.argument('task_id')
 def task_status(task_id: str, verbose: bool, quiet: bool, output_json: bool):
     """Affiche le statut d'une tâche."""
+    _cli_logger.log_info(
+        f"Executing task-status command for {task_id}",
+        "cmd_task_status",
+        task_id=task_id
+    )
     click.echo(f"📋 Showing task status: {task_id}")
     
     async def get_task():
@@ -1125,6 +1330,7 @@ def task_status(task_id: str, verbose: bool, quiet: bool, output_json: bool):
     task = asyncio.run(get_task())
     
     if not task:
+        _cli_logger.log_warning(f"Task not found: {task_id}", "task_not_found")
         click.echo(f"❌ Task {task_id} not found")
         return
     
@@ -1156,10 +1362,21 @@ def task_status(task_id: str, verbose: bool, quiet: bool, output_json: bool):
 @click.option('--json-output', is_flag=True, help='Output as JSON')
 def audit(contract_path: str, level: str, output: Optional[str], json_output: bool, verbose: bool, quiet: bool, output_json: bool):
     """Exécute un audit de sécurité sur un contrat."""
+    _cli_logger.log_info(
+        f"Executing audit command for {contract_path}",
+        "cmd_audit",
+        contract_path=contract_path,
+        level=level
+    )
     click.echo(f"🔒 Auditing contract: {contract_path}")
     
     contract_file = Path(contract_path)
     if not contract_file.exists():
+        _cli_logger.log_error(
+            f"Contract file not found: {contract_path}",
+            None,
+            "contract_file_not_found"
+        )
         click.echo(f"❌ Contract file not found: {contract_path}")
         return
     
@@ -1188,6 +1405,13 @@ def audit(contract_path: str, level: str, output: Optional[str], json_output: bo
                 output_path.write_text(result.get("report", {}).get("summary", "Audit completed"))
             click.echo(f"✅ Audit report saved to: {output}")
         
+        _cli_logger.log_info(
+            f"Audit completed for {contract_path}",
+            "audit_completed",
+            contract_path=contract_path,
+            secure=result.get('secure', False)
+        )
+        
         if json_output or output_json:
             click.echo(json.dumps(result, indent=2))
         else:
@@ -1197,6 +1421,7 @@ def audit(contract_path: str, level: str, output: Optional[str], json_output: bo
             click.echo(f"  Vulnerabilities: {len(result.get('vulnerabilities', []))}")
             
     except Exception as e:
+        _cli_logger.log_error(f"Audit failed: {e}", e, "audit_failed")
         click.echo(f"❌ Audit failed: {e}")
 
 
@@ -1207,10 +1432,21 @@ def audit(contract_path: str, level: str, output: Optional[str], json_output: bo
 @click.option('--timeout', default=300, help='Timeout in seconds')
 def verify(contract_path: str, function: Optional[str], timeout: int, verbose: bool, quiet: bool, output_json: bool):
     """Exécute une vérification formelle sur un contrat."""
+    _cli_logger.log_info(
+        f"Executing verify command for {contract_path}",
+        "cmd_verify",
+        contract_path=contract_path,
+        function=function
+    )
     click.echo(f"🔬 Verifying contract: {contract_path}")
     
     contract_file = Path(contract_path)
     if not contract_file.exists():
+        _cli_logger.log_error(
+            f"Contract file not found: {contract_path}",
+            None,
+            "contract_file_not_found"
+        )
         click.echo(f"❌ Contract file not found: {contract_path}")
         return
     
@@ -1227,6 +1463,13 @@ def verify(contract_path: str, function: Optional[str], timeout: int, verbose: b
     try:
         result = asyncio.run(run_verification())
         
+        _cli_logger.log_info(
+            f"Verification completed for {contract_path}",
+            "verification_completed",
+            contract_path=contract_path,
+            passed=result.get('passed', False)
+        )
+        
         if output_json:
             click.echo(json.dumps(result, indent=2))
         else:
@@ -1235,6 +1478,7 @@ def verify(contract_path: str, function: Optional[str], timeout: int, verbose: b
             click.echo(f"  Properties: {result.get('passed_count', 0)}/{result.get('total_count', 0)} passed")
             
     except Exception as e:
+        _cli_logger.log_error(f"Verification failed: {e}", e, "verification_failed")
         click.echo(f"❌ Verification failed: {e}")
 
 
@@ -1250,6 +1494,7 @@ def verify(contract_path: str, function: Optional[str], timeout: int, verbose: b
 @click.option('--all', is_flag=True, help='Clean everything')
 def cleanup(workspace: bool, cache: bool, logs: bool, all: bool, verbose: bool, quiet: bool, output_json: bool):
     """Nettoie les fichiers temporaires."""
+    _cli_logger.log_info("Executing cleanup command", "cmd_cleanup")
     click.echo("🧹 Cleaning up...")
     
     cleaned = []
@@ -1292,6 +1537,11 @@ def cleanup(workspace: bool, cache: bool, logs: bool, all: bool, verbose: bool, 
         click.echo("No cleanup specified. Use --workspace, --cache, --logs, or --all.")
         return
     
+    _cli_logger.log_info(
+        f"Cleanup completed: {', '.join(cleaned)}",
+        "cleanup_completed",
+        cleaned=cleaned
+    )
     click.echo(f"✅ Cleanup completed: {', '.join(cleaned)}")
     
     if output_json:
@@ -1302,6 +1552,8 @@ def cleanup(workspace: bool, cache: bool, logs: bool, all: bool, verbose: bool, 
 @common_options
 def info(verbose: bool, quiet: bool, output_json: bool):
     """Affiche des informations sur l'environnement."""
+    _cli_logger.log_info("Executing info command", "cmd_info")
+    
     click.echo("=" * 60)
     click.echo("Smart Contract Dev Pipeline - Environment Info")
     click.echo("=" * 60)
@@ -1361,11 +1613,3 @@ def info(verbose: bool, quiet: bool, output_json: bool):
         }, indent=2))
     
     click.echo("\n" + "=" * 60)
-
-
-# ==============================================================================
-# POINT D'ENTRÉE
-# ==============================================================================
-
-if __name__ == "__main__":
-    cli()

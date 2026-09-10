@@ -16,6 +16,7 @@ Ce module implemente le moteur d'orchestration du pipeline, responsable de:
 
 Le WorkflowEngine est le cœur orchestrateur du pipeline,
 coordonnant l'execution des agents.
+Version refactorisée avec intégration des nouveaux modules système.
 """
 from typing import List, Dict, Set, Any, Optional, Tuple, Callable, Awaitable
 from collections import deque
@@ -29,9 +30,14 @@ from dataclasses import dataclass, field
 # Import des modules du pipeline
 from src.core.exceptions import TaskExecutionError, CircuitBreakerOpenError
 from src.core.models import TaskResult
+from src.core.status_manager import normalize_status, status_manager, StatusManager
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy, RetryCancelledError
+from src.core.contract_validator import ContractValidator, validate_contract
 from src.persistence.project_state import ProjectState
 from src.communication.message_bus import MessageBus
-from src.orchestration.circuit_breaker import CircuitBreaker
+from src.orchestration.circuit_breaker import CircuitBreaker, CircuitBreakerState
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
@@ -171,6 +177,9 @@ class WorkflowEngine:
         _execution_history (List[WorkflowExecution]): Historique des executions
         _listeners (List[Callable]): Listeners d'evenements
         _running (bool): Indique si le moteur est en cours d'execution
+        _logger (StructuredLogger): Logger structure
+        _cache (IntelligentCache): Cache intelligent
+        _retry_handler (AdaptiveRetry): Systeme de retry
     """
 
     def __init__(
@@ -180,7 +189,9 @@ class WorkflowEngine:
         state_manager: Optional[ProjectState] = None,
         circuit_breaker: Optional[CircuitBreaker] = None,
         max_parallel: int = 4,
-        default_max_retries: int = 3
+        default_max_retries: int = 3,
+        cache_enabled: bool = True,
+        cache_ttl: int = 300
     ):
         """
         Initialise le moteur de workflow.
@@ -192,11 +203,16 @@ class WorkflowEngine:
             circuit_breaker: Circuit breaker pour la protection
             max_parallel: Nombre maximum de taches paralleles
             default_max_retries: Nombre maximum de tentatives par defaut
+            cache_enabled: Activer le cache des executions
+            cache_ttl: Duree de vie du cache en secondes
         """
         self.bus = bus
         self.agents = agents or {}
         self.state_manager = state_manager
-        self.circuit_breaker = circuit_breaker
+        self.circuit_breaker = circuit_breaker or CircuitBreaker(
+            max_retries=default_max_retries,
+            name="workflow_engine"
+        )
         self.max_parallel = max_parallel
         self.default_max_retries = default_max_retries
 
@@ -210,6 +226,32 @@ class WorkflowEngine:
         self._task_lock = asyncio.Lock()
         self._execution_lock = asyncio.Lock()
         self._ready_queue: Optional[asyncio.Queue] = None
+
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name="WorkflowEngine",
+            log_level=LogLevel.INFO
+        )
+
+        # Cache intelligent
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=500,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+
+        # Système de retry adaptatif
+        self._retry_handler = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=60.0,
+            max_retries=default_max_retries,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(TaskExecutionError, CircuitBreakerOpenError)
+        )
 
         logger.info("WorkflowEngine initialized")
 
@@ -271,7 +313,12 @@ class WorkflowEngine:
         self.execution.tasks[task_id] = task_exec
         self.execution.total_count += 1
 
-        logger.debug(f"Task added: {task_id} (agent={agent_id}, action={action})")
+        self._logger.log_debug(
+            f"Task added: {task_id}",
+            "task_added",
+            agent_id=agent_id,
+            action=action
+        )
 
     def add_tasks(self, tasks: List[Dict]) -> None:
         """
@@ -366,7 +413,12 @@ class WorkflowEngine:
 
         self.execution.start_time = datetime.now(timezone.utc)
 
-        logger.info(f"Workflow started: {workflow_id}")
+        self._logger.log_info(
+            f"Workflow started: {workflow_id}",
+            "workflow_started",
+            workflow_id=workflow_id,
+            total_tasks=self.execution.total_count
+        )
 
         # Notification de demarrage
         await self._notify("workflow_started", {
@@ -393,7 +445,12 @@ class WorkflowEngine:
         except Exception as e:
             self.execution.status = WorkflowStatus.FAILED
             self.execution.error = str(e)
-            logger.error(f"Workflow failed: {str(e)}")
+            self._logger.log_error(
+                f"Workflow failed: {str(e)}",
+                e,
+                "workflow_failed",
+                workflow_id=workflow_id
+            )
             raise
 
         finally:
@@ -409,7 +466,14 @@ class WorkflowEngine:
                 "total_tasks": self.execution.total_count
             })
 
-            logger.info(f"Workflow completed: {workflow_id} (status={self.execution.status.value})")
+            self._logger.log_info(
+                f"Workflow completed: {workflow_id}",
+                "workflow_completed",
+                workflow_id=workflow_id,
+                status=self.execution.status.value,
+                completed=self.execution.completed_count,
+                total=self.execution.total_count
+            )
 
         return workflow_id
 
@@ -418,7 +482,7 @@ class WorkflowEngine:
         Demande l'arret du workflow.
         """
         self._stop_requested = True
-        logger.info("Stop requested for workflow")
+        self._logger.log_info("Stop requested for workflow", "workflow_stop_requested")
 
     async def _run_pipeline(self) -> None:
         """
@@ -430,10 +494,14 @@ class WorkflowEngine:
         # Resolution de l'ordre topologique (detection de cycles)
         order = self._resolve_order()
         if not order:
-            logger.warning("No tasks to execute")
+            self._logger.log_warning("No tasks to execute", "workflow_no_tasks")
             return
 
-        logger.info(f"Executing {len(order)} tasks in topological order")
+        self._logger.log_info(
+            f"Executing {len(order)} tasks in topological order",
+            "workflow_execution_start",
+            task_count=len(order)
+        )
 
         semaphore = asyncio.Semaphore(self.max_parallel)
         self._ready_queue = asyncio.Queue()
@@ -481,7 +549,11 @@ class WorkflowEngine:
                                         await self._ready_queue.put(tid)
 
                 except Exception as e:
-                    logger.error(f"Worker error: {str(e)}")
+                    self._logger.log_error(
+                        f"Worker error: {str(e)}",
+                        e,
+                        "worker_error"
+                    )
                     break
 
         # Lancer les workers concurrents
@@ -504,7 +576,11 @@ class WorkflowEngine:
                                 t.status = TaskExecutionStatus.READY
                                 await self._ready_queue.put(t.task_id)
                     if not progress_possible:
-                        logger.error("Pipeline deadlocked: pending/blocked tasks have unsatisfied or failed dependencies")
+                        self._logger.log_error(
+                            "Pipeline deadlocked: pending/blocked tasks have unsatisfied or failed dependencies",
+                            None,
+                            "pipeline_deadlock"
+                        )
                         break
                 else:
                     break
@@ -525,12 +601,12 @@ class WorkflowEngine:
         """
         task = self.get_task(task_id)
         if not task:
-            logger.error(f"Task {task_id} not found")
+            self._logger.log_error(f"Task {task_id} not found", None, "task_not_found")
             return
 
         # Verification du circuit breaker
         if self.circuit_breaker:
-            is_open = await self.circuit_breaker.is_open()
+            is_open = await self.circuit_breaker.is_open(task_id)
             if is_open:
                 raise CircuitBreakerOpenError(f"Circuit breaker open for task {task_id}")
 
@@ -540,7 +616,12 @@ class WorkflowEngine:
             task.start_time = datetime.now(timezone.utc)
             self.execution.current_task = task_id
 
-        logger.info(f"Executing task: {task_id} (attempt {task.retry_count + 1})")
+        self._logger.log_info(
+            f"Executing task: {task_id}",
+            "task_execution_start",
+            task_id=task_id,
+            attempt=task.retry_count + 1
+        )
 
         # Notification de debut de tache
         await self._notify("task_started", {
@@ -570,12 +651,21 @@ class WorkflowEngine:
             if self.state_manager:
                 await self._save_task_result(task)
 
-            logger.info(f"Task completed: {task_id}")
+            # Enregistrement du succes dans le circuit breaker
+            if self.circuit_breaker:
+                await self.circuit_breaker.record_success(task_id)
+
+            self._logger.log_info(
+                f"Task completed: {task_id}",
+                "task_completed",
+                task_id=task_id,
+                duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else 0.0
+            )
 
             # Notification de fin de tache
             await self._notify("task_completed", {
                 "task_id": task_id,
-                "status": "SUCCESS",
+                "status": "success",
                 "duration": (task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else 0.0
             })
 
@@ -592,10 +682,21 @@ class WorkflowEngine:
                     "retry_count": task.retry_count
                 })
 
+            # Enregistrement de l'echec dans le circuit breaker
+            if self.circuit_breaker:
+                await self.circuit_breaker.record_failure(task_id, str(e))
+
             # Verifier si on peut reessayer
             if task.retry_count < task.max_retries:
                 task.status = TaskExecutionStatus.RETRYING
-                logger.warning(f"Task {task_id} failed, retrying ({task.retry_count}/{task.max_retries})")
+                self._logger.log_warning(
+                    f"Task {task_id} failed, retrying",
+                    "task_retry",
+                    task_id=task_id,
+                    retry_count=task.retry_count,
+                    max_retries=task.max_retries,
+                    error=str(e)
+                )
 
                 # Notification de retry
                 await self._notify("task_retry", {
@@ -616,7 +717,14 @@ class WorkflowEngine:
             else:
                 async with self._task_lock:
                     task.status = TaskExecutionStatus.FAILED
-                logger.error(f"Task {task_id} failed after {task.max_retries} attempts: {str(e)}")
+
+                self._logger.log_error(
+                    f"Task {task_id} failed after {task.max_retries} attempts",
+                    e,
+                    "task_failed",
+                    task_id=task_id,
+                    max_retries=task.max_retries
+                )
 
                 # Notification d'echec
                 await self._notify("task_failed", {
@@ -712,7 +820,7 @@ class WorkflowEngine:
             result_data = TaskResult(
                 task_id=task.task_id,
                 agent_id=task.task_data.get("agent_id"),
-                status="SUCCESS",
+                status=normalize_status("success"),
                 output=task.result,
                 error=None,
                 duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else None,
@@ -722,7 +830,11 @@ class WorkflowEngine:
             await self.state_manager.save_task_result(result_data)
 
         except Exception as e:
-            logger.error(f"Failed to save task result: {str(e)}")
+            self._logger.log_error(
+                f"Failed to save task result: {str(e)}",
+                e,
+                "save_task_result_failed"
+            )
 
     async def _save_task_error(self, task: TaskExecution) -> None:
         """
@@ -738,7 +850,7 @@ class WorkflowEngine:
             result_data = TaskResult(
                 task_id=task.task_id,
                 agent_id=task.task_data.get("agent_id"),
-                status="FAILED",
+                status=normalize_status("failed"),
                 output=None,
                 error=task.error,
                 duration=(task.end_time - task.start_time).total_seconds() if task.end_time and task.start_time else None,
@@ -748,7 +860,11 @@ class WorkflowEngine:
             await self.state_manager.save_task_result(result_data)
 
         except Exception as e:
-            logger.error(f"Failed to save task error: {str(e)}")
+            self._logger.log_error(
+                f"Failed to save task error: {str(e)}",
+                e,
+                "save_task_error_failed"
+            )
 
     # =========================================================================
     # EVENEMENTS ET NOTIFICATIONS
@@ -785,7 +901,11 @@ class WorkflowEngine:
             try:
                 await listener(event_type, data)
             except Exception as e:
-                logger.error(f"Listener error: {str(e)}")
+                self._logger.log_error(
+                    f"Listener error: {str(e)}",
+                    e,
+                    "listener_error"
+                )
 
         if self.bus:
             try:
@@ -802,7 +922,11 @@ class WorkflowEngine:
                 )
                 await self.bus.publish("workflow.events", event_msg)
             except Exception as e:
-                logger.error(f"Failed to send event via bus: {str(e)}")
+                self._logger.log_error(
+                    f"Failed to send event via bus: {str(e)}",
+                    e,
+                    "bus_event_failed"
+                )
 
     # =========================================================================
     # STATISTIQUES
@@ -868,6 +992,31 @@ class WorkflowEngine:
         """
         return [e.to_dict() for e in self._execution_history[-limit:]]
 
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        Retourne les statistiques du moteur.
+
+        Returns:
+            Dict: Statistiques détaillées
+        """
+        total_executions = len(self._execution_history)
+        successful = sum(1 for e in self._execution_history if e.status == WorkflowStatus.COMPLETED)
+        
+        cache_metrics = self._cache.get_metrics()
+        circuit_metrics = self.circuit_breaker.to_dict() if self.circuit_breaker else {}
+
+        return {
+            "total_executions": total_executions,
+            "successful_executions": successful,
+            "failed_executions": total_executions - successful,
+            "success_rate": successful / total_executions if total_executions > 0 else 0,
+            "max_parallel": self.max_parallel,
+            "default_max_retries": self.default_max_retries,
+            "agents_available": len(self.agents),
+            "cache_metrics": cache_metrics,
+            "circuit_breaker_metrics": circuit_metrics
+        }
+
     # =========================================================================
     # REPRESENTATION
     # =========================================================================
@@ -889,5 +1038,6 @@ class WorkflowEngine:
             "max_parallel": self.max_parallel,
             "default_max_retries": self.default_max_retries,
             "agents_available": len(self.agents),
-            "status": self.get_status()
+            "status": self.get_status(),
+            "statistics": self.get_statistics()
         }

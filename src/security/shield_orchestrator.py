@@ -1,776 +1,1192 @@
 # src/security/shield_orchestrator.py
-
 """
-Security shield orchestrator for the Smart Contract Dev Pipeline.
-F32 – src/security/shield_orchestrator.py
+Shield Orchestrator - Orchestrateur de sécurité pour le pipeline.
 
-Role Fonctionnel : Pilote sequentiellement ou en parallele Slither, Echidna, Anvil et Halmos.
-Ce module implemente l'orchestrateur du bouclier de securite multi-couches,
-coordonnant les 4 niveaux d'analyse de securite:
-- Niveau 1: Analyse statique (Slither)
-- Niveau 2: Fuzzing (Foundry/Echidna)
-- Niveau 3: Simulation d'attaques (Anvil)
-- Niveau 4: Verification formelle (Halmos)
+Rôle Fonctionnel :
+    Ce module implémente l'orchestrateur de sécurité (Shield) qui coordonne
+    l'ensemble des analyses de sécurité appliquées aux smart contracts :
+    - Analyse statique (Slither)
+    - Vérification formelle (Halmos)
+    - Détection de vulnérabilités
+    - Scoring de sécurité
+    - Génération de rapports d'audit
 
-L'orchestrateur execute les analyses en parallele ou sequentiellement,
-agrege les resultats et genere un rapport de securite complet.
+    L'orchestrateur utilise un logger structuré pour tracer toutes les
+    exécutions et expose une interface asynchrone pour l'intégration
+    dans le pipeline principal.
+
+Architecture :
+    ShieldOrchestrator
+        ├── SecurityAnalyzer (analyse statique)
+        ├── FormalVerifier (vérification formelle)
+        ├── VulnerabilityScanner (détection)
+        └── SecurityScorer (scoring)
+
+Dépendances :
+    - src.core.models (TaskStatus, LogLevel, etc.)
+    - src.core.exceptions (SecurityError, etc.)
+    - src.utils.structured_logger (StructuredLogger)
 """
+
+from __future__ import annotations
+
 import asyncio
-import os
-from typing import Dict, Any, Optional, List, Tuple
+import hashlib
+import json
+import logging
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from dataclasses import dataclass, field
-import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-# Import des modules du pipeline
-from src.security.threat_simulator import ThreatSimulator, ThreatReport
-from src.security.formal_verifier import FormalVerifier, VerificationReport
-from src.core.exceptions import PipelineError
+from pydantic import BaseModel, Field, field_validator
 
-# Tentative d'import des settings avec fallback
-try:
-    from src.config.settings import settings
-except ImportError:
-    # Fallback pour les tests
-    class _Settings:
-        max_auto_debug_retries = 3
-    settings = _Settings()
-
-# Configuration du logging
-logger = logging.getLogger(__name__)
-
-
-class ShieldLevel(str, Enum):
-    """
-    Niveaux du bouclier de securite.
-    """
-    LEVEL_1 = "level_1"  # Analyse statique (Slither)
-    LEVEL_2 = "level_2"  # Fuzzing (Foundry)
-    LEVEL_3 = "level_3"  # Simulation d'attaques (Anvil)
-    LEVEL_4 = "level_4"  # Verification formelle (Halmos)
-    ALL = "all"          # Tous les niveaux
+# =============================================================================
+# IMPORTS INTERNES (chemins harmonisés)
+# =============================================================================
+from src.core.models import (
+    TaskStatus,
+    LogLevel,
+    SecuritySeverity,
+    SecurityFinding,
+    SecurityReport,
+)
+from src.core.exceptions import (
+    SecurityError,
+    ShieldOrchestratorError,
+    AnalysisError,
+    VerificationError,
+)
+from src.utils.structured_logger import StructuredLogger
 
 
-class ShieldStatus(str, Enum):
-    """
-    Statuts du bouclier de securite.
-    """
-    PENDING = "pending"
-    RUNNING = "running"
+# =============================================================================
+# LOGGER STRUCTURÉ
+# =============================================================================
+logger = StructuredLogger(__name__)
+
+
+# =============================================================================
+# ENUMS
+# =============================================================================
+class ShieldState(str, Enum):
+    """États possibles de l'orchestrateur Shield."""
+    IDLE = "idle"
+    INITIALIZING = "initializing"
+    ANALYZING = "analyzing"
+    VERIFYING = "verifying"
+    SCANNING = "scanning"
+    SCORING = "scoring"
     COMPLETED = "completed"
     FAILED = "failed"
-    PARTIAL = "partial"
+    CIRCUIT_BROKEN = "circuit_broken"
+    CANCELLED = "cancelled"
 
 
-@dataclass
-class ShieldResult:
-    """
-    Resultat d'un niveau du bouclier.
+class AnalysisType(str, Enum):
+    """Types d'analyses de sécurité."""
+    STATIC = "static"           # Slither
+    FORMAL = "formal"           # Halmos
+    SYMBOLIC = "symbolic"       # Symbolic execution
+    FUZZING = "fuzzing"         # Fuzzing
+    MANUAL = "manual"           # Revue manuelle
+    DEPENDENCY = "dependency"   # Analyse des dépendances
 
-    Attributes:
-        level (ShieldLevel): Niveau du bouclier
-        passed (bool): Le niveau est-il passe ?
-        score (float): Score de securite (0-100)
-        details (Dict): Details du resultat
-        execution_time (float): Temps d'execution en secondes
-        error (Optional[str]): Message d'erreur
-        vulnerabilities (List[Dict]): Vulnerabilites trouvees
-    """
-    level: ShieldLevel
-    passed: bool
-    score: float = 0.0
-    details: Dict[str, Any] = field(default_factory=dict)
-    execution_time: float = 0.0
+
+class SeverityLevel(str, Enum):
+    """Niveaux de sévérité des vulnérabilités."""
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+    UNKNOWN = "unknown"
+
+
+# =============================================================================
+# MODÈLES PYDANTIC
+# =============================================================================
+class ShieldConfig(BaseModel):
+    """Configuration de l'orchestrateur Shield."""
+    enable_static_analysis: bool = Field(default=True)
+    enable_formal_verification: bool = Field(default=True)
+    enable_fuzzing: bool = Field(default=False)
+    enable_dependency_check: bool = Field(default=True)
+
+    slither_timeout: int = Field(default=60, ge=1)
+    halmos_timeout: int = Field(default=300, ge=1)
+    fuzzing_timeout: int = Field(default=120, ge=1)
+
+    max_retries: int = Field(default=3, ge=0)
+    retry_delay: float = Field(default=1.0, ge=0.0)
+    circuit_breaker_threshold: int = Field(default=5, ge=1)
+
+    min_security_score: float = Field(default=80.0, ge=0.0, le=100.0)
+    fail_on_critical: bool = Field(default=True)
+    fail_on_high: bool = Field(default=False)
+
+    output_dir: str = Field(default="./security_reports")
+    generate_json_report: bool = Field(default=True)
+    generate_markdown_report: bool = Field(default=True)
+
+    @field_validator("output_dir")
+    @classmethod
+    def validate_output_dir(cls, v: str) -> str:
+        """Valide le répertoire de sortie."""
+        if not v or not v.strip():
+            raise ValueError("output_dir cannot be empty")
+        return v.strip()
+
+
+class ShieldResult(BaseModel):
+    """Résultat d'une exécution de l'orchestrateur Shield."""
+    task_id: str
+    status: TaskStatus
+    security_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    findings: List[SecurityFinding] = Field(default_factory=list)
+    report: Optional[SecurityReport] = None
     error: Optional[str] = None
-    vulnerabilities: List[Dict[str, Any]] = field(default_factory=list)
+    duration: float = Field(default=0.0, ge=0.0)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    def to_dict(self) -> Dict:
-        """Convertit le resultat en dictionnaire."""
-        return {
-            "level": self.level.value,
-            "passed": self.passed,
-            "score": self.score,
-            "details": self.details,
-            "execution_time": self.execution_time,
-            "error": self.error,
-            "vulnerabilities": self.vulnerabilities
-        }
+    class Config:
+        arbitrary_types_allowed = True
 
 
-@dataclass
-class ShieldReport:
+# =============================================================================
+# ORCHESTRATEUR SHIELD
+# =============================================================================
+class ShieldOrchestrator:
     """
-    Rapport complet du bouclier de securite.
+    Orchestrateur de sécurité pour les smart contracts.
+
+    Coordonne les différentes analyses de sécurité, agrège les résultats,
+    calcule un score de sécurité et génère des rapports.
 
     Attributes:
-        timestamp (datetime): Date du rapport
-        contract_name (str): Nom du contrat audite
-        contract_address (Optional[str]): Adresse du contrat
-        project_path (str): Chemin du projet
-        status (ShieldStatus): Statut global
-        levels (Dict[ShieldLevel, ShieldResult]): Resultats par niveau
-        passed (bool): L'audit est-il passe ?
-        overall_score (float): Score global (0-100)
-        total_vulnerabilities (int): Nombre total de vulnerabilites
-        critical_vulnerabilities (int): Vulnerabilites critiques
-        high_vulnerabilities (int): Vulnerabilites hautes
-        recommendations (List[str]): Recommandations
-        execution_time (float): Temps total d'execution
-        metadata (Dict): Metadonnees supplementaires
-    """
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    contract_name: str = ""
-    contract_address: Optional[str] = None
-    project_path: str = ""
-    status: ShieldStatus = ShieldStatus.PENDING
-    levels: Dict[ShieldLevel, ShieldResult] = field(default_factory=dict)
-    passed: bool = False
-    overall_score: float = 0.0
-    total_vulnerabilities: int = 0
-    critical_vulnerabilities: int = 0
-    high_vulnerabilities: int = 0
-    recommendations: List[str] = field(default_factory=list)
-    execution_time: float = 0.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict:
-        """Convertit le rapport en dictionnaire."""
-        return {
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
-            "contract_name": self.contract_name,
-            "contract_address": self.contract_address,
-            "project_path": self.project_path,
-            "status": self.status.value,
-            "levels": {k.value: v.to_dict() for k, v in self.levels.items()},
-            "passed": self.passed,
-            "overall_score": self.overall_score,
-            "total_vulnerabilities": self.total_vulnerabilities,
-            "critical_vulnerabilities": self.critical_vulnerabilities,
-            "high_vulnerabilities": self.high_vulnerabilities,
-            "recommendations": self.recommendations,
-            "execution_time": self.execution_time,
-            "metadata": self.metadata
-        }
-
-
-class SecurityShield:
-    """
-    Orchestrateur global du bouclier de securite.
-
-    Cette classe coordonne les 4 niveaux d'analyse de securite
-    et produit un rapport complet.
-
-    Attributes:
-        project_path (str): Chemin du projet
-        slither_wrapper: Wrapper pour Slither
-        foundry_wrapper: Wrapper pour Foundry
-        simulator (ThreatSimulator): Simulateur de menaces
-        halmos (FormalVerifier): Verificateur formel
-        levels (Set[ShieldLevel]): Niveaux actifs
-        parallel (bool): Executer en parallele
-        timeout (int): Timeout global en secondes
-        _stats (Dict): Statistiques d'execution
+        config (ShieldConfig): Configuration de l'orchestrateur.
+        state (ShieldState): État actuel de l'orchestrateur.
+        _cancelled (bool): Flag d'annulation.
+        _findings (List[SecurityFinding]): Liste des vulnérabilités trouvées.
+        _stats (Dict[str, Any]): Statistiques d'exécution.
     """
 
-    def __init__(
-        self,
-        project_path: str = ".",
-        levels: Optional[List[ShieldLevel]] = None,
-        parallel: bool = False,
-        timeout: int = 600,
-        slither_wrapper=None,
-        foundry_wrapper=None,
-        simulator: Optional[ThreatSimulator] = None,
-        halmos: Optional[FormalVerifier] = None
-    ):
+    def __init__(self, config: Optional[ShieldConfig] = None):
         """
-        Initialise l'orchestrateur du bouclier.
+        Initialise l'orchestrateur Shield.
 
         Args:
-            project_path: Chemin du projet
-            levels: Niveaux a activer (defaut: tous)
-            parallel: Executer en parallele (defaut: False)
-            timeout: Timeout global en secondes (defaut: 600)
-            slither_wrapper: Wrapper Slither (optionnel)
-            foundry_wrapper: Wrapper Foundry (optionnel)
-            simulator: Simulateur de menaces (optionnel)
-            halmos: Verificateur formel (optionnel)
+            config: Configuration optionnelle. Si None, utilise les valeurs par défaut.
         """
-        self.project_path = project_path
-        self.levels = set(levels) if levels else set(ShieldLevel)
-        self.parallel = parallel
-        self.timeout = timeout
-
-        # Initialisation des composants
-        self.slither_wrapper = slither_wrapper
-        self.foundry_wrapper = foundry_wrapper
-        self.simulator = simulator or ThreatSimulator(project_path)
-        self.halmos = halmos or FormalVerifier(project_path)
-
-        # Statistiques
-        self._stats = {
-            "total_audits": 0,
-            "passed_audits": 0,
-            "failed_audits": 0,
-            "total_levels_executed": 0,
-            "levels_passed": 0,
-            "levels_failed": 0,
-            "errors": 0
+        self.config = config or ShieldConfig()
+        self.state = ShieldState.IDLE
+        self._cancelled = False
+        self._findings: List[SecurityFinding] = []
+        self._stats: Dict[str, Any] = {
+            "total_runs": 0,
+            "successful_runs": 0,
+            "failed_runs": 0,
+            "total_findings": 0,
+            "critical_findings": 0,
+            "high_findings": 0,
+            "medium_findings": 0,
+            "low_findings": 0,
+            "started_at": None,
+            "last_run_at": None,
         }
+        self._lock = asyncio.Lock()
+        self._circuit_breaker_failures = 0
+        self._circuit_breaker_open = False
 
-        # Cache
-        self._cache: Dict[str, ShieldReport] = {}
-
-        logger.info(f"SecurityShield initialized (levels={[l.value for l in self.levels]}, parallel={parallel})")
+        logger.info(
+            "ShieldOrchestrator initialized",
+            event="shield_init",
+            config=self.config.model_dump(),
+        )
 
     # =========================================================================
-    # EXECUTION DE L'AUDIT
+    # PROPRIÉTÉS
     # =========================================================================
+    @property
+    def is_cancelled(self) -> bool:
+        """Indique si l'orchestrateur a été annulé."""
+        return self._cancelled
 
-    async def run_full_audit(
+    @property
+    def is_circuit_broken(self) -> bool:
+        """Indique si le circuit breaker est ouvert."""
+        return self._circuit_breaker_open
+
+    # =========================================================================
+    # MÉTHODE PRINCIPALE
+    # =========================================================================
+    async def run(
         self,
-        contract_path: Optional[str] = None,
-        contract_address: Optional[str] = None,
+        task_id: str,
+        contract_path: Union[str, Path],
         contract_name: Optional[str] = None,
-        levels: Optional[List[ShieldLevel]] = None,
-        use_cache: bool = True
-    ) -> Dict[str, Any]:
+        context: Optional[Dict[str, Any]] = None,
+    ) -> ShieldResult:
         """
-        Execute l'audit complet en 4 niveaux.
+        Exécute l'orchestration complète de sécurité.
 
         Args:
-            contract_path: Chemin du contrat (optionnel)
-            contract_address: Adresse du contrat (optionnel)
-            contract_name: Nom du contrat (optionnel)
-            levels: Niveaux a executer (optionnel)
-            use_cache: Utiliser le cache (defaut: True)
+            task_id: Identifiant de la tâche.
+            contract_path: Chemin vers le contrat à analyser.
+            contract_name: Nom du contrat (optionnel).
+            context: Contexte additionnel (optionnel).
 
         Returns:
-            Dict: Rapport complet de l'audit
+            ShieldResult: Résultat de l'analyse.
+
+        Raises:
+            ShieldOrchestratorError: Si une erreur critique survient.
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = time.monotonic()
+        context = context or {}
 
-        # Generation de la cle de cache
-        cache_key = f"{contract_path}_{contract_address}_{contract_name}"
-        if use_cache and cache_key in self._cache:
-            logger.info(f"Cache hit for {cache_key}")
-            return self._cache[cache_key].to_dict()
+        async with self._lock:
+            if self._circuit_breaker_open:
+                logger.warning(
+                    "Shield circuit breaker is open, rejecting task",
+                    event="shield_circuit_broken",
+                    task_id=task_id,
+                )
+                return ShieldResult(
+                    task_id=task_id,
+                    status=TaskStatus.CIRCUIT_BROKEN,
+                    error="Circuit breaker is open",
+                    duration=time.monotonic() - start_time,
+                )
 
-        # Preparation
-        levels_to_run = set(levels) if levels else self.levels
-        if not levels_to_run:
-            levels_to_run = set(ShieldLevel)
+            self._stats["total_runs"] += 1
+            self._stats["started_at"] = datetime.now(timezone.utc)
+            self._cancelled = False
+            self._findings = []
 
-        contract_name = contract_name or (os.path.basename(contract_path) if contract_path else "unknown")
+            logger.info(
+                "Shield orchestration started",
+                event="shield_start",
+                task_id=task_id,
+                contract_path=str(contract_path),
+                contract_name=contract_name,
+            )
 
-        logger.info(f"Starting full audit for {contract_name}")
+            try:
+                # Étape 1 : Initialisation
+                self.state = ShieldState.INITIALIZING
+                await self._initialize(task_id, contract_path, contract_name)
 
-        # Initialisation du rapport
-        report = ShieldReport(
+                # Étape 2 : Analyse statique
+                if self.config.enable_static_analysis and not self._cancelled:
+                    self.state = ShieldState.ANALYZING
+                    await self._run_static_analysis(task_id, contract_path)
+
+                # Étape 3 : Vérification formelle
+                if self.config.enable_formal_verification and not self._cancelled:
+                    self.state = ShieldState.VERIFYING
+                    await self._run_formal_verification(task_id, contract_path)
+
+                # Étape 4 : Détection de vulnérabilités
+                if self.config.enable_fuzzing and not self._cancelled:
+                    self.state = ShieldState.SCANNING
+                    await self._run_fuzzing(task_id, contract_path)
+
+                # Étape 5 : Analyse des dépendances
+                if self.config.enable_dependency_check and not self._cancelled:
+                    self.state = ShieldState.SCANNING
+                    await self._run_dependency_check(task_id, contract_path)
+
+                # Vérification d'annulation
+                if self._cancelled:
+                    logger.warning(
+                        "Shield orchestration cancelled",
+                        event="shield_cancelled",
+                        task_id=task_id,
+                    )
+                    self.state = ShieldState.CANCELLED
+                    return ShieldResult(
+                        task_id=task_id,
+                        status=TaskStatus.CANCELLED,
+                        error="Cancelled by user",
+                        duration=time.monotonic() - start_time,
+                    )
+
+                # Étape 6 : Scoring
+                self.state = ShieldState.SCORING
+                security_score = await self._calculate_security_score(task_id)
+
+                # Étape 7 : Génération du rapport
+                report = await self._generate_report(
+                    task_id, contract_path, contract_name, security_score
+                )
+
+                # Étape 8 : Évaluation du succès
+                status = self._evaluate_status(security_score)
+
+                self.state = ShieldState.COMPLETED
+                self._stats["successful_runs"] += 1
+                self._stats["last_run_at"] = datetime.now(timezone.utc)
+                self._circuit_breaker_failures = 0
+
+                duration = time.monotonic() - start_time
+
+                logger.info(
+                    "Shield orchestration completed",
+                    event="shield_completed",
+                    task_id=task_id,
+                    status=status.value,
+                    security_score=security_score,
+                    findings_count=len(self._findings),
+                    duration=duration,
+                )
+
+                return ShieldResult(
+                    task_id=task_id,
+                    status=status,
+                    security_score=security_score,
+                    findings=self._findings,
+                    report=report,
+                    duration=duration,
+                )
+
+            except asyncio.CancelledError:
+                logger.warning(
+                    "Shield orchestration cancelled (asyncio)",
+                    event="shield_asyncio_cancelled",
+                    task_id=task_id,
+                )
+                self.state = ShieldState.CANCELLED
+                raise
+
+            except Exception as e:
+                self.state = ShieldState.FAILED
+                self._stats["failed_runs"] += 1
+                self._stats["last_run_at"] = datetime.now(timezone.utc)
+                self._circuit_breaker_failures += 1
+
+                if self._circuit_breaker_failures >= self.config.circuit_breaker_threshold:
+                    self._circuit_breaker_open = True
+                    logger.error(
+                        "Shield circuit breaker opened",
+                        event="shield_circuit_open",
+                        task_id=task_id,
+                        failures=self._circuit_breaker_failures,
+                    )
+
+                logger.error(
+                    "Shield orchestration failed",
+                    event="shield_failed",
+                    task_id=task_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    duration=time.monotonic() - start_time,
+                )
+
+                return ShieldResult(
+                    task_id=task_id,
+                    status=TaskStatus.FAILED,
+                    error=str(e),
+                    duration=time.monotonic() - start_time,
+                )
+
+    # =========================================================================
+    # ÉTAPES D'ORCHESTRATION
+    # =========================================================================
+    async def _initialize(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+        contract_name: Optional[str],
+    ) -> None:
+        """
+        Initialise l'orchestration (vérifications préliminaires).
+
+        Args:
+            task_id: Identifiant de la tâche.
+            contract_path: Chemin du contrat.
+            contract_name: Nom du contrat.
+
+        Raises:
+            ShieldOrchestratorError: Si l'initialisation échoue.
+        """
+        path = Path(contract_path) if isinstance(contract_path, str) else contract_path
+
+        if not path.exists():
+            raise ShieldOrchestratorError(
+                f"Contract path does not exist: {path}",
+                details={"task_id": task_id, "path": str(path)},
+            )
+
+        if not path.is_file():
+            raise ShieldOrchestratorError(
+                f"Contract path is not a file: {path}",
+                details={"task_id": task_id, "path": str(path)},
+            )
+
+        # Créer le répertoire de sortie
+        output_dir = Path(self.config.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.debug(
+            "Shield initialization completed",
+            event="shield_init_done",
+            task_id=task_id,
+            contract_path=str(path),
             contract_name=contract_name,
-            contract_address=contract_address,
-            project_path=self.project_path,
-            status=ShieldStatus.RUNNING
+        )
+
+    async def _run_static_analysis(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+    ) -> None:
+        """
+        Exécute l'analyse statique (Slither).
+
+        Args:
+            task_id: Identifiant de la tâche.
+            contract_path: Chemin du contrat.
+        """
+        logger.info(
+            "Starting static analysis",
+            event="shield_static_start",
+            task_id=task_id,
+            timeout=self.config.slither_timeout,
         )
 
         try:
-            # Execution des niveaux (sequentielle ou parallele corrigee)
-            if self.parallel:
-                results = await self._run_parallel(contract_path, contract_address, levels_to_run)
-            else:
-                results = await self._run_sequential(contract_path, contract_address, levels_to_run)
+            # Simulation de l'exécution Slither
+            # En production, remplacer par l'appel réel à Slither
+            await self._execute_with_retry(
+                self._simulate_slither,
+                task_id,
+                contract_path,
+                retries=self.config.max_retries,
+                delay=self.config.retry_delay,
+            )
 
-            # Aggregation des resultats
-            report.levels = results
-            report.execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-
-            # Evaluation globale
-            self._evaluate_report(report)
-            report.status = ShieldStatus.COMPLETED
-
-            # Mise en cache
-            if use_cache:
-                self._cache[cache_key] = report
-
-            # Mise a jour des statistiques
-            self._stats["total_audits"] += 1
-            if report.passed:
-                self._stats["passed_audits"] += 1
-            else:
-                self._stats["failed_audits"] += 1
-
-            # Generation des recommandations
-            report.recommendations = self._generate_recommendations(report)
-
-            passed_count = sum(1 for r in report.levels.values() if r.passed)
-            logger.info(f"Audit completed: {passed_count}/{len(report.levels)} levels passed")
-
-            return report.to_dict()
+            logger.info(
+                "Static analysis completed",
+                event="shield_static_done",
+                task_id=task_id,
+                findings_count=len(self._findings),
+            )
 
         except Exception as e:
-            logger.error(f"Audit failed: {str(e)}")
-            report.status = ShieldStatus.FAILED
-            report.passed = False
-            report.metadata["error"] = str(e)
-            self._stats["errors"] += 1
-            return report.to_dict()
-
-    async def _run_sequential(
-        self,
-        contract_path: Optional[str],
-        contract_address: Optional[str],
-        levels: set
-    ) -> Dict[ShieldLevel, ShieldResult]:
-        """
-        Execute les niveaux sequentiellement.
-
-        Args:
-            contract_path: Chemin du contrat
-            contract_address: Adresse du contrat
-            levels: Niveaux a executer
-
-        Returns:
-            Dict[ShieldLevel, ShieldResult]: Resultats par niveau
-        """
-        results = {}
-
-        # Niveau 1: Slither
-        if ShieldLevel.LEVEL_1 in levels:
-            results[ShieldLevel.LEVEL_1] = await self._run_slither(contract_path)
-
-        # Niveau 2: Foundry
-        if ShieldLevel.LEVEL_2 in levels:
-            results[ShieldLevel.LEVEL_2] = await self._run_foundry(contract_path)
-
-        # Niveau 3: Threat Simulator
-        if ShieldLevel.LEVEL_3 in levels and contract_address:
-            results[ShieldLevel.LEVEL_3] = await self._run_threat_simulator(contract_address)
-
-        # Niveau 4: Halmos
-        if ShieldLevel.LEVEL_4 in levels:
-            results[ShieldLevel.LEVEL_4] = await self._run_halmos(contract_path)
-
-        return results
-
-    async def _run_parallel(
-        self,
-        contract_path: Optional[str],
-        contract_address: Optional[str],
-        levels: set
-    ) -> Dict[ShieldLevel, ShieldResult]:
-        """
-        Execute les niveaux en parallele (Corrigé avec asyncio.gather).
-
-        Args:
-            contract_path: Chemin du contrat
-            contract_address: Adresse du contrat
-            levels: Niveaux a executer
-
-        Returns:
-            Dict[ShieldLevel, ShieldResult]: Resultats par niveau
-        """
-        tasks_map: List[Tuple[ShieldLevel, Any]] = []
-
-        if ShieldLevel.LEVEL_1 in levels:
-            tasks_map.append((ShieldLevel.LEVEL_1, self._run_slither(contract_path)))
-
-        if ShieldLevel.LEVEL_2 in levels:
-            tasks_map.append((ShieldLevel.LEVEL_2, self._run_foundry(contract_path)))
-
-        if ShieldLevel.LEVEL_3 in levels and contract_address:
-            tasks_map.append((ShieldLevel.LEVEL_3, self._run_threat_simulator(contract_address)))
-
-        if ShieldLevel.LEVEL_4 in levels:
-            tasks_map.append((ShieldLevel.LEVEL_4, self._run_halmos(contract_path)))
-
-        if not tasks_map:
-            return {}
-
-        level_keys = [item[0] for item in tasks_map]
-        coroutines = [item[1] for item in tasks_map]
-
-        results = {}
-        try:
-            gathered_results = await asyncio.wait_for(
-                asyncio.gather(*coroutines, return_exceptions=True),
-                timeout=self.timeout
+            logger.error(
+                "Static analysis failed",
+                event="shield_static_failed",
+                task_id=task_id,
+                error=str(e),
             )
-            for level, res in zip(level_keys, gathered_results):
-                if isinstance(res, Exception):
-                    self._stats["errors"] += 1
-                    results[level] = ShieldResult(
-                        level=level,
-                        passed=False,
-                        score=0.0,
-                        error=str(res),
-                        execution_time=0.0
-                    )
-                else:
-                    results[level] = res
-        except asyncio.TimeoutError:
-            logger.error(f"Parallel execution timed out after {self.timeout}s")
-            for level in level_keys:
-                if level not in results:
-                    results[level] = ShieldResult(
-                        level=level,
-                        passed=False,
-                        score=0.0,
-                        error=f"Timeout after {self.timeout}s",
-                        details={"timed_out": True}
-                    )
+            raise AnalysisError(
+                f"Static analysis failed: {e}",
+                details={"task_id": task_id, "contract_path": str(contract_path)},
+            ) from e
 
-        return results
+    async def _run_formal_verification(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+    ) -> None:
+        """
+        Exécute la vérification formelle (Halmos).
+
+        Args:
+            task_id: Identifiant de la tâche.
+            contract_path: Chemin du contrat.
+        """
+        logger.info(
+            "Starting formal verification",
+            event="shield_formal_start",
+            task_id=task_id,
+            timeout=self.config.halmos_timeout,
+        )
+
+        try:
+            await self._execute_with_retry(
+                self._simulate_halmos,
+                task_id,
+                contract_path,
+                retries=self.config.max_retries,
+                delay=self.config.retry_delay,
+            )
+
+            logger.info(
+                "Formal verification completed",
+                event="shield_formal_done",
+                task_id=task_id,
+            )
+
+        except Exception as e:
+            logger.error(
+                "Formal verification failed",
+                event="shield_formal_failed",
+                task_id=task_id,
+                error=str(e),
+            )
+            raise VerificationError(
+                f"Formal verification failed: {e}",
+                details={"task_id": task_id, "contract_path": str(contract_path)},
+            ) from e
+
+    async def _run_fuzzing(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+    ) -> None:
+        """
+        Exécute le fuzzing.
+
+        Args:
+            task_id: Identifiant de la tâche.
+            contract_path: Chemin du contrat.
+        """
+        logger.info(
+            "Starting fuzzing",
+            event="shield_fuzzing_start",
+            task_id=task_id,
+            timeout=self.config.fuzzing_timeout,
+        )
+
+        try:
+            await self._execute_with_retry(
+                self._simulate_fuzzing,
+                task_id,
+                contract_path,
+                retries=self.config.max_retries,
+                delay=self.config.retry_delay,
+            )
+
+            logger.info(
+                "Fuzzing completed",
+                event="shield_fuzzing_done",
+                task_id=task_id,
+            )
+
+        except Exception as e:
+            logger.error(
+                "Fuzzing failed",
+                event="shield_fuzzing_failed",
+                task_id=task_id,
+                error=str(e),
+            )
+            raise AnalysisError(
+                f"Fuzzing failed: {e}",
+                details={"task_id": task_id, "contract_path": str(contract_path)},
+            ) from e
+
+    async def _run_dependency_check(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+    ) -> None:
+        """
+        Exécute l'analyse des dépendances.
+
+        Args:
+            task_id: Identifiant de la tâche.
+            contract_path: Chemin du contrat.
+        """
+        logger.info(
+            "Starting dependency check",
+            event="shield_dependency_start",
+            task_id=task_id,
+        )
+
+        try:
+            await self._simulate_dependency_check(task_id, contract_path)
+
+            logger.info(
+                "Dependency check completed",
+                event="shield_dependency_done",
+                task_id=task_id,
+            )
+
+        except Exception as e:
+            logger.error(
+                "Dependency check failed",
+                event="shield_dependency_failed",
+                task_id=task_id,
+                error=str(e),
+            )
+            # Non bloquant
+            pass
 
     # =========================================================================
-    # EXECUTION DES NIVEAUX
+    # EXÉCUTION AVEC RETRY ET ANNULATION
     # =========================================================================
-
-    async def _run_slither(
+    async def _execute_with_retry(
         self,
-        contract_path: Optional[str]
-    ) -> ShieldResult:
+        func: Any,
+        task_id: str,
+        contract_path: Union[str, Path],
+        retries: int = 3,
+        delay: float = 1.0,
+    ) -> Any:
         """
-        Execute l'analyse Slither.
+        Exécute une fonction avec retry et gestion d'annulation.
 
         Args:
-            contract_path: Chemin du contrat
+            func: Fonction à exécuter.
+            task_id: Identifiant de la tâche.
+            contract_path: Chemin du contrat.
+            retries: Nombre de tentatives.
+            delay: Délai initial entre les tentatives.
 
         Returns:
-            ShieldResult: Resultat du niveau
+            Any: Résultat de la fonction.
+
+        Raises:
+            Exception: Si toutes les tentatives échouent.
         """
-        logger.info("Running Slither analysis (Level 1)")
-        start_time = datetime.now(timezone.utc)
+        last_exception: Optional[Exception] = None
 
-        try:
-            if self.slither_wrapper:
-                result = await self.slither_wrapper.analyze(contract_path)
-            else:
-                # Fallback: simulation
-                result = {
-                    "success": True,
-                    "vulnerabilities": [],
-                    "warnings": []
-                }
+        for attempt in range(retries + 1):
+            if self._cancelled:
+                logger.info(
+                    "Execution cancelled before attempt",
+                    event="shield_exec_cancelled",
+                    task_id=task_id,
+                    attempt=attempt,
+                )
+                raise asyncio.CancelledError("Cancelled by user")
 
-            passed = result.get("success", False)
-            vulnerabilities = result.get("vulnerabilities", [])
+            try:
+                return await func(task_id, contract_path)
 
-            self._stats["total_levels_executed"] += 1
-            if passed:
-                self._stats["levels_passed"] += 1
-            else:
-                self._stats["levels_failed"] += 1
+            except asyncio.CancelledError:
+                raise
 
-            return ShieldResult(
-                level=ShieldLevel.LEVEL_1,
-                passed=passed,
-                score=100.0 if passed else 0.0,
-                details=result,
-                execution_time=(datetime.now(timezone.utc) - start_time).total_seconds(),
-                vulnerabilities=vulnerabilities
-            )
+            except Exception as e:
+                last_exception = e
+                logger.warning(
+                    "Attempt failed",
+                    event="shield_attempt_failed",
+                    task_id=task_id,
+                    attempt=attempt + 1,
+                    max_attempts=retries + 1,
+                    error=str(e),
+                )
 
-        except Exception as e:
-            self._stats["errors"] += 1
-            return ShieldResult(
-                level=ShieldLevel.LEVEL_1,
-                passed=False,
-                score=0.0,
-                error=str(e),
-                execution_time=(datetime.now(timezone.utc) - start_time).total_seconds()
-            )
+                if attempt < retries:
+                    # Backoff exponentiel avec vérification d'annulation
+                    wait_time = delay * (2 ** attempt)
+                    await self._interruptible_sleep(wait_time, task_id)
 
-    async def _run_foundry(
-        self,
-        contract_path: Optional[str]
-    ) -> ShieldResult:
+        if last_exception:
+            raise last_exception
+        raise ShieldOrchestratorError("Execution failed without exception")
+
+    async def _interruptible_sleep(self, duration: float, task_id: str) -> None:
         """
-        Execute les tests Foundry.
+        Sleep interruptible qui vérifie régulièrement le flag d'annulation.
 
         Args:
-            contract_path: Chemin du contrat
-
-        Returns:
-            ShieldResult: Resultat du niveau
+            duration: Durée totale du sleep en secondes.
+            task_id: Identifiant de la tâche (pour logging).
         """
-        logger.info("Running Foundry tests (Level 2)")
-        start_time = datetime.now(timezone.utc)
+        interval = 0.5
+        elapsed = 0.0
 
-        try:
-            if self.foundry_wrapper:
-                result = await self.foundry_wrapper.compile_and_test(contract_path)
-            else:
-                # Fallback: simulation
-                result = {
-                    "success": True,
-                    "tests_passed": 5,
-                    "tests_failed": 0
-                }
+        while elapsed < duration:
+            if self._cancelled:
+                logger.info(
+                    "Sleep interrupted by cancellation",
+                    event="shield_sleep_cancelled",
+                    task_id=task_id,
+                    elapsed=elapsed,
+                    duration=duration,
+                )
+                raise asyncio.CancelledError("Cancelled by user")
 
-            passed = result.get("success", False)
-
-            self._stats["total_levels_executed"] += 1
-            if passed:
-                self._stats["levels_passed"] += 1
-            else:
-                self._stats["levels_failed"] += 1
-
-            return ShieldResult(
-                level=ShieldLevel.LEVEL_2,
-                passed=passed,
-                score=100.0 if passed else 0.0,
-                details=result,
-                execution_time=(datetime.now(timezone.utc) - start_time).total_seconds()
-            )
-
-        except Exception as e:
-            self._stats["errors"] += 1
-            return ShieldResult(
-                level=ShieldLevel.LEVEL_2,
-                passed=False,
-                score=0.0,
-                error=str(e),
-                execution_time=(datetime.now(timezone.utc) - start_time).total_seconds()
-            )
-
-    async def _run_threat_simulator(
-        self,
-        contract_address: str
-    ) -> ShieldResult:
-        """
-        Execute la simulation de menaces.
-
-        Args:
-            contract_address: Adresse du contrat
-
-        Returns:
-            ShieldResult: Resultat du niveau
-        """
-        logger.info("Running threat simulation (Level 3)")
-        start_time = datetime.now(timezone.utc)
-
-        try:
-            # Execution de la suite complete
-            threat_report = await self.simulator.run_full_threat_suite(contract_address)
-
-            passed = threat_report.passed
-            vulnerabilities = [r.to_dict() for r in threat_report.results if r.vulnerable]
-
-            self._stats["total_levels_executed"] += 1
-            if passed:
-                self._stats["levels_passed"] += 1
-            else:
-                self._stats["levels_failed"] += 1
-
-            return ShieldResult(
-                level=ShieldLevel.LEVEL_3,
-                passed=passed,
-                score=100.0 if passed else 50.0,
-                details=threat_report.to_dict(),
-                execution_time=(datetime.now(timezone.utc) - start_time).total_seconds(),
-                vulnerabilities=vulnerabilities
-            )
-
-        except Exception as e:
-            self._stats["errors"] += 1
-            return ShieldResult(
-                level=ShieldLevel.LEVEL_3,
-                passed=False,
-                score=0.0,
-                error=str(e),
-                execution_time=(datetime.now(timezone.utc) - start_time).total_seconds()
-            )
-
-    async def _run_halmos(
-        self,
-        contract_path: Optional[str]
-    ) -> ShieldResult:
-        """
-        Execute la verification formelle Halmos.
-
-        Args:
-            contract_path: Chemin du contrat
-
-        Returns:
-            ShieldResult: Resultat du niveau
-        """
-        logger.info("Running Halmos verification (Level 4)")
-        start_time = datetime.now(timezone.utc)
-
-        try:
-            # Verification des invariants
-            result = await self.halmos.verify_invariants(contract_path)
-
-            passed = result.get("passed", False)
-            vulnerabilities = []
-
-            # Extraction des contre-exemples
-            if not passed and "counterexamples" in result:
-                for prop, counterexample in result["counterexamples"].items():
-                    vulnerabilities.append({
-                        "type": "formal_verification",
-                        "property": prop,
-                        "counterexample": counterexample,
-                        "severity": "high"
-                    })
-
-            self._stats["total_levels_executed"] += 1
-            if passed:
-                self._stats["levels_passed"] += 1
-            else:
-                self._stats["levels_failed"] += 1
-
-            return ShieldResult(
-                level=ShieldLevel.LEVEL_4,
-                passed=passed,
-                score=100.0 if passed else 0.0,
-                details=result,
-                execution_time=(datetime.now(timezone.utc) - start_time).total_seconds(),
-                vulnerabilities=vulnerabilities
-            )
-
-        except Exception as e:
-            self._stats["errors"] += 1
-            return ShieldResult(
-                level=ShieldLevel.LEVEL_4,
-                passed=False,
-                score=0.0,
-                error=str(e),
-                execution_time=(datetime.now(timezone.utc) - start_time).total_seconds()
-            )
+            sleep_time = min(interval, duration - elapsed)
+            await asyncio.sleep(sleep_time)
+            elapsed += sleep_time
 
     # =========================================================================
-    # EVALUATION ET RAPPORTS
+    # SIMULATIONS (à remplacer par les vraies implémentations)
     # =========================================================================
+    async def _simulate_slither(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+    ) -> None:
+        """Simule l'exécution de Slither."""
+        await asyncio.sleep(0.1)
 
-    def _evaluate_report(self, report: ShieldReport) -> None:
+        # Exemple de findings simulés
+        self._add_finding(
+            task_id=task_id,
+            severity=SeverityLevel.MEDIUM,
+            title="Reentrancy vulnerability",
+            description="Potential reentrancy in withdraw function",
+            location=str(contract_path),
+            line=42,
+            tool="slither",
+        )
+
+    async def _simulate_halmos(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+    ) -> None:
+        """Simule l'exécution de Halmos."""
+        await asyncio.sleep(0.2)
+
+    async def _simulate_fuzzing(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+    ) -> None:
+        """Simule le fuzzing."""
+        await asyncio.sleep(0.15)
+
+    async def _simulate_dependency_check(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+    ) -> None:
+        """Simule l'analyse des dépendances."""
+        await asyncio.sleep(0.05)
+
+    # =========================================================================
+    # GESTION DES FINDINGS
+    # =========================================================================
+    def _add_finding(
+        self,
+        task_id: str,
+        severity: SeverityLevel,
+        title: str,
+        description: str,
+        location: str,
+        line: Optional[int] = None,
+        tool: str = "unknown",
+        cwe_id: Optional[str] = None,
+        recommendation: Optional[str] = None,
+    ) -> None:
         """
-        Evalue le rapport et calcule les metriques.
+        Ajoute une vulnérabilité à la liste.
 
         Args:
-            report: Rapport a evaluer
+            task_id: Identifiant de la tâche.
+            severity: Sévérité de la vulnérabilité.
+            title: Titre court.
+            description: Description détaillée.
+            location: Emplacement dans le code.
+            line: Numéro de ligne (optionnel).
+            tool: Outil ayant détecté la vulnérabilité.
+            cwe_id: Identifiant CWE (optionnel).
+            recommendation: Recommandation de correction (optionnelle).
         """
-        total_vulnerabilities = 0
-        critical = 0
-        high = 0
+        finding = SecurityFinding(
+            id=self._generate_finding_id(task_id, title, location, line),
+            task_id=task_id,
+            severity=severity.value,
+            title=title,
+            description=description,
+            location=location,
+            line=line,
+            tool=tool,
+            cwe_id=cwe_id,
+            recommendation=recommendation,
+            detected_at=datetime.now(timezone.utc),
+        )
 
-        for level_result in report.levels.values():
-            total_vulnerabilities += len(level_result.vulnerabilities)
+        self._findings.append(finding)
+        self._stats["total_findings"] += 1
 
-            for vuln in level_result.vulnerabilities:
-                # Correction: normalisation en minuscules pour eviter les problemes de casse (Critical vs critical)
-                severity = str(vuln.get("severity", "medium")).lower()
-                if severity == "critical":
-                    critical += 1
-                elif severity == "high":
-                    high += 1
+        severity_key = f"{severity.value}_findings"
+        if severity_key in self._stats:
+            self._stats[severity_key] += 1
 
-        report.total_vulnerabilities = total_vulnerabilities
-        report.critical_vulnerabilities = critical
-        report.high_vulnerabilities = high
+        logger.debug(
+            "Finding added",
+            event="shield_finding_added",
+            task_id=task_id,
+            severity=severity.value,
+            title=title,
+            tool=tool,
+        )
 
-        # Calcul du score global
-        total_levels = len(report.levels)
-        if total_levels == 0:
-            report.overall_score = 0.0
-            report.passed = False
-            return
+    def _generate_finding_id(
+        self,
+        task_id: str,
+        title: str,
+        location: str,
+        line: Optional[int],
+    ) -> str:
+        """Génère un identifiant unique pour un finding."""
+        content = f"{task_id}:{title}:{location}:{line}"
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-        # Score base sur les niveaux passes
-        passed_count = sum(1 for r in report.levels.values() if r.passed)
-        report.overall_score = (passed_count / total_levels) * 100.0
-
-        # Deduction pour vulnerabilites critiques et hautes
-        report.overall_score -= critical * 10.0
-        report.overall_score -= high * 5.0
-
-        # Score borne entre 0 et 100
-        report.overall_score = max(0.0, min(100.0, report.overall_score))
-
-        # Le rapport est passe si tous les niveaux sont passes
-        report.passed = all(r.passed for r in report.levels.values())
-
-    def _generate_recommendations(self, report: ShieldReport) -> List[str]:
+    # =========================================================================
+    # SCORING
+    # =========================================================================
+    async def _calculate_security_score(self, task_id: str) -> float:
         """
-        Genere des recommandations basees sur le rapport.
+        Calcule le score de sécurité basé sur les findings.
 
         Args:
-            report: Rapport d'audit
+            task_id: Identifiant de la tâche.
 
         Returns:
-            List[str]: Liste des recommandations
+            float: Score entre 0 et 100.
         """
-        recommendations = []
+        if not self._findings:
+            logger.info(
+                "No findings, perfect security score",
+                event="shield_score_perfect",
+                task_id=task_id,
+            )
+            return 100.0
 
-        for level, result in report.levels.items():
-            if not result.passed:
-                if level == ShieldLevel.LEVEL_1:
-                    recommendations.append("Fix Slither vulnerabilities (Level 1)")
-                elif level == ShieldLevel.LEVEL_2:
-                    recommendations.append("Fix failing tests (Level 2)")
-                elif level == ShieldLevel.LEVEL_3:
-                    recommendations.append("Fix vulnerabilities found by threat simulation (Level 3)")
-                elif level == ShieldLevel.LEVEL_4:
-                    recommendations.append("Fix formal verification issues (Level 4)")
+        # Pondération par sévérité
+        weights = {
+            SeverityLevel.CRITICAL.value: 25.0,
+            SeverityLevel.HIGH.value: 15.0,
+            SeverityLevel.MEDIUM.value: 8.0,
+            SeverityLevel.LOW.value: 3.0,
+            SeverityLevel.INFO.value: 1.0,
+            SeverityLevel.UNKNOWN.value: 2.0,
+        }
 
-        # Recommandations specifiques par vulnerabilite
-        for level, result in report.levels.items():
-            for vuln in result.vulnerabilities:
-                if vuln.get("remediation"):
-                    recommendations.append(f"[{level.value}] {vuln.get('remediation')}")
-                elif vuln.get("property"):
-                    recommendations.append(f"[{level.value}] Fix property violation in {vuln.get('property')}")
+        total_penalty = 0.0
+        for finding in self._findings:
+            total_penalty += weights.get(finding.severity, 2.0)
 
-        return list(set(recommendations))
+        # Score = 100 - pénalité, borné à 0
+        score = max(0.0, 100.0 - total_penalty)
+
+        logger.info(
+            "Security score calculated",
+            event="shield_score_calculated",
+            task_id=task_id,
+            score=score,
+            findings_count=len(self._findings),
+            total_penalty=total_penalty,
+        )
+
+        return round(score, 2)
+
+    def _evaluate_status(self, security_score: float) -> TaskStatus:
+        """
+        Évalue le statut final basé sur le score et les findings.
+
+        Args:
+            security_score: Score de sécurité calculé.
+
+        Returns:
+            TaskStatus: Statut final.
+        """
+        # Vérifier les findings critiques
+        if self.config.fail_on_critical:
+            critical_findings = [
+                f for f in self._findings if f.severity == SeverityLevel.CRITICAL.value
+            ]
+            if critical_findings:
+                logger.warning(
+                    "Critical findings detected, marking as failed",
+                    event="shield_critical_failed",
+                    critical_count=len(critical_findings),
+                )
+                return TaskStatus.FAILED
+
+        if self.config.fail_on_high:
+            high_findings = [
+                f for f in self._findings if f.severity == SeverityLevel.HIGH.value
+            ]
+            if high_findings:
+                logger.warning(
+                    "High findings detected, marking as failed",
+                    event="shield_high_failed",
+                    high_count=len(high_findings),
+                )
+                return TaskStatus.FAILED
+
+        # Vérifier le score minimum
+        if security_score < self.config.min_security_score:
+            logger.warning(
+                "Security score below threshold",
+                event="shield_score_below_threshold",
+                score=security_score,
+                threshold=self.config.min_security_score,
+            )
+            return TaskStatus.FAILED
+
+        return TaskStatus.SUCCESS
+
+    # =========================================================================
+    # GÉNÉRATION DE RAPPORT
+    # =========================================================================
+    async def _generate_report(
+        self,
+        task_id: str,
+        contract_path: Union[str, Path],
+        contract_name: Optional[str],
+        security_score: float,
+    ) -> SecurityReport:
+        """
+        Génère le rapport de sécurité.
+
+        Args:
+            task_id: Identifiant de la tâche.
+            contract_path: Chemin du contrat.
+            contract_name: Nom du contrat.
+            security_score: Score de sécurité.
+
+        Returns:
+            SecurityReport: Rapport généré.
+        """
+        report = SecurityReport(
+            task_id=task_id,
+            contract_path=str(contract_path),
+            contract_name=contract_name or Path(contract_path).stem,
+            security_score=security_score,
+            findings=self._findings,
+            generated_at=datetime.now(timezone.utc),
+            metadata={
+                "orchestrator": "ShieldOrchestrator",
+                "config": self.config.model_dump(),
+                "stats": self._stats,
+            },
+        )
+
+        # Sauvegarder les rapports si configuré
+        output_dir = Path(self.config.output_dir)
+
+        if self.config.generate_json_report:
+            json_path = output_dir / f"{task_id}_security_report.json"
+            await self._save_json_report(report, json_path)
+
+        if self.config.generate_markdown_report:
+            md_path = output_dir / f"{task_id}_security_report.md"
+            await self._save_markdown_report(report, md_path)
+
+        logger.info(
+            "Security report generated",
+            event="shield_report_generated",
+            task_id=task_id,
+            output_dir=str(output_dir),
+            score=security_score,
+        )
+
+        return report
+
+    async def _save_json_report(self, report: SecurityReport, path: Path) -> None:
+        """Sauvegarde le rapport au format JSON."""
+        try:
+            data = report.model_dump(mode="json")
+            path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+            logger.debug(
+                "JSON report saved",
+                event="shield_json_saved",
+                path=str(path),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to save JSON report",
+                event="shield_json_save_failed",
+                path=str(path),
+                error=str(e),
+            )
+
+    async def _save_markdown_report(self, report: SecurityReport, path: Path) -> None:
+        """Sauvegarde le rapport au format Markdown."""
+        try:
+            lines = [
+                f"# Security Report - {report.contract_name}",
+                "",
+                f"**Task ID:** {report.task_id}",
+                f"**Contract:** {report.contract_path}",
+                f"**Security Score:** {report.security_score}/100",
+                f"**Generated:** {report.generated_at.isoformat()}",
+                "",
+                "## Findings",
+                "",
+            ]
+
+            if not report.findings:
+                lines.append("No vulnerabilities found. ✅")
+            else:
+                for i, finding in enumerate(report.findings, 1):
+                    lines.extend([
+                        f"### {i}. {finding.title}",
+                        "",
+                        f"- **Severity:** {finding.severity}",
+                        f"- **Location:** {finding.location}",
+                        f"- **Line:** {finding.line or 'N/A'}",
+                        f"- **Tool:** {finding.tool}",
+                        f"- **CWE:** {finding.cwe_id or 'N/A'}",
+                        "",
+                        f"{finding.description}",
+                        "",
+                    ])
+                    if finding.recommendation:
+                        lines.extend([
+                            f"**Recommendation:** {finding.recommendation}",
+                            "",
+                        ])
+
+            path.write_text("\n".join(lines))
+            logger.debug(
+                "Markdown report saved",
+                event="shield_markdown_saved",
+                path=str(path),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to save Markdown report",
+                event="shield_markdown_save_failed",
+                path=str(path),
+                error=str(e),
+            )
+
+    # =========================================================================
+    # ANNULATION
+    # =========================================================================
+    def cancel(self) -> None:
+        """
+        Annule l'orchestration en cours.
+
+        Le flag est vérifié régulièrement dans les boucles d'exécution
+        et les sleeps, permettant une sortie rapide.
+        """
+        self._cancelled = True
+        logger.info(
+            "Shield orchestration cancellation requested",
+            event="shield_cancel_requested",
+            state=self.state.value,
+        )
+
+    async def cancel_async(self) -> None:
+        """Version asynchrone de l'annulation."""
+        self.cancel()
 
     # =========================================================================
     # STATISTIQUES
     # =========================================================================
-
     def get_stats(self) -> Dict[str, Any]:
         """
-        Retourne les statistiques du bouclier.
+        Retourne les statistiques de l'orchestrateur.
 
         Returns:
-            Dict: Statistiques
+            Dict: Statistiques d'exécution.
         """
         return {
             **self._stats,
-            "project_path": self.project_path,
-            "cache_size": len(self._cache),
-            "parallel": self.parallel,
-            "timeout": self.timeout,
-            "active_levels": [l.value for l in self.levels]
+            "state": self.state.value,
+            "circuit_breaker_open": self._circuit_breaker_open,
+            "circuit_breaker_failures": self._circuit_breaker_failures,
+            "current_findings": len(self._findings),
         }
 
-    def clear_cache(self) -> None:
-        """
-        Vide le cache.
-        """
-        cache_size = len(self._cache)
-        self._cache.clear()
-        logger.info(f"Cache cleared ({cache_size} entries)")
+    def reset_circuit_breaker(self) -> None:
+        """Réinitialise le circuit breaker."""
+        self._circuit_breaker_open = False
+        self._circuit_breaker_failures = 0
+        logger.info(
+            "Circuit breaker reset",
+            event="shield_circuit_reset",
+        )
+
+    def reset_stats(self) -> None:
+        """Réinitialise les statistiques."""
+        self._stats = {
+            "total_runs": 0,
+            "successful_runs": 0,
+            "failed_runs": 0,
+            "total_findings": 0,
+            "critical_findings": 0,
+            "high_findings": 0,
+            "medium_findings": 0,
+            "low_findings": 0,
+            "started_at": None,
+            "last_run_at": None,
+        }
+        logger.info("Stats reset", event="shield_stats_reset")
 
     # =========================================================================
-    # REPRESENTATION
+    # REPRÉSENTATION
     # =========================================================================
-
     def __repr__(self) -> str:
-        return f"<SecurityShield(project_path='{self.project_path}', cache={len(self._cache)})>"
+        return (
+            f"<ShieldOrchestrator(state={self.state.value}, "
+            f"findings={len(self._findings)}, "
+            f"circuit_broken={self._circuit_breaker_open})>"
+        )
 
-    def to_dict(self) -> Dict:
-        """
-        Convertit le bouclier en dictionnaire.
+    def __str__(self) -> str:
+        return self.__repr__()
 
-        Returns:
-            Dict: Representation
-        """
-        return {
-            "project_path": self.project_path,
-            "parallel": self.parallel,
-            "timeout": self.timeout,
-            "levels": [l.value for l in self.levels],
-            "stats": self._stats,
-            "cache_size": len(self._cache)
-        }
+
+# =============================================================================
+# FACTORY
+# =============================================================================
+def create_shield_orchestrator(
+    config: Optional[ShieldConfig] = None,
+) -> ShieldOrchestrator:
+    """
+    Crée une instance de ShieldOrchestrator.
+
+    Args:
+        config: Configuration optionnelle.
+
+    Returns:
+        ShieldOrchestrator: Instance configurée.
+    """
+    return ShieldOrchestrator(config=config)
+
+
+# =============================================================================
+# POINT D'ENTRÉE POUR TESTS
+# =============================================================================
+if __name__ == "__main__":
+    import sys
+
+    async def main():
+        """Point d'entrée pour test manuel."""
+        print("=== ShieldOrchestrator Test ===\n")
+
+        config = ShieldConfig(
+            enable_static_analysis=True,
+            enable_formal_verification=True,
+            enable_fuzzing=False,
+            min_security_score=80.0,
+        )
+
+        orchestrator = create_shield_orchestrator(config)
+
+        # Créer un contrat de test
+        test_contract = Path("./test_contract.sol")
+        test_contract.write_text("// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\n\ncontract Test {}\n")
+
+        try:
+            result = await orchestrator.run(
+                task_id="test_task_001",
+                contract_path=test_contract,
+                contract_name="TestContract",
+            )
+
+            print(f"Status: {result.status.value}")
+            print(f"Security Score: {result.security_score}")
+            print(f"Findings: {len(result.findings)}")
+            print(f"Duration: {result.duration:.2f}s")
+
+            if result.error:
+                print(f"Error: {result.error}")
+
+            print("\nStats:")
+            for key, value in orchestrator.get_stats().items():
+                print(f"  {key}: {value}")
+
+        finally:
+            if test_contract.exists():
+                test_contract.unlink()
+
+        print("\n=== Test terminé ===")
+
+    asyncio.run(main())

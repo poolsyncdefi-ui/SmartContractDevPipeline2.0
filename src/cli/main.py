@@ -5,6 +5,7 @@
 # Description: Point d'entrée de la CLI avec les commandes principales.
 #              Configuration du logging, gestion des erreurs, couleurs,
 #              profiles et métriques.
+#              Version refactorisée avec logger structuré et horodatages timezone-aware.
 # ==============================================================================
 
 import click
@@ -21,6 +22,8 @@ import time
 from src.cli.commands import cli as commands_cli
 from src.config.settings import settings
 from src.core.exceptions import PipelineError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.status_manager import normalize_status
 
 # ==============================================================================
 # CONSTANTES
@@ -28,6 +31,12 @@ from src.core.exceptions import PipelineError
 
 VERSION = "2.0.0"
 CLI_NAME = "pipeline"
+
+# Logger structuré pour la CLI
+_cli_logger = StructuredLogger(
+    component_name="CLIMain",
+    log_level=LogLevel.INFO
+)
 
 
 # ==============================================================================
@@ -44,10 +53,16 @@ def configure_cli_logging(verbose: bool = False, quiet: bool = False) -> None:
     """
     if quiet:
         log_level = logging.ERROR
+        structured_level = LogLevel.ERROR
     elif verbose:
         log_level = logging.DEBUG
+        structured_level = LogLevel.DEBUG
     else:
         log_level = logging.INFO
+        structured_level = LogLevel.INFO
+    
+    # Mise à jour du niveau du logger structuré
+    _cli_logger.log_level = structured_level
     
     # Configuration du format avec couleurs si disponible
     try:
@@ -172,6 +187,12 @@ def load_profile(profile_name: str) -> bool:
         profile_path = Path(f".{CLI_NAME}") / f"{profile_name}.json"
     
     if not profile_path.exists():
+        _cli_logger.log_error(
+            f"Profile '{profile_name}' not found",
+            None,
+            "profile_not_found",
+            profile_name=profile_name
+        )
         click.echo(f"❌ Profile '{profile_name}' not found", err=True)
         return False
     
@@ -192,10 +213,21 @@ def load_profile(profile_name: str) -> bool:
             # Fallback: rien
             pass
         
+        _cli_logger.log_info(
+            f"Profile '{profile_name}' loaded",
+            "profile_loaded",
+            profile_name=profile_name
+        )
         click.echo(success(f"✅ Profile '{profile_name}' loaded"))
         return True
         
     except Exception as e:
+        _cli_logger.log_error(
+            f"Failed to load profile: {str(e)}",
+            e,
+            "profile_load_failed",
+            profile_name=profile_name
+        )
         click.echo(error(f"❌ Failed to load profile: {e}"), err=True)
         return False
 
@@ -238,10 +270,21 @@ def save_profile(profile_name: str) -> bool:
         with open(profile_path, 'w') as f:
             json.dump(settings_dict, f, indent=2, default=str)
         
+        _cli_logger.log_info(
+            f"Profile '{profile_name}' saved to {profile_path}",
+            "profile_saved",
+            profile_name=profile_name
+        )
         click.echo(success(f"✅ Profile '{profile_name}' saved to {profile_path}"))
         return True
         
     except Exception as e:
+        _cli_logger.log_error(
+            f"Failed to save profile: {str(e)}",
+            e,
+            "profile_save_failed",
+            profile_name=profile_name
+        )
         click.echo(error(f"❌ Failed to save profile: {e}"), err=True)
         return False
 
@@ -313,8 +356,7 @@ def cli(ctx: CliContext, verbose: bool, quiet: bool, profile: Optional[str],
     
     # Configurer les logs JSON
     if json_logs:
-        # TODO: Implémenter les logs JSON
-        pass
+        _cli_logger.json_output = True
     
     # Charger le profile
     if profile:
@@ -325,6 +367,17 @@ def cli(ctx: CliContext, verbose: bool, quiet: bool, profile: Optional[str],
     ctx.metrics["quiet"] = quiet
     ctx.metrics["profile"] = profile
     ctx.metrics["no_color"] = no_color
+    ctx.metrics["json_logs"] = json_logs
+    
+    # Logging structuré du démarrage de la CLI
+    _cli_logger.log_info(
+        "CLI started",
+        "cli_start",
+        verbose=verbose,
+        quiet=quiet,
+        profile=profile,
+        no_color=no_color
+    )
 
 
 # ==============================================================================
@@ -376,6 +429,13 @@ def version(ctx: CliContext):
     click.echo(f"Python: {sys.version.split()[0]}")
     click.echo(f"Environment: {env_str}")
     click.echo(f"Debug: {debug_value}")
+    
+    _cli_logger.log_info(
+        "Version command executed",
+        "cmd_version",
+        version=VERSION,
+        environment=env_str
+    )
 
 
 # ==============================================================================
@@ -421,7 +481,18 @@ def profile_list(ctx: CliContext):
 @pass_context
 def profile_create(ctx: CliContext, name: str):
     """Crée un nouveau profile."""
+    _cli_logger.log_info(
+        f"Creating profile: {name}",
+        "profile_create_start",
+        profile_name=name
+    )
+    
     if save_profile(name):
+        _cli_logger.log_info(
+            f"Profile '{name}' created successfully",
+            "profile_create_completed",
+            profile_name=name
+        )
         click.echo(f"✅ Profile '{name}' created successfully")
     else:
         click.echo(error("❌ Failed to create profile"), err=True)
@@ -432,6 +503,12 @@ def profile_create(ctx: CliContext, name: str):
 @pass_context
 def profile_load(ctx: CliContext, name: str):
     """Charge un profile."""
+    _cli_logger.log_info(
+        f"Loading profile: {name}",
+        "profile_load_start",
+        profile_name=name
+    )
+    
     if load_profile(name):
         click.echo(f"✅ Profile '{name}' loaded successfully")
     else:
@@ -453,6 +530,11 @@ def profile_delete(ctx: CliContext, name: str, yes: bool):
         profile_path = profile_dir / f"{name}.json"
     
     if not profile_path.exists():
+        _cli_logger.log_warning(
+            f"Profile '{name}' not found",
+            "profile_not_found",
+            profile_name=name
+        )
         click.echo(error(f"❌ Profile '{name}' not found"), err=True)
         return
     
@@ -463,6 +545,12 @@ def profile_delete(ctx: CliContext, name: str, yes: bool):
             return
     
     profile_path.unlink()
+    
+    _cli_logger.log_info(
+        f"Profile '{name}' deleted",
+        "profile_deleted",
+        profile_name=name
+    )
     click.echo(success(f"✅ Profile '{name}' deleted"))
 
 
@@ -484,6 +572,11 @@ def metrics(ctx: CliContext):
         click.echo("\n  Context:")
         for key, value in ctx.metrics.items():
             click.echo(f"    {key}: {value}")
+    
+    # Récupérer les métriques du logger structuré
+    logger_metrics = _cli_logger.get_metrics()
+    click.echo(f"\n  Logger Events: {logger_metrics.get('event_count', 0)}")
+    click.echo(f"  Logger Errors: {logger_metrics.get('error_count', 0)}")
 
 
 # ==============================================================================
@@ -516,19 +609,31 @@ def handle_exception(exc, ctx: Optional[CliContext] = None):
         ctx.errors += 1
     
     if isinstance(exc, PipelineError):
+        _cli_logger.log_error(
+            f"Pipeline Error: {str(exc)}",
+            exc,
+            "pipeline_error"
+        )
         click.echo(error(f"❌ Pipeline Error: {exc}"), err=True)
         if hasattr(exc, 'details') and exc.details:
             import json
             click.echo(f"   Details: {json.dumps(exc.details, indent=2)}", err=True)
     elif isinstance(exc, KeyboardInterrupt):
+        _cli_logger.log_warning("Interrupted by user", "keyboard_interrupt")
         click.echo("\n⚠️  Interrupted by user", err=True)
     elif isinstance(exc, click.ClickException):
         # Les exceptions Click sont déjà formatées
         raise
     elif isinstance(exc, click.Abort):
+        _cli_logger.log_warning("Aborted", "cli_aborted")
         click.echo("\n⚠️  Aborted", err=True)
     else:
         debug_value = getattr(settings, 'debug', False)
+        _cli_logger.log_error(
+            f"Error: {str(exc)}",
+            exc,
+            "cli_error"
+        )
         click.echo(error(f"❌ Error: {exc}"), err=True)
         if debug_value:
             import traceback
@@ -545,11 +650,26 @@ def main():
         # Configurer le logging par défaut
         configure_cli_logging()
         
+        # Logging du démarrage
+        _cli_logger.log_info(
+            "CLI main() started",
+            "main_start",
+            version=VERSION
+        )
+        
         # Exécuter la CLI avec le contexte (standalone_mode=False permet de capturer les exceptions ici)
         cli(obj=ctx, standalone_mode=False)
         
         # Mettre à jour les métriques
         ctx.commands_executed += 1
+        
+        _cli_logger.log_info(
+            f"CLI completed in {ctx.get_uptime():.2f}s",
+            "main_completed",
+            uptime=ctx.get_uptime(),
+            commands_executed=ctx.commands_executed,
+            errors=ctx.errors
+        )
         
     except Exception as e:
         handle_exception(e, ctx)

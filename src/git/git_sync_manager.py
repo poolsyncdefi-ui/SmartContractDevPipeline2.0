@@ -5,6 +5,7 @@
 # Description: Gestionnaire des opérations Git et GitHub.
 #              Gestion des commits, pushes, branches, tags, Gists et webhooks.
 #              Support des conflits, des signatures GPG et des métriques.
+#              Version refactorisée avec logger structuré et horodatages timezone-aware.
 # ==============================================================================
 
 import os
@@ -21,6 +22,9 @@ from enum import Enum
 
 from src.config.settings import settings
 from src.core.exceptions import GitSyncError, GitAuthenticationError, GistPublishError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
 
 # ==============================================================================
 # LOGGING
@@ -76,6 +80,7 @@ class GitSyncManager:
     - Opérations GitHub (Gists, webhooks)
     - Signatures GPG
     - Métriques et statistiques
+    - Cache intelligent pour les opérations coûteuses
     """
     
     def __init__(
@@ -85,7 +90,10 @@ class GitSyncManager:
         username: Optional[str] = None,
         email: Optional[str] = None,
         gpg_key: Optional[str] = None,
-        sign_commits: bool = False
+        sign_commits: bool = False,
+        max_retries: int = 3,
+        cache_enabled: bool = True,
+        cache_ttl: int = 300
     ):
         """
         Initialise le gestionnaire Git.
@@ -97,6 +105,9 @@ class GitSyncManager:
             email: Email GitHub
             gpg_key: Clé GPG pour les signatures
             sign_commits: Signer les commits
+            max_retries: Nombre maximum de tentatives
+            cache_enabled: Activer le cache
+            cache_ttl: Durée de vie du cache en secondes
         """
         # Valeurs par défaut sécurisées avec vérification d'attribut
         if hasattr(settings, 'pipeline') and hasattr(settings.pipeline, 'default_workspace'):
@@ -111,8 +122,39 @@ class GitSyncManager:
         self.email = email or f"{self.username}@users.noreply.github.com"
         self.gpg_key = gpg_key
         self.sign_commits = sign_commits
+        self.max_retries = max_retries
         
         self._github_client: Optional[httpx.AsyncClient] = None
+        
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name="GitSyncManager",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(
+            workspace=str(self.workspace_path),
+            username=self.username
+        )
+        
+        # Système de retry adaptatif pour les opérations réseau
+        self._network_retry = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=30.0,
+            max_retries=max_retries,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(httpx.TimeoutException, httpx.ConnectError)
+        )
+        
+        # Cache intelligent pour les opérations coûteuses
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=200,
+            strategy=CacheStrategy.ADAPTIVE,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
         
         # Statistiques
         self._stats = {
@@ -180,6 +222,8 @@ class GitSyncManager:
             },
             timeout=30.0
         )
+        
+        self._logger.log_debug("GitHub client initialized", "github_client_initialized")
     
     def _update_stats(self, operation: GitOperation, success: bool) -> None:
         """
@@ -194,6 +238,7 @@ class GitSyncManager:
             self._stats["successful_operations"] += 1
         else:
             self._stats["failed_operations"] += 1
+            self._stats["errors"] += 1
         
         op_key = operation.value
         if op_key not in self._stats["by_operation"]:
@@ -231,6 +276,13 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_info(
+            f"Initializing repository: {repo_path}",
+            "git_init_start",
+            repo_path=str(repo_path),
+            default_branch=default_branch
+        )
+        
         try:
             repo_path.mkdir(parents=True, exist_ok=True)
             
@@ -255,11 +307,22 @@ class GitSyncManager:
                     text=True
                 )
             
+            self._logger.log_info(
+                f"Repository initialized: {repo_path}",
+                "git_init_completed",
+                repo_path=str(repo_path)
+            )
             logger.info(f"Repository initialized: {repo_path}")
             self._update_stats(GitOperation.INIT, True)
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to initialize repository: {e.stderr}",
+                e,
+                "git_init_failed",
+                repo_path=str(repo_path)
+            )
             logger.error(f"Failed to initialize repository: {e.stderr}")
             self._update_stats(GitOperation.INIT, False)
             raise GitSyncError(
@@ -321,6 +384,13 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_info(
+            f"Cloning repository: {repo_url}",
+            "git_clone_start",
+            repo_url=repo_url,
+            target_path=str(target_path)
+        )
+        
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             cmd = ["git", "clone", repo_url, str(target_path)]
@@ -340,11 +410,23 @@ class GitSyncManager:
             
             self._configure_repo(target_path)
             
+            self._logger.log_info(
+                f"Repository cloned: {repo_url} -> {target_path}",
+                "git_clone_completed",
+                repo_url=repo_url,
+                target_path=str(target_path)
+            )
             logger.info(f"Repository cloned: {repo_url} -> {target_path}")
             self._update_stats(GitOperation.CLONE, True)
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to clone repository: {e.stderr}",
+                e,
+                "git_clone_failed",
+                repo_url=repo_url
+            )
             logger.error(f"Failed to clone repository: {e.stderr}")
             self._update_stats(GitOperation.CLONE, False)
             raise GitSyncError(
@@ -374,6 +456,13 @@ class GitSyncManager:
         Returns:
             str: Hash du commit
         """
+        self._logger.log_info(
+            f"Creating commit: {message[:50]}",
+            "git_commit_start",
+            repo_path=str(repo_path),
+            all_files=all_files
+        )
+        
         try:
             # Ajouter les fichiers
             if files:
@@ -422,10 +511,22 @@ class GitSyncManager:
             self._stats["commits_count"] += 1
             self._update_stats(GitOperation.COMMIT, True)
             
+            self._logger.log_info(
+                f"Commit created: {commit_hash[:8]}",
+                "git_commit_completed",
+                commit_hash=commit_hash[:8],
+                message=message[:100]
+            )
             logger.info(f"Commit created: {commit_hash[:8]} - {message}")
             return commit_hash
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to commit: {e.stderr}",
+                e,
+                "git_commit_failed",
+                repo_path=str(repo_path)
+            )
             logger.error(f"Failed to commit: {e.stderr}")
             self._update_stats(GitOperation.COMMIT, False)
             raise GitSyncError(
@@ -455,6 +556,15 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_info(
+            f"Pushing to {remote}/{branch}",
+            "git_push_start",
+            repo_path=str(repo_path),
+            remote=remote,
+            branch=branch,
+            force=force
+        )
+        
         try:
             cmd = ["git", "push"]
             
@@ -477,10 +587,23 @@ class GitSyncManager:
             self._stats["pushes_count"] += 1
             self._update_stats(GitOperation.PUSH, True)
             
+            self._logger.log_info(
+                f"Pushed to {remote}/{branch}",
+                "git_push_completed",
+                remote=remote,
+                branch=branch
+            )
             logger.info(f"Pushed to {remote}/{branch}")
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to push: {e.stderr}",
+                e,
+                "git_push_failed",
+                remote=remote,
+                branch=branch
+            )
             logger.error(f"Failed to push: {e.stderr}")
             self._update_stats(GitOperation.PUSH, False)
             raise GitSyncError(
@@ -508,6 +631,15 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_info(
+            f"Pulling from {remote}/{branch}",
+            "git_pull_start",
+            repo_path=str(repo_path),
+            remote=remote,
+            branch=branch,
+            rebase=rebase
+        )
+        
         try:
             cmd = ["git", "pull"]
             
@@ -527,10 +659,23 @@ class GitSyncManager:
             self._stats["pulls_count"] += 1
             self._update_stats(GitOperation.PULL, True)
             
+            self._logger.log_info(
+                f"Pulled from {remote}/{branch}",
+                "git_pull_completed",
+                remote=remote,
+                branch=branch
+            )
             logger.info(f"Pulled from {remote}/{branch}")
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to pull: {e.stderr}",
+                e,
+                "git_pull_failed",
+                remote=remote,
+                branch=branch
+            )
             logger.error(f"Failed to pull: {e.stderr}")
             self._update_stats(GitOperation.PULL, False)
             raise GitSyncError(
@@ -556,6 +701,12 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_debug(
+            f"Fetching from {remote}",
+            "git_fetch_start",
+            remote=remote
+        )
+        
         try:
             cmd = ["git", "fetch", remote]
             
@@ -571,10 +722,17 @@ class GitSyncManager:
             )
             
             self._update_stats(GitOperation.FETCH, True)
+            self._logger.log_debug(f"Fetched from {remote}", "git_fetch_completed")
             logger.info(f"Fetched from {remote}")
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to fetch: {e.stderr}",
+                e,
+                "git_fetch_failed",
+                remote=remote
+            )
             logger.error(f"Failed to fetch: {e.stderr}")
             self._update_stats(GitOperation.FETCH, False)
             raise GitSyncError(
@@ -606,6 +764,13 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_info(
+            f"Creating branch: {branch_name}",
+            "git_branch_create_start",
+            branch_name=branch_name,
+            source_branch=source_branch
+        )
+        
         try:
             cmd = ["git", "branch", branch_name]
             
@@ -630,10 +795,21 @@ class GitSyncManager:
                 )
             
             self._update_stats(GitOperation.BRANCH, True)
+            self._logger.log_info(
+                f"Branch created: {branch_name}",
+                "git_branch_created",
+                branch_name=branch_name
+            )
             logger.info(f"Branch created: {branch_name}")
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to create branch: {e.stderr}",
+                e,
+                "git_branch_create_failed",
+                branch_name=branch_name
+            )
             logger.error(f"Failed to create branch: {e.stderr}")
             self._update_stats(GitOperation.BRANCH, False)
             raise GitSyncError(
@@ -659,6 +835,13 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_info(
+            f"Deleting branch: {branch_name}",
+            "git_branch_delete_start",
+            branch_name=branch_name,
+            force=force
+        )
+        
         try:
             cmd = ["git", "branch", "-d" if not force else "-D", branch_name]
             
@@ -671,10 +854,21 @@ class GitSyncManager:
             )
             
             self._update_stats(GitOperation.BRANCH, True)
+            self._logger.log_info(
+                f"Branch deleted: {branch_name}",
+                "git_branch_deleted",
+                branch_name=branch_name
+            )
             logger.info(f"Branch deleted: {branch_name}")
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to delete branch: {e.stderr}",
+                e,
+                "git_branch_delete_failed",
+                branch_name=branch_name
+            )
             logger.error(f"Failed to delete branch: {e.stderr}")
             self._update_stats(GitOperation.BRANCH, False)
             raise GitSyncError(
@@ -711,9 +905,20 @@ class GitSyncManager:
                         "hash": parts[1] if len(parts) > 1 else None
                     })
             
+            self._logger.log_debug(
+                f"Listed {len(branches)} branches",
+                "git_branches_listed",
+                count=len(branches)
+            )
+            
             return branches
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to list branches: {e.stderr}",
+                e,
+                "git_branch_list_failed"
+            )
             logger.error(f"Failed to list branches: {e.stderr}")
             return []
     
@@ -740,6 +945,12 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_info(
+            f"Creating tag: {tag_name}",
+            "git_tag_create_start",
+            tag_name=tag_name
+        )
+        
         try:
             cmd = ["git", "tag"]
             
@@ -762,10 +973,21 @@ class GitSyncManager:
             )
             
             self._update_stats(GitOperation.TAG, True)
+            self._logger.log_info(
+                f"Tag created: {tag_name}",
+                "git_tag_created",
+                tag_name=tag_name
+            )
             logger.info(f"Tag created: {tag_name}")
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to create tag: {e.stderr}",
+                e,
+                "git_tag_create_failed",
+                tag_name=tag_name
+            )
             logger.error(f"Failed to create tag: {e.stderr}")
             self._update_stats(GitOperation.TAG, False)
             raise GitSyncError(
@@ -786,6 +1008,13 @@ class GitSyncManager:
         Returns:
             bool: True si réussi
         """
+        self._logger.log_info(
+            f"Pushing tag: {tag_name}",
+            "git_tag_push_start",
+            tag_name=tag_name,
+            remote=remote
+        )
+        
         try:
             subprocess.run(
                 ["git", "push", remote, tag_name],
@@ -796,10 +1025,21 @@ class GitSyncManager:
             )
             
             self._update_stats(GitOperation.PUSH, True)
+            self._logger.log_info(
+                f"Tag pushed: {tag_name}",
+                "git_tag_pushed",
+                tag_name=tag_name
+            )
             logger.info(f"Tag pushed: {tag_name}")
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to push tag: {e.stderr}",
+                e,
+                "git_tag_push_failed",
+                tag_name=tag_name
+            )
             logger.error(f"Failed to push tag: {e.stderr}")
             self._update_stats(GitOperation.PUSH, False)
             raise GitSyncError(
@@ -839,6 +1079,11 @@ class GitSyncManager:
             return status
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to get status: {e.stderr}",
+                e,
+                "git_status_failed"
+            )
             logger.error(f"Failed to get status: {e.stderr}")
             return {}
     
@@ -853,7 +1098,16 @@ class GitSyncManager:
             bool: True s'il y a des conflits
         """
         status = self.get_status(repo_path)
-        return any(val == GitStatus.UNMERGED.value for val in status.values())
+        has_conflict = any(val == GitStatus.UNMERGED.value for val in status.values())
+        
+        if has_conflict:
+            self._logger.log_warning(
+                "Conflicts detected in repository",
+                "git_conflicts_detected",
+                repo_path=str(repo_path)
+            )
+        
+        return has_conflict
     
     def resolve_conflict(
         self,
@@ -872,6 +1126,13 @@ class GitSyncManager:
         Returns:
             bool: True si résolu
         """
+        self._logger.log_info(
+            f"Resolving conflict: {file_path} using {resolution}",
+            "git_conflict_resolve_start",
+            file_path=file_path,
+            resolution=resolution
+        )
+        
         try:
             if resolution == "theirs":
                 subprocess.run(
@@ -903,10 +1164,22 @@ class GitSyncManager:
             )
             
             self._update_stats(GitOperation.MERGE, True)
+            self._logger.log_info(
+                f"Conflict resolved: {file_path}",
+                "git_conflict_resolved",
+                file_path=file_path,
+                resolution=resolution
+            )
             logger.info(f"Conflict resolved: {file_path} using {resolution}")
             return True
             
         except subprocess.CalledProcessError as e:
+            self._logger.log_error(
+                f"Failed to resolve conflict: {e.stderr}",
+                e,
+                "git_conflict_resolve_failed",
+                file_path=file_path
+            )
             logger.error(f"Failed to resolve conflict: {e.stderr}")
             self._update_stats(GitOperation.MERGE, False)
             return False
@@ -939,6 +1212,13 @@ class GitSyncManager:
         """
         await self._ensure_github_client()
         
+        self._logger.log_info(
+            f"Creating gist: {filename}",
+            "github_gist_create_start",
+            filename=filename,
+            public=public
+        )
+        
         data = {
             "description": description or f"Gist created at {datetime.now(timezone.utc).isoformat()}",
             "public": public,
@@ -950,13 +1230,22 @@ class GitSyncManager:
         }
         
         try:
-            response = await self._github_client.post("/gists", json=data)
-            response.raise_for_status()
-            result = response.json()
+            async def _create_gist():
+                response = await self._github_client.post("/gists", json=data)
+                response.raise_for_status()
+                return response.json()
+            
+            result = await self._network_retry.execute_with_retry(_create_gist)
             
             self._stats["gists_created"] += 1
             self._update_stats(GitOperation.COMMIT, True)  # Reuse COMMIT for gists
             
+            self._logger.log_info(
+                f"Gist created: {result['html_url']}",
+                "github_gist_created",
+                gist_id=result["id"],
+                url=result["html_url"]
+            )
             logger.info(f"Gist created: {result['html_url']}")
             
             return {
@@ -967,6 +1256,12 @@ class GitSyncManager:
             }
             
         except httpx.HTTPStatusError as e:
+            self._logger.log_error(
+                f"Failed to create gist: {e.response.text}",
+                e,
+                "github_gist_create_failed",
+                status_code=e.response.status_code
+            )
             logger.error(f"Failed to create gist: {e.response.text}")
             self._update_stats(GitOperation.COMMIT, False)
             raise GistPublishError(
@@ -975,6 +1270,11 @@ class GitSyncManager:
                 status_code=e.response.status_code
             )
         except Exception as e:
+            self._logger.log_error(
+                f"Failed to create gist: {str(e)}",
+                e,
+                "github_gist_create_failed"
+            )
             self._update_stats(GitOperation.COMMIT, False)
             raise GistPublishError(
                 filename=filename,
@@ -1000,6 +1300,13 @@ class GitSyncManager:
         """
         await self._ensure_github_client()
         
+        self._logger.log_info(
+            f"Updating gist: {gist_id}",
+            "github_gist_update_start",
+            gist_id=gist_id,
+            filename=filename
+        )
+        
         data = {
             "files": {
                 filename: {
@@ -1009,13 +1316,23 @@ class GitSyncManager:
         }
         
         try:
-            response = await self._github_client.patch(f"/gists/{gist_id}", json=data)
-            response.raise_for_status()
-            result = response.json()
+            async def _update_gist():
+                response = await self._github_client.patch(f"/gists/{gist_id}", json=data)
+                response.raise_for_status()
+                return response.json()
+            
+            result = await self._network_retry.execute_with_retry(_update_gist)
             
             self._update_stats(GitOperation.COMMIT, True)
             
+            self._logger.log_info(
+                f"Gist updated: {result['html_url']}",
+                "github_gist_updated",
+                gist_id=gist_id,
+                url=result["html_url"]
+            )
             logger.info(f"Gist updated: {result['html_url']}")
+            
             return {
                 "id": result["id"],
                 "url": result["html_url"],
@@ -1024,6 +1341,12 @@ class GitSyncManager:
             }
             
         except Exception as e:
+            self._logger.log_error(
+                f"Failed to update gist: {str(e)}",
+                e,
+                "github_gist_update_failed",
+                gist_id=gist_id
+            )
             logger.error(f"Failed to update gist: {str(e)}")
             self._update_stats(GitOperation.COMMIT, False)
             raise GitSyncError(
@@ -1043,12 +1366,39 @@ class GitSyncManager:
         """
         await self._ensure_github_client()
         
+        # Vérification du cache
+        cache_key = f"gist:{gist_id}"
+        cached = await self._cache.get(cache_key)
+        if cached is not None:
+            self._logger.log_debug(f"Gist cache hit: {gist_id}", "gist_cache_hit")
+            return cached
+        
+        self._logger.log_debug(
+            f"Getting gist: {gist_id}",
+            "github_gist_get_start",
+            gist_id=gist_id
+        )
+        
         try:
-            response = await self._github_client.get(f"/gists/{gist_id}")
-            response.raise_for_status()
-            return response.json()
+            async def _get_gist():
+                response = await self._github_client.get(f"/gists/{gist_id}")
+                response.raise_for_status()
+                return response.json()
+            
+            result = await self._network_retry.execute_with_retry(_get_gist)
+            
+            # Mise en cache
+            await self._cache.set(cache_key, result, ttl=300, tags=["gist"])
+            
+            return result
             
         except Exception as e:
+            self._logger.log_error(
+                f"Failed to get gist: {str(e)}",
+                e,
+                "github_gist_get_failed",
+                gist_id=gist_id
+            )
             logger.error(f"Failed to get gist: {str(e)}")
             raise GitSyncError(
                 message=f"Failed to get gist: {str(e)}",
@@ -1078,6 +1428,13 @@ class GitSyncManager:
         """
         await self._ensure_github_client()
         
+        self._logger.log_info(
+            f"Creating webhook for {repo}",
+            "github_webhook_create_start",
+            repo=repo,
+            url=webhook_url
+        )
+        
         data = {
             "name": "web",
             "active": active,
@@ -1093,17 +1450,32 @@ class GitSyncManager:
             data["config"]["secret"] = secret
         
         try:
-            response = await self._github_client.post(
-                f"/repos/{repo}/hooks",
-                json=data
-            )
-            response.raise_for_status()
-            result = response.json()
+            async def _create_webhook():
+                response = await self._github_client.post(
+                    f"/repos/{repo}/hooks",
+                    json=data
+                )
+                response.raise_for_status()
+                return response.json()
             
+            result = await self._network_retry.execute_with_retry(_create_webhook)
+            
+            self._logger.log_info(
+                f"Webhook created: {result['id']} for {repo}",
+                "github_webhook_created",
+                webhook_id=result["id"],
+                repo=repo
+            )
             logger.info(f"Webhook created: {result['id']} for {repo}")
             return result
             
         except Exception as e:
+            self._logger.log_error(
+                f"Failed to create webhook: {str(e)}",
+                e,
+                "github_webhook_create_failed",
+                repo=repo
+            )
             logger.error(f"Failed to create webhook: {str(e)}")
             raise GitSyncError(
                 message=f"Failed to create webhook: {str(e)}",
@@ -1143,6 +1515,12 @@ class GitSyncManager:
         file_path = target_path / filename
         file_path.write_text(content, encoding='utf-8')
         
+        self._logger.log_info(
+            f"Artifact saved: {file_path}",
+            "artifact_saved",
+            file_path=str(file_path),
+            size_bytes=len(content)
+        )
         logger.info(f"Artifact saved: {file_path}")
         return file_path
     
@@ -1162,7 +1540,16 @@ class GitSyncManager:
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
         
-        return file_path.read_text(encoding='utf-8')
+        content = file_path.read_text(encoding='utf-8')
+        
+        self._logger.log_debug(
+            f"Artifact read: {file_path}",
+            "artifact_read",
+            file_path=str(file_path),
+            size_bytes=len(content)
+        )
+        
+        return content
     
     def delete_artifact_from_workspace(self, file_path: Path) -> bool:
         """
@@ -1176,6 +1563,11 @@ class GitSyncManager:
         """
         if file_path.exists():
             file_path.unlink()
+            self._logger.log_info(
+                f"Artifact deleted: {file_path}",
+                "artifact_deleted",
+                file_path=str(file_path)
+            )
             logger.info(f"Artifact deleted: {file_path}")
             return True
         return False
@@ -1218,13 +1610,33 @@ class GitSyncManager:
         Returns:
             Dict[str, Any]: Statistiques
         """
+        cache_metrics = self._cache.get_metrics()
+        
         return {
             **self._stats,
             "workspace_path": str(self.workspace_path),
             "username": self.username,
             "sign_commits": self.sign_commits,
-            "has_gpg_key": bool(self.gpg_key)
+            "has_gpg_key": bool(self.gpg_key),
+            "cache_metrics": cache_metrics,
+            "success_rate": (
+                self._stats["successful_operations"] / self._stats["total_operations"]
+                if self._stats["total_operations"] > 0 else 0
+            )
         }
+    
+    async def clear_cache(self) -> int:
+        """
+        Vide le cache.
+        
+        Returns:
+            int: Nombre d'entrées supprimées
+        """
+        cache_metrics = self._cache.get_metrics()
+        cache_size = cache_metrics.get("total_entries", 0)
+        await self._cache.clear()
+        self._logger.log_info(f"Cache cleared ({cache_size} entries)", "cache_cleared")
+        return cache_size
     
     # ==========================================================================
     # FERMETURE
@@ -1234,6 +1646,11 @@ class GitSyncManager:
         """
         Ferme le client GitHub.
         """
+        await self._cache.stop()
+        
         if self._github_client:
             await self._github_client.aclose()
             self._github_client = None
+        
+        self._logger.log_info("GitSyncManager closed", "manager_closed")
+        logger.info("GitSyncManager closed")

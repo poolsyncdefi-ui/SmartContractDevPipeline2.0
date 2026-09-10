@@ -5,6 +5,7 @@
 # Description: Interface abstraite pour les clients LLM.
 #              Support de multiples fournisseurs (Ollama, OpenAI, etc.).
 #              Métriques avancées, cache, callbacks et gestion des coûts.
+#              Version refactorisée avec cache intelligent et logger structuré.
 # ==============================================================================
 
 from abc import ABC, abstractmethod
@@ -18,6 +19,9 @@ import json
 from enum import Enum
 
 from src.core.exceptions import LLMError, LLMConnectionError, LLMResponseError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.intelligent_cache import IntelligentCache, CacheStrategy
+from src.core.adaptive_retry import AdaptiveRetry, RetryStrategy
 
 # ==============================================================================
 # LOGGING
@@ -153,7 +157,7 @@ class LLMClient(ABC):
     - Health checks
     - Liste des modèles
     - Métriques avancées
-    - Cache des réponses
+    - Cache intelligent des réponses
     - Callbacks
     - Gestion des coûts
     """
@@ -165,7 +169,8 @@ class LLMClient(ABC):
         timeout: int = 60,
         provider: str = "unknown",
         cache_enabled: bool = False,
-        cache_ttl: int = 3600
+        cache_ttl: int = 3600,
+        cache_strategy: CacheStrategy = CacheStrategy.ADAPTIVE
     ):
         """
         Initialise le client LLM.
@@ -177,6 +182,7 @@ class LLMClient(ABC):
             provider: Nom du fournisseur
             cache_enabled: Activer le cache des réponses
             cache_ttl: Durée de vie du cache en secondes
+            cache_strategy: Stratégie de cache
         """
         self.model = model
         self.temperature = temperature
@@ -189,7 +195,33 @@ class LLMClient(ABC):
         self._request_count = 0
         self._metrics = LLMMetrics()
         self._callbacks: List[Callable[[LLMRequest, Optional[LLMResponse], Optional[Exception]], Awaitable[None]]] = []
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        
+        # Cache intelligent (remplace le cache naïf)
+        self._cache = IntelligentCache(
+            default_ttl=cache_ttl,
+            max_entries=1000,
+            strategy=cache_strategy,
+            enable_metrics=True
+        )
+        if cache_enabled:
+            self._cache.start()
+        
+        # Logger structuré
+        self._logger = StructuredLogger(
+            component_name=f"LLMClient_{provider}",
+            log_level=LogLevel.INFO
+        )
+        self._logger.set_context(model=model, provider=provider)
+        
+        # Système de retry adaptatif
+        self._retry_handler = AdaptiveRetry(
+            base_delay=1.0,
+            max_delay=30.0,
+            max_retries=3,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True,
+            retryable_exceptions=(LLMConnectionError, LLMResponseError)
+        )
         
         logger.info(f"LLMClient initialized: model={model}, provider={provider}, temperature={temperature}")
     
@@ -314,29 +346,23 @@ class LLMClient(ABC):
         cache_str = json.dumps(cache_data, sort_keys=True, default=str)
         return hashlib.md5(cache_str.encode()).hexdigest()
     
-    def _get_from_cache(self, cache_key: str) -> Optional[str]:
+    async def _get_from_cache(self, cache_key: str) -> Optional[str]:
         """Récupère une réponse du cache."""
         if not self.cache_enabled:
             return None
         
-        if cache_key in self._cache:
-            entry = self._cache[cache_key]
-            if (datetime.now(timezone.utc) - entry["timestamp"]).total_seconds() < self.cache_ttl:
-                logger.debug(f"Cache hit for key: {cache_key[:8]}")
-                return entry["response"]
-            else:
-                # Cache expiré
-                del self._cache[cache_key]
+        cached = await self._cache.get(cache_key)
+        if cached is not None:
+            self._logger.log_debug(f"Cache hit for key: {cache_key[:8]}", "cache_hit")
+            return cached
         
         return None
     
-    def _set_cache(self, cache_key: str, response: str) -> None:
+    async def _set_cache(self, cache_key: str, response: str) -> None:
         """Stocke une réponse dans le cache."""
         if self.cache_enabled:
-            self._cache[cache_key] = {
-                "response": response,
-                "timestamp": datetime.now(timezone.utc)
-            }
+            await self._cache.set(cache_key, response, ttl=self.cache_ttl)
+            self._logger.log_debug(f"Cache set for key: {cache_key[:8]}", "cache_set")
     
     def _update_metrics(
         self,
@@ -398,6 +424,11 @@ class LLMClient(ABC):
             try:
                 await callback(request, response, error)
             except Exception as e:
+                self._logger.log_error(
+                    f"Callback error: {str(e)}",
+                    e,
+                    "callback_error"
+                )
                 logger.error(f"Callback error: {e}")
     
     # ==========================================================================
@@ -437,7 +468,7 @@ class LLMClient(ABC):
         
         # Vérifier le cache
         cache_key = self._generate_cache_key(prompt, system_prompt, temperature, max_tokens, **kwargs)
-        cached_response = self._get_from_cache(cache_key)
+        cached_response = await self._get_from_cache(cache_key)
         
         if cached_response is not None:
             response = LLMResponse(
@@ -472,7 +503,7 @@ class LLMClient(ABC):
             )
             
             # Mettre en cache
-            self._set_cache(cache_key, response_text)
+            await self._set_cache(cache_key, response_text)
             
             # Mettre à jour les métriques
             self._update_metrics(request, response)
@@ -513,27 +544,28 @@ class LLMClient(ABC):
         Raises:
             LLMError: Si toutes les tentatives échouent
         """
-        last_error = None
+        async def _generate():
+            return await self.generate_with_cache(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
         
-        for attempt in range(max_retries):
-            try:
-                return await self.generate_with_cache(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    **kwargs
-                )
-            except (LLMConnectionError, LLMResponseError) as e:
-                last_error = e
-                logger.warning(
-                    f"LLM request failed (attempt {attempt + 1}/{max_retries}): {str(e)}"
-                )
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** (attempt + 1)
-                    await asyncio.sleep(wait_time)
-        
-        raise LLMError(f"All {max_retries} retries failed: {last_error}")
+        try:
+            return await self._retry_handler.execute_with_retry(
+                _generate,
+                max_retries=max_retries
+            )
+        except Exception as e:
+            self._logger.log_error(
+                f"All {max_retries} retries failed",
+                e,
+                "retries_exhausted",
+                max_retries=max_retries
+            )
+            raise LLMError(f"All {max_retries} retries failed: {e}")
     
     async def generate_with_context(
         self,
@@ -622,6 +654,8 @@ class LLMClient(ABC):
         Returns:
             Dict[str, Any]: Statistiques
         """
+        cache_metrics = self._cache.get_metrics()
+        
         return {
             "model": self.model,
             "provider": self.provider,
@@ -629,7 +663,7 @@ class LLMClient(ABC):
             "timeout": self.timeout,
             "request_count": self._request_count,
             "cache_enabled": self.cache_enabled,
-            "cache_size": len(self._cache),
+            "cache_metrics": cache_metrics,
             "last_request": self._last_request_time.isoformat() if self._last_request_time else None,
             "metrics": self._metrics.to_dict()
         }
@@ -643,17 +677,28 @@ class LLMClient(ABC):
         """
         return self._metrics
     
-    def clear_cache(self) -> int:
+    async def clear_cache(self) -> int:
         """
         Vide le cache des réponses.
         
         Returns:
             int: Nombre d'entrées supprimées
         """
-        cache_size = len(self._cache)
-        self._cache.clear()
+        cache_metrics = self._cache.get_metrics()
+        cache_size = cache_metrics.get("total_entries", 0)
+        await self._cache.clear()
+        self._logger.log_info(f"Cleared {cache_size} cached responses", "cache_cleared")
         logger.info(f"Cleared {cache_size} cached responses")
         return cache_size
+    
+    def get_cache_metrics(self) -> Dict[str, Any]:
+        """
+        Retourne les métriques du cache.
+        
+        Returns:
+            Dict[str, Any]: Métriques du cache
+        """
+        return self._cache.get_metrics() if self.cache_enabled else {}
     
     # ==========================================================================
     # GESTION DES COÛTS
@@ -693,6 +738,8 @@ class LLMClient(ABC):
         """
         Ferme le client et libère les ressources.
         """
+        await self._cache.stop()
+        self._logger.log_info("LLM client closed", "client_closed")
         pass
     
     async def __aenter__(self):

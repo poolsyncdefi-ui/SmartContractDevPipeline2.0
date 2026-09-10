@@ -5,6 +5,7 @@
 # Description: Serveur FastAPI principal avec routes, WebSockets et documentation.
 #              Point d'entrée de l'API REST.
 #              Support des middlewares, CORS, rate limiting et monitoring.
+#              Version refactorisée avec logger structuré et horodatages timezone-aware.
 # ==============================================================================
 
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Request, Response
@@ -15,6 +16,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from contextlib import asynccontextmanager
 import logging
 import time
+import asyncio
 import uvicorn
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
@@ -24,6 +26,8 @@ from src.api.routers import projects, tasks
 from src.api.websockets import notifier
 from src.db.database import check_db_connection, close_db_connection, get_async_db
 from src.core.exceptions import PipelineError
+from src.core.structured_logger import StructuredLogger, LogLevel, LogCategory
+from src.core.status_manager import normalize_status
 from src.llm.ollama_client import OllamaClient
 from src.persistence.knowledge_base import KnowledgeBase
 from src.models.task import TaskModel, TaskState
@@ -36,6 +40,12 @@ from sqlalchemy import select, func
 
 logger = logging.getLogger(__name__)
 _START_TIME = time.time()
+
+# Logger structuré pour l'application
+_app_logger = StructuredLogger(
+    component_name="WebDashboard",
+    log_level=LogLevel.INFO
+)
 
 
 # ==============================================================================
@@ -54,12 +64,15 @@ class RequestLoggingMiddleware:
         response = await call_next(request)
         duration = time.time() - start_time
         
-        # Logging
-        logger.info(
-            f"{request.method} {request.url.path} - "
-            f"Status: {response.status_code} - "
-            f"Duration: {duration:.3f}s - "
-            f"Client: {request.client.host if request.client else 'unknown'}"
+        # Logging structuré
+        _app_logger.log_info(
+            f"{request.method} {request.url.path}",
+            "http_request",
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=duration * 1000,
+            client=request.client.host if request.client else "unknown"
         )
         
         # Ajout des headers de performance
@@ -92,6 +105,12 @@ class RateLimitMiddleware:
         
         # Vérifier la limite
         if len(self._clients[client_ip]) >= self.requests_per_minute:
+            _app_logger.log_warning(
+                f"Rate limit exceeded for {client_ip}",
+                "rate_limit_exceeded",
+                client_ip=client_ip,
+                requests_count=len(self._clients[client_ip])
+            )
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={
@@ -119,6 +138,7 @@ async def lifespan(app: FastAPI):
     Gestionnaire de cycle de vie de l'application.
     """
     # Démarrage
+    _app_logger.log_info("Starting Smart Contract Dev Pipeline API...", "startup_begin")
     logger.info("🚀 Starting Smart Contract Dev Pipeline API...")
     start_time = time.time()
     
@@ -126,10 +146,13 @@ async def lifespan(app: FastAPI):
     try:
         db_ok = await check_db_connection()
         if db_ok:
+            _app_logger.log_info("Database connection OK", "db_connection_ok")
             logger.info("✅ Database connection OK")
         else:
+            _app_logger.log_warning("Database connection failed", "db_connection_failed")
             logger.warning("⚠️ Database connection failed")
     except Exception as e:
+        _app_logger.log_error("Database connection error", e, "db_connection_error")
         logger.error(f"❌ Database connection error: {e}")
     
     # Initialiser les composants
@@ -139,29 +162,42 @@ async def lifespan(app: FastAPI):
         if not use_mock:
             ollama_client = OllamaClient()
             if await ollama_client.health_check():
+                _app_logger.log_info("Ollama client OK", "ollama_ok")
                 logger.info("✅ Ollama client OK")
             else:
+                _app_logger.log_warning("Ollama client not available", "ollama_unavailable")
                 logger.warning("⚠️ Ollama client not available")
         
         # Knowledge Base
         kb = KnowledgeBase()
+        _app_logger.log_info("Knowledge Base initialized", "kb_initialized")
         logger.info("✅ Knowledge Base initialized")
         
     except Exception as e:
+        _app_logger.log_error("Component initialization error", e, "component_init_error")
         logger.error(f"❌ Component initialization error: {e}")
     
-    logger.info(f"🚀 API started in {time.time() - start_time:.2f}s")
+    startup_duration = time.time() - start_time
+    _app_logger.log_info(
+        f"API started in {startup_duration:.2f}s",
+        "startup_completed",
+        startup_duration=startup_duration
+    )
+    logger.info(f"🚀 API started in {startup_duration:.2f}s")
     
     yield
     
     # Arrêt
+    _app_logger.log_info("Shutting down Smart Contract Dev Pipeline API...", "shutdown_begin")
     logger.info("🛑 Shutting down Smart Contract Dev Pipeline API...")
     
     # Fermer les connexions
     try:
         await close_db_connection()
+        _app_logger.log_info("Database connection closed", "db_closed")
         logger.info("✅ Database connection closed")
     except Exception as e:
+        _app_logger.log_error("Error closing database", e, "db_close_error")
         logger.error(f"❌ Error closing database: {e}")
     
     # Arrêter le notifier WebSocket proprement
@@ -185,11 +221,14 @@ async def lifespan(app: FastAPI):
         # Déconnecter tous les clients actifs
         for client_id in list(notifier.manager._clients.keys()):
             await notifier.manager.disconnect(client_id, reason="Server shutdown")
-            
+        
+        _app_logger.log_info("WebSocket notifier stopped", "ws_stopped")
         logger.info("✅ WebSocket notifier stopped")
     except Exception as e:
+        _app_logger.log_error("Error stopping WebSocket notifier", e, "ws_stop_error")
         logger.error(f"❌ Error stopping WebSocket notifier: {e}")
     
+    _app_logger.log_info("Shutdown complete", "shutdown_completed")
     logger.info("✅ Shutdown complete")
 
 
@@ -309,6 +348,18 @@ async def health_check():
     except Exception:
         chroma_ok = False
     
+    response_time = time.time() - start_time
+    
+    _app_logger.log_debug(
+        "Health check executed",
+        "health_check",
+        db_ok=db_ok,
+        redis_ok=redis_ok,
+        ollama_ok=ollama_ok,
+        chroma_ok=chroma_ok,
+        response_time_ms=response_time * 1000
+    )
+    
     return {
         "status": "healthy" if db_ok else "degraded",
         "version": "2.0.0",
@@ -323,7 +374,7 @@ async def health_check():
         "connections": {
             "websocket": notifier.manager.get_connection_count()
         },
-        "response_time": time.time() - start_time
+        "response_time": response_time
     }
 
 
@@ -332,6 +383,8 @@ async def get_pipeline_status():
     """
     Statut global du pipeline.
     """
+    _app_logger.log_debug("Getting pipeline status", "get_status_start")
+    
     try:
         async for session in get_async_db():
             # Nombre de projets
@@ -364,6 +417,13 @@ async def get_pipeline_status():
         # Vérifier les composants
         db_ok = await check_db_connection()
         
+        _app_logger.log_info(
+            "Pipeline status retrieved",
+            "get_status_completed",
+            total_projects=total_projects,
+            total_tasks=total_tasks
+        )
+        
         return {
             "status": "healthy" if db_ok else "degraded",
             "version": "2.0.0",
@@ -381,6 +441,7 @@ async def get_pipeline_status():
             "total_projects": total_projects
         }
     except Exception as e:
+        _app_logger.log_error("Error getting pipeline status", e, "get_status_failed")
         logger.error(f"Error getting pipeline status: {e}")
         return {
             "status": "unhealthy",
@@ -405,6 +466,8 @@ async def get_metrics():
     """
     Métriques du pipeline.
     """
+    _app_logger.log_debug("Getting metrics", "get_metrics_start")
+    
     metrics = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "uptime_seconds": time.time() - _START_TIME,
@@ -430,6 +493,7 @@ async def get_metrics():
             break
             
     except Exception as e:
+        _app_logger.log_error("Error getting metrics", e, "get_metrics_failed")
         logger.error(f"Error getting metrics: {e}")
     
     return metrics
@@ -456,6 +520,13 @@ async def pipeline_error_handler(request: Request, exc: PipelineError):
     """
     Gestionnaire d'exceptions du pipeline.
     """
+    _app_logger.log_error(
+        f"Pipeline error: {str(exc)}",
+        exc,
+        "pipeline_error",
+        path=request.url.path,
+        method=request.method
+    )
     logger.error(f"Pipeline error: {exc}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -475,6 +546,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     """
     Gestionnaire d'exceptions HTTP.
     """
+    _app_logger.log_warning(
+        f"HTTP exception: {exc.detail}",
+        "http_exception",
+        status_code=exc.status_code,
+        path=request.url.path,
+        method=request.method
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -493,6 +571,13 @@ async def general_exception_handler(request: Request, exc: Exception):
     """
     Gestionnaire d'exceptions générales.
     """
+    _app_logger.log_error(
+        f"Unhandled exception: {str(exc)}",
+        exc,
+        "unhandled_exception",
+        path=request.url.path,
+        method=request.method
+    )
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
